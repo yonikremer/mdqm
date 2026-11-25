@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mdqm"
+version = "0.0.1"
+description = "Multi DB Query MCP: a thin, weak-agent-friendly MCP server for querying many databases and APIs"
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+  "mcp>=2,<3",              # NOTE: 2.x renamed FastMCP to MCPServer. See AGENTS.md "MCP SDK".
+  "pydantic>=2.8,<3",
+  "pydantic-settings>=2.4,<3",
+  "sqlglot>=30",
+  "duckdb>=1.1",
+  "pyarrow>=17",
+  "httpx>=0.27",
+  "ruamel.yaml>=0.18",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+pg = ["psycopg[binary]>=3.2", "psycopg-pool>=3.2"]
+oracle = ["oracledb>=2.3"]            # Thin mode only: no Oracle Client
+mssql = []                            # driver chosen by task A08 (spike: mssql-python vs pymssql vs pyodbc)
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "pytest-socket>=0.7",
+  "hypothesis>=6.100",
+  "fastapi>=0.110",                   # only for the mock OpenAPI service in tests
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "types-PyYAML",
+]
+all = ["mdqm[pg,oracle,mssql,dev]"]
+
+# Adapters register here. Third parties add their own with the same group name.
+[project.entry-points."mdqm.adapters"]
+# postgresql = "mdqm.adapters.postgresql:PostgresAdapter"   (added by task A02)
+
+[project.scripts]
+mdqm = "mdqm.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mdqm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers"
+markers = [
+  "integration: needs docker-compose services (see docs/dev-env.md). Use --require-services to fail instead of skip.",
+  "slow: takes more than ~10 seconds",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "S"]
+ignore = ["S101"]                     # assert is fine in tests
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S608"]
+"scripts/**" = ["E501", "S603", "S607", "S310"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src"]

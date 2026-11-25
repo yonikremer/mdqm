@@ -1,0 +1,56 @@
+{
+  "_comment": "Canonical query specs. `valid` ones must validate (C03) and compile (C09); `invalid` ones must fail with the listed error path.",
+  "valid": [
+    {
+      "name": "avg_credit_limit_by_status_3mo",
+      "intent": "Average credit limit by customer status, last 3 months",
+      "spec": {
+        "from": "accounts",
+        "select": ["customer_status", {"measure": "credit_limit_r5000", "agg": "avg"}],
+        "time": {"mode": "events_in_range", "last": "3mo"},
+        "group_by": ["customer_status"],
+        "limit": 50
+      }
+    },
+    {
+      "name": "new_usage_since",
+      "intent": "What is new in usage events since a previous fetch (must use insertion time with a derived bound)",
+      "spec": {
+        "from": "usage_events",
+        "select": ["event_id", "client_no", "units"],
+        "time": {"mode": "new_since", "since": "2026-11-25T14:00:00"},
+        "limit": 200
+      }
+    },
+    {
+      "name": "events_per_month_hebrew_filter",
+      "intent": "Events per month for active customers; the filter value is a Hebrew label",
+      "spec": {
+        "from": "usage_events",
+        "select": [{"measure": "event_count", "agg": "count"}],
+        "filters": [{"column": "customer_status", "op": "eq", "value": "פעיל"}],
+        "time": {"mode": "events_in_range", "from": "2026-06-01", "to": "2026-11-01"},
+        "group_by": ["month"],
+        "joins": ["usage_to_customers"],
+        "limit": 50
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "unknown_time_mode",
+      "spec": {"from": "usage_events", "select": ["event_id"], "time": {"mode": "whenever"}},
+      "error_path": "time.mode"
+    },
+    {
+      "name": "limit_not_positive",
+      "spec": {"from": "usage_events", "select": ["event_id"], "limit": 0},
+      "error_path": "limit"
+    },
+    {
+      "name": "sql_in_filter_value",
+      "spec": {"from": "usage_events", "select": ["event_id"], "filters": [{"column": "units", "op": "eq", "value": {"sql": "1; DROP TABLE x"}}]},
+      "error_path": "filters.0.value"
+    }
+  ]
+}
