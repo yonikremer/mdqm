@@ -177,7 +177,7 @@ def _matched(value_map: ValueMap, key: str, column: str | None) -> tuple[str, ..
 
 def resolve_value(
     value_map: ValueMap,
-    label: str,
+    label: str | int,
     *,
     field: str = DEFAULT_FIELD,
     column: str | None = None,
@@ -187,6 +187,7 @@ def resolve_value(
     Args:
         value_map: the field's map from the semantic layer.
         label: what the user or the agent wrote; normalised here, never trusted as an exact key.
+            An ``int`` is accepted because a JSON filter value can be one (the ERP stores ``1``).
         field: the spec path an error names, e.g. ``"filters.0.value"``.
         column: the ``source.table.column`` a filter will be compiled for. It scopes code
             matching, which is what tells two sources that spell one code differently apart.
@@ -227,7 +228,7 @@ def _literal(code: str) -> str | int:
 
 def reverse_value(
     value_map: ValueMap,
-    label: str,
+    label: str | int,
     *,
     field: str = DEFAULT_FIELD,
     column: str | None = None,
