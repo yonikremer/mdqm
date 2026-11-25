@@ -485,6 +485,12 @@ class MeasureSource(MDQMModel):
             required=frozenset({"col"}),
             what="a measure normalize template",
         )
+        # Parsing is not enough: a subquery and an unknown function both parse. The allowlist is a
+        # meaning rule, so it sits beside the rounding it protects. Imported here because
+        # ``measures`` imports these models in turn.
+        from mdqm.semantic.measures import check_normalize_template
+
+        check_normalize_template(self.normalize, where="a measure normalize template")
         return self
 
 

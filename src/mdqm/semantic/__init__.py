@@ -11,6 +11,16 @@ from __future__ import annotations
 from mdqm.semantic.durations import Duration, parse_duration
 from mdqm.semantic.errors import SemanticError
 from mdqm.semantic.loader import CURATED_DIR, GENERATED_DIR, load
+from mdqm.semantic.measures import (
+    AppliedNormalization,
+    MultiplicityReport,
+    UndeclaredRounding,
+    check_multiples,
+    check_normalize_template,
+    normalizations_for,
+    render_normalize,
+    round_to_multiple,
+)
 from mdqm.semantic.models import (
     ApprovalStatus,
     ApprovedJoin,
@@ -54,6 +64,7 @@ __all__ = [
     "CURATED_DIR",
     "GENERATED_DIR",
     "ApprovalStatus",
+    "AppliedNormalization",
     "ApprovedJoin",
     "CacheDefaults",
     "CacheOverride",
@@ -68,6 +79,7 @@ __all__ = [
     "MeasureCanonical",
     "MeasureSource",
     "MutabilityDecl",
+    "MultiplicityReport",
     "Provenance",
     "Resolution",
     "ResolutionKind",
@@ -81,15 +93,21 @@ __all__ = [
     "TableSemantics",
     "TimeColumn",
     "TimeRole",
+    "UndeclaredRounding",
     "ValueMap",
+    "check_multiples",
+    "check_normalize_template",
     "check_sql_template",
     "compute_version_hash",
     "load",
+    "normalizations_for",
     "normalize_label",
     "parse_duration",
+    "render_normalize",
     "render_template",
     "resolve_value",
     "reverse_value",
+    "round_to_multiple",
     "update_curated",
     "write_generated",
 ]
