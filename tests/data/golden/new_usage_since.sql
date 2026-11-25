@@ -1,0 +1,1 @@
+SELECT event_id, client_no, units FROM usage_events WHERE insertion_time >= CAST('2026-11-25 14:00:00' AS TIMESTAMP) AND start_time >= CAST('2026-11-25 08:00:00' AS TIMESTAMP) LIMIT 200

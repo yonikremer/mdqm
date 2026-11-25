@@ -1,0 +1,76 @@
+# tests/data/semantic/compiler_semantic.yaml
+#
+# The semantic layer the compiler tests compile against (task C09). It is a *test* layer, not the
+# first organisation's: it exists so the specs in examples/query_specs.json and the questions in
+# tests/eval/questions.yaml have measures and tables to resolve against.
+#
+# It deliberately mirrors examples/semantic_example.yaml for everything the eval answers depend on
+# (the 5000 half-up rounding, the three status spellings, the approved key conversion) and adds only
+# what the compiler needs:
+#   * `usage_units` and `event_count`, so a usage question has a measure;
+#   * `billing.accounts.opened_at`, so the example's trailing-window question on accounts has an
+#     event-time column to filter (the example layer has no billing.accounts entry at all).
+version: 1
+
+sources:
+  crm: { adapter: postgresql, secret: crm_ro }
+  billing: { adapter: postgresql, secret: billing_ro }
+  erp: { adapter: postgresql, secret: erp_ro }
+
+value_maps:
+  customer_status:
+    canonical: [active, churned, suspended]
+    synonyms:
+      active: ["פעיל", "active"]
+      churned: ["עזב", "churned"]
+      suspended: ["מושעה", "suspended"]
+    sources:
+      crm.customers.status: { A: active, C: churned, S: suspended }
+      billing.accounts.state: { Active: active, Closed: churned, Hold: suspended }
+      erp.customers.status_code: { 1: active, 2: churned, 3: suspended }
+
+measures:
+  credit_limit_r5000:
+    canonical: { rounding: { to: 5000, mode: half_up } }
+    sources:
+      crm.customers.credit_limit: { normalize: "{col}" }
+      billing.accounts.credit_limit: { normalize: "ROUND({col} / 5000) * 5000" }
+      erp.customers.limit_k: { normalize: "{col} * 10" }
+    provenance: { detected_by: pipeline/D8, match_rate: 0.998, approved_by: data-team }
+  usage_units:
+    sources:
+      billing.usage_events.units: { normalize: "{col}" }
+  event_count:
+    sources:
+      billing.usage_events.event_id: { normalize: "{col}" }
+
+tables:
+  crm.customers:
+    key: [cust_id]
+  billing.accounts:
+    key: [client_no]
+    time_columns:
+      opened_at: { role: event_time, indexed: true, use_by_default: true }
+  erp.customers:
+    key: [cust_no]
+  billing.usage_events:
+    key: [event_id]
+    default_window: 7d
+    partitioning: { key: start_time, granularity: month, require_key_filter: true }
+    time_columns:
+      start_time: { role: event_time, indexed: true, use_by_default: true }
+      insertion_time:
+        {
+          role: ingestion_time,
+          derives_bound_on: start_time,
+          lag: { min: 0s, max: 6h, verify: nightly },
+        }
+    mutability: { class: append_rarely, status: approved }
+
+approved_joins:
+  - name: usage_to_customers
+    left: billing.usage_events.client_no
+    right: crm.customers.cust_id
+    on: "LPAD(CAST({right} AS VARCHAR), 10, '0') = {left}"
+    cardinality: many_to_one
+    usage: { count_90d: 1840, users_90d: 37 }
