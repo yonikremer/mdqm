@@ -40,7 +40,10 @@ from mdqm.models import (
     CatalogSnapshot,
     Fragment,
     Limits,
+    Partitioning,
     PlanSummary,
+    RawQuery,
+    TableStats,
 )
 from mdqm.testing.fake_adapter import FakeAdapter
 
@@ -150,7 +153,7 @@ class HarnessSource:
     concurrency being measured is the governor's admission, not DuckDB's connection mutex.
     """
 
-    kind: Final[str] = "fake"
+    kind: str = "fake"
 
     def __init__(
         self,
@@ -207,17 +210,17 @@ class HarnessSource:
     def cancel(self, handle: ArrowStream) -> None:
         self._adapter().cancel(handle)
 
-    def extract_partitions(self) -> list[object]:
-        raise NotImplementedError
+    def extract_partitions(self) -> list[Partitioning]:
+        return self._adapter().extract_partitions()
 
     def explain(self, fragment: Fragment) -> PlanSummary:
-        raise NotImplementedError
+        return self._adapter().explain(fragment)
 
-    def mine_queries(self, since: datetime) -> Iterator[object]:
-        raise NotImplementedError
+    def mine_queries(self, since: datetime) -> Iterator[RawQuery]:
+        return self._adapter().mine_queries(since)
 
-    def mutability_stats(self) -> list[object]:
-        raise NotImplementedError
+    def mutability_stats(self) -> list[TableStats]:
+        return self._adapter().mutability_stats()
 
 
 def _fragment() -> Fragment:

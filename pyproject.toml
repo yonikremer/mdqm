@@ -93,4 +93,5 @@ include = ["src", "tests"]
 exclude = [".venv", ".worktrees", "**/node_modules", "**/__pycache__"]
 venvPath = "."
 venv = ".venv"
+extraPaths = ["src"]
 reportPrivateImportUsage = false
