@@ -39,6 +39,12 @@ from pydantic import Field
 
 from mdqm.models.base import JsonObject, MDQMModel
 
+# pyarrow ships no type stubs (pyproject sets `ignore_missing_imports` for mypy for that reason), so
+# pyright reports every attribute of a pyarrow type or module -- ``pa.Table.schema``,
+# ``pc.count_distinct``, ``pc.min_max`` -- as unknown. Those calls are real and covered by the unit
+# tests below; pyright is not part of scripts/check.py. Suppressed here only, not project-wide.
+# pyright: reportAttributeAccessIssue=false
+
 __all__ = [
     "DEFAULT_PAGE_ROWS",
     "DEFAULT_SAMPLE_ROWS",
