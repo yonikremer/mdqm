@@ -21,6 +21,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
+from typing import TypeVar
 
 import pytest
 from hypothesis import given
@@ -32,6 +33,8 @@ from mdqm.testing.fake_adapter import FakeAdapter
 from mdqm.testing.world import WorldConfig, build_world
 
 pytestmark = pytest.mark.enable_socket
+
+_T = TypeVar("_T")
 
 EXEC_TS = datetime(2026, 3, 1, tzinfo=UTC)
 SQL = "SELECT cust_id, status FROM customers_crm ORDER BY cust_id"
@@ -58,7 +61,7 @@ class Segment:
     rows: int = 1
 
 
-async def within(awaitable: Awaitable[object], seconds: float = HANG_GUARD_S) -> object:
+async def within(awaitable: Awaitable[_T], seconds: float = HANG_GUARD_S) -> _T:
     """Await with a hang guard, so a deadlock fails the test instead of stalling the suite."""
     return await asyncio.wait_for(awaitable, timeout=seconds)
 
