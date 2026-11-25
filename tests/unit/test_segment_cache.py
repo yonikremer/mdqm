@@ -12,7 +12,7 @@ and every ``fetched_at`` assertion is exact. Nothing here touches the network or
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -57,6 +57,7 @@ class _Clock:
 
 
 def _ts(*parts: int) -> datetime:
+    """A UTC instant from ``datetime``-style positional parts, for terse fixtures."""
     return datetime(*parts, tzinfo=UTC)  # type: ignore[arg-type]
 
 
@@ -141,7 +142,9 @@ def _litsql(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _window_fetcher(adapter: FakeAdapter, *, column: str = "start_time"):
+def _window_fetcher(
+    adapter: FakeAdapter, *, column: str = "start_time"
+) -> Callable[[Range], pa.Table]:
     """A ``fetch_window`` that really queries the fake adapter and records the SQL."""
 
     def fetch(window: Range) -> pa.Table:
@@ -156,7 +159,7 @@ def _window_fetcher(adapter: FakeAdapter, *, column: str = "start_time"):
     return fetch
 
 
-def _tail_fetcher(adapter: FakeAdapter):
+def _tail_fetcher(adapter: FakeAdapter) -> Callable[[TailFetch], pa.Table]:
     """A ``fetch_tail`` that filters ingestion time and adds the derived event bound."""
 
     def fetch(request: TailFetch) -> pa.Table:
