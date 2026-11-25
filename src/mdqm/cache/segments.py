@@ -417,6 +417,7 @@ class SegmentCache:
         self._lock = threading.Lock()
         self._closed = False
 
+        self._con: duckdb.DuckDBPyConnection
         if path is None:
             self._con = duckdb.connect(":memory:")
         else:

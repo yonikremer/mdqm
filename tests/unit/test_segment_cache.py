@@ -566,17 +566,33 @@ def test_a_bad_memory_limit_is_rejected_before_it_reaches_duckdb() -> None:
 # --- construction guards -----------------------------------------------------------------
 
 
-def test_segment_key_covers_everything_that_can_change_the_rows() -> None:
-    window = _month(2026, 1)
-    base = dict(
-        source="billing", table="usage_events", fragment_hash="fh", version_hash="v1", window=window
+def _key(
+    *,
+    source: str = "billing",
+    table: str = "usage_events",
+    fragment_hash: str = "fh",
+    version_hash: str = "v1",
+    window: Range | None = None,
+) -> str:
+    """One segment key with every component defaulted, so a test varies exactly one of them."""
+    return segment_key(
+        source=source,
+        table=table,
+        fragment_hash=fragment_hash,
+        version_hash=version_hash,
+        window=window or _month(2026, 1),
     )
-    key = segment_key(**base)
 
-    assert segment_key(**base) == key, "the key is stable"
-    for field_name in ("source", "table", "fragment_hash", "version_hash"):
-        assert segment_key(**{**base, field_name: "other"}) != key, field_name
-    assert segment_key(**{**base, "window": _month(2026, 2)}) != key
+
+def test_segment_key_covers_everything_that_can_change_the_rows() -> None:
+    key = _key()
+
+    assert _key() == key, "the key is stable"
+    assert _key(source="other") != key
+    assert _key(table="other") != key
+    assert _key(fragment_hash="other") != key
+    assert _key(version_hash="other") != key
+    assert _key(window=_month(2026, 2)) != key
 
 
 def test_a_spec_rejects_an_empty_or_separator_bearing_field() -> None:
