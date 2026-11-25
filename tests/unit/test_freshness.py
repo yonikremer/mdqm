@@ -220,11 +220,12 @@ def test_ttl_for_rejects_a_bad_policy() -> None:
 
 
 def test_fetched_at_is_enough_to_decide_without_sleeping() -> None:
-    clock: Clock = FixedClock(END)
+    fixed = FixedClock(END)
+    clock: Clock = fixed
     fetched_at = END - DAY
     assert is_fresh_at(fetched_at, clock, *window(YEAR)) is True
 
-    clock.advance(timedelta(days=3))  # 4 days old now; the 1-year TTL is 3.65 days
+    fixed.advance(timedelta(days=3))  # 4 days old now; the 1-year TTL is 3.65 days
     assert is_fresh_at(fetched_at, clock, *window(YEAR)) is False
 
 
@@ -257,6 +258,17 @@ ttls = st.timedeltas(min_value=timedelta(0), max_value=timedelta(days=3650))
 thetas = st.floats(min_value=1e-6, max_value=1.0)
 
 
+def fresh(
+    age: timedelta,
+    span: tuple[datetime, datetime],
+    theta: float,
+    min_ttl: timedelta,
+    max_ttl: timedelta,
+) -> bool:
+    """``is_fresh`` for a hypothesis-generated policy, so the properties stay readable."""
+    return is_fresh(age, span[0], span[1], theta=theta, min_ttl=min_ttl, max_ttl=max_ttl)
+
+
 @given(span=spans, age=ages, older=ages, theta=thetas, min_ttl=ttls, max_ttl=ttls)
 def test_freshness_is_monotone_in_age(
     span: timedelta,
@@ -267,10 +279,9 @@ def test_freshness_is_monotone_in_age(
     max_ttl: timedelta,
 ) -> None:
     """An older segment is never fresher than a younger one."""
-    range_from, range_to = window(span)
-    policy = {"theta": theta, "min_ttl": min_ttl, "max_ttl": max_ttl}
-    younger_fresh = is_fresh(age, range_from, range_to, **policy)
-    older_fresh = is_fresh(age + older, range_from, range_to, **policy)
+    source_range = window(span)
+    younger_fresh = fresh(age, source_range, theta, min_ttl, max_ttl)
+    older_fresh = fresh(age + older, source_range, theta, min_ttl, max_ttl)
     assert not older_fresh or younger_fresh
 
 
@@ -284,21 +295,23 @@ def test_a_wider_range_is_never_less_fresh(
     max_ttl: timedelta,
 ) -> None:
     """Widening the pull only raises the ratio TTL, so freshness can only improve."""
-    narrow_from, range_to = window(span)
-    policy = {"theta": theta, "min_ttl": min_ttl, "max_ttl": max_ttl}
-    if is_fresh(age, narrow_from, range_to, **policy):
-        assert is_fresh(age, range_to - (span + extra), range_to, **policy)
+    narrow = window(span)
+    wide = (narrow[1] - (span + extra), narrow[1])
+    if fresh(age, narrow, theta, min_ttl, max_ttl):
+        assert fresh(age, wide, theta, min_ttl, max_ttl)
 
 
 @given(age=ages, span=spans, theta=thetas, min_ttl=ttls, max_ttl=ttls)
 def test_unclassified_tables_are_never_fresh(
     age: timedelta, span: timedelta, theta: float, min_ttl: timedelta, max_ttl: timedelta
 ) -> None:
+    range_from, range_to = window(span)
     for mutability in ("mutable_critical", "unknown"):
         assert (
             is_fresh(
                 age,
-                *window(span),
+                range_from,
+                range_to,
                 theta=theta,
                 min_ttl=min_ttl,
                 max_ttl=max_ttl,
@@ -313,11 +326,10 @@ def test_the_ttl_boundary_is_exactly_where_ttl_for_says(
     span: timedelta, theta: float, min_ttl: timedelta, max_ttl: timedelta
 ) -> None:
     """``ttl_for`` and ``is_fresh`` cannot drift apart: it is the reported boundary."""
-    range_from, range_to = window(span)
-    policy = {"theta": theta, "min_ttl": min_ttl, "max_ttl": max_ttl}
+    source_range = window(span)
     ttl = ttl_for(span, theta=theta, min_ttl=min_ttl, max_ttl=max_ttl)
-    assert is_fresh(ttl, range_from, range_to, **policy) is True
-    assert is_fresh(ttl + MICROSECOND, range_from, range_to, **policy) is False
+    assert fresh(ttl, source_range, theta, min_ttl, max_ttl) is True
+    assert fresh(ttl + MICROSECOND, source_range, theta, min_ttl, max_ttl) is False
 
 
 @given(span=spans, theta=thetas, min_ttl=ttls, max_ttl=ttls)
@@ -325,14 +337,4 @@ def test_a_just_fetched_segment_is_always_fresh(
     span: timedelta, theta: float, min_ttl: timedelta, max_ttl: timedelta
 ) -> None:
     """The cache is usable at all: age 0 must be fresh for a cacheable class."""
-    assert (
-        is_fresh(
-            timedelta(0),
-            *window(span),
-            theta=theta,
-            min_ttl=min_ttl,
-            max_ttl=max_ttl,
-            mutability="append_only",
-        )
-        is True
-    )
+    assert fresh(timedelta(0), window(span), theta, min_ttl, max_ttl) is True
