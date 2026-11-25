@@ -62,17 +62,21 @@ def _measure(mode: str = "half_up", to: int = STEP) -> Measure:
     )
 
 
-def scalar(sql: str) -> Any:
-    """Evaluate one expression on DuckDB and return its single value."""
-    return duckdb.sql(f"SELECT {sql}").fetchall()[0][0]
-
-
 def evaluate(sql: str, value: int | None = None, *, column: str = "x") -> Any:
-    """Run one rendered expression on DuckDB, optionally binding ``value`` for ``column``."""
-    if value is None:
-        return duckdb.sql(f"SELECT {sql}").fetchall()
-    table = duckdb.sql(f"SELECT {value} AS {column}")
-    return table.select(sql).fetchall()[0][0]
+    """Run one rendered expression on DuckDB, optionally binding ``value`` for ``column``.
+
+    Goes through an explicit connection: ``duckdb.sql`` is typed ``Optional``, and a test helper
+    that hides a possible None behind ``# type: ignore`` would fail confusingly instead of loudly.
+    """
+    connection = duckdb.connect()
+    try:
+        if value is None:
+            return connection.execute(f"SELECT {sql}").fetchall()
+        # A one-row subquery binds the operand, so ``sql`` keeps referring to ``column``.
+        query = f"SELECT {sql} FROM (SELECT {value} AS {column}) AS operand"
+        return connection.execute(query).fetchall()[0][0]
+    finally:
+        connection.close()
 
 
 def evaluate_in_dialect(sql: str, dialect: str, value: int | None = None) -> Any:
