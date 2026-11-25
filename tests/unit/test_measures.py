@@ -65,16 +65,18 @@ def _measure(mode: str = "half_up", to: int = STEP) -> Measure:
 def evaluate(sql: str, value: int | None = None, *, column: str = "x") -> Any:
     """Run one rendered expression on DuckDB, optionally binding ``value`` for ``column``.
 
-    Goes through an explicit connection: ``duckdb.sql`` is typed ``Optional``, and a test helper
-    that hides a possible None behind ``# type: ignore`` would fail confusingly instead of loudly.
+    ``sql`` is the expression this module generated and ``column`` is a fixed identifier, so both
+    are necessarily interpolated -- they are the thing under test. The operand value is a bound
+    parameter instead of text. Goes through an explicit connection because ``duckdb.sql`` is typed
+    ``Optional``, and a helper that hid a possible None would fail confusingly rather than loudly.
     """
     connection = duckdb.connect()
     try:
         if value is None:
             return connection.execute(f"SELECT {sql}").fetchall()
         # A one-row subquery binds the operand, so ``sql`` keeps referring to ``column``.
-        query = f"SELECT {sql} FROM (SELECT {value} AS {column}) AS operand"
-        return connection.execute(query).fetchall()[0][0]
+        query = f"SELECT {sql} FROM (SELECT ? AS {column}) AS operand"
+        return connection.execute(query, [value]).fetchall()[0][0]
     finally:
         connection.close()
 
