@@ -1,0 +1,5 @@
+# generated extra: a second machine-written file, loaded after base.yaml
+tables:
+  billing.accounts_hist:
+    mutability: { class: mutable_critical, status: approved }
+    cache: { mode: none }

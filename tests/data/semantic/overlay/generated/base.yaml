@@ -1,0 +1,39 @@
+# generated base: the pipeline writes this file, a human never edits it
+version: 7
+sources:
+  crm: { adapter: postgresql, secret: crm_ro }
+  billing: { adapter: postgresql, secret: billing_ro }
+defaults:
+  cache: { staleness_ratio: 0.01, min_ttl: 30s, max_ttl: 7d }
+  quiet_windows:
+    - { tz: Asia/Jerusalem, start: "21:00", end: "07:00" }
+    - { tz: UTC, start: "02:00", end: "03:00" }
+value_maps:
+  customer_status:
+    canonical: [active, churned]
+    synonyms:
+      active: ["פעיל", "active"]
+      churned: ["עזב", "churned"]
+    sources:
+      crm.customers.status: { A: active, C: churned }
+measures:
+  credit_limit_r5000:
+    canonical: { rounding: { to: 5000, mode: half_up } }
+    sources:
+      crm.customers.credit_limit: { normalize: "{col}" }
+    provenance: { detected_by: pipeline/D8, match_rate: 0.998 }
+tables:
+  crm.customers:
+    key: [cust_id]
+    default_window: 30d
+    partitioning: { key: created_at, granularity: month, require_key_filter: true }
+    time_columns:
+      created_at: { role: event_time, indexed: true, use_by_default: true }
+    mutability: { class: append_rarely, status: approved }
+approved_joins:
+  - name: usage_to_customers
+    left: billing.usage_events.client_no
+    right: crm.customers.cust_id
+    on: "LPAD(CAST({right} AS VARCHAR), 10, '0') = {left}"
+    cardinality: many_to_one
+    usage: { count_90d: 12, users_90d: 3 }

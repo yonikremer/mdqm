@@ -1,0 +1,17 @@
+# curated: a human writes this file, the pipeline never touches it
+tables:
+  crm.customers:
+    # the nightly job rewrites rows in place, so a cached answer can be wrong
+    mutability: { class: mutable_critical, status: approved }
+value_maps:
+  customer_status:
+    sources:
+      erp.customers.status_code: { 1: active, 2: churned }
+approved_joins:
+  - name: usage_to_customers
+    cardinality: one_to_many
+  - name: hist_to_customers
+    left: billing.accounts_hist.client_no
+    right: crm.customers.cust_id
+    on: "LPAD(CAST({right} AS VARCHAR), 10, '0') = {left}"
+    cardinality: many_to_one
