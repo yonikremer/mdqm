@@ -229,15 +229,19 @@ def _fragment() -> Fragment:
     )
 
 
-def _limits(**overrides: object) -> Limits:
-    base: dict[str, object] = {
-        "timeout_s": 5.0,
-        "max_rows": 100,
-        "max_bytes": 1_000_000,
-        "max_partitions": 8,
-    }
-    base.update(overrides)
-    return Limits(**base)  # type: ignore[arg-type]
+def _limits(
+    *,
+    timeout_s: float = 5.0,
+    max_rows: int = 100,
+    max_bytes: int = 1_000_000,
+    max_partitions: int = 8,
+) -> Limits:
+    return Limits(
+        timeout_s=timeout_s,
+        max_rows=max_rows,
+        max_bytes=max_bytes,
+        max_partitions=max_partitions,
+    )
 
 
 def _table(rows: int = 5) -> pa.Table:
