@@ -16,9 +16,9 @@ from typing import Any
 
 import httpx
 import pytest
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 
-from mdqm.config import EnvSecretProvider, SecretNotFound, Settings
+from mdqm.config import EnvSecretProvider, ModelSettings, PathsSettings, SecretNotFound, Settings
 from mdqm.llm import (
     CACHE_FILE_NAME,
     MODEL_ENDPOINT,
@@ -151,14 +151,14 @@ def models_reply(**entry: Any) -> httpx.Response:
 def settings(tmp_path: Path) -> Settings:
     """Configured endpoint; the API key is here as a throwaway dev value only."""
     return Settings(
-        model={
-            "base_url": BASE_URL,
-            "model": MODEL,
-            "api_key": KEY,
-            "timeout_s": 7.5,
-            "max_retries": 2,
-        },
-        paths={"cache_dir": tmp_path / "cache"},
+        model=ModelSettings(
+            base_url=BASE_URL,
+            model=MODEL,
+            api_key=SecretStr(KEY),
+            timeout_s=7.5,
+            max_retries=2,
+        ),
+        paths=PathsSettings(cache_dir=tmp_path / "cache"),
     )
 
 
@@ -705,7 +705,10 @@ def test_non_json_success_body_is_reported_as_a_wrong_base_url(settings: Setting
 def test_unconfigured_endpoint_fails_before_any_request(
     tmp_path: Path, model_settings: dict[str, Any]
 ) -> None:
-    settings = Settings(model=model_settings, paths={"cache_dir": tmp_path / "cache"})
+    settings = Settings(
+        model=ModelSettings(**model_settings),
+        paths=PathsSettings(cache_dir=tmp_path / "cache"),
+    )
     server = Server()
 
     with pytest.raises(ModelError) as caught:

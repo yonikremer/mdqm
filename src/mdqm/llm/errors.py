@@ -29,6 +29,15 @@ class ModelError(RuntimeError):
     apart from "the server is unreachable"; ``attempts`` is the audit trail of the failed call.
     """
 
+    # Declared so a type checker reads the attributes with their real types instead of `str`.
+    code: str
+    problem: str
+    fix: str
+    retryable: bool
+    status_code: int | None
+    outcome: AttemptOutcome
+    attempts: tuple[Attempt, ...]
+
     def __init__(
         self,
         problem: str,
