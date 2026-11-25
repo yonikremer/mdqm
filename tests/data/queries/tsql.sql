@@ -75,7 +75,7 @@ WHERE insertion_time >= DATEADD(hour, -6, GETDATE())
   AND start_time >= DATEADD(hour, -12, GETDATE())
 
 -- ---
--- expect: {"id": "ts-12", "tables": ["customers", "usage_events"], "joins": [{"tables": ["recent", "customers"], "columns": ["cust_id", "cust_id"]}], "filters": ["start_time"], "time_columns": ["start_time"], "aggregations": ["count"], "now_functions": ["getdate"]}
+-- expect: {"id": "ts-12", "tables": ["customers", "usage_events"], "joins": [{"tables": ["recent", "customers"], "columns": ["cust_id", "cust_id"]}], "filters": ["start_time"], "time_columns": ["start_time"], "group_by": ["cust_id"], "aggregations": ["count", "sum"], "now_functions": ["getdate"]}
 WITH recent AS (
   SELECT cust_id, SUM(bytes) AS bytes
   FROM dbo.usage_events
@@ -172,7 +172,7 @@ FROM dbo.customers
 WHERE credit_limit IS NOT NULL
 
 -- ---
--- expect: {"id": "ts-25", "tables": ["accounts", "customers"], "joins": [{"tables": ["customers", "accounts"], "columns": ["cust_id", "client_no"], "conversion": "convert", "conversion_expr": "CONVERT(varchar(10), c.cust_id)"}], "filters": ["client_no"]}
+-- expect: {"id": "ts-25", "tables": ["accounts", "customers"], "joins": [{"tables": ["customers", "accounts"], "columns": ["cust_id", "client_no"], "conversion": "convert", "conversion_expr": "CONVERT(varchar(10), c.cust_id)"}], "filters": ["status"]}
 SELECT c.cust_id, c.status
 FROM dbo.customers AS c
 WHERE EXISTS (
@@ -278,7 +278,7 @@ FROM dbo.usage_events
 WHERE client_no = '0000000042'
 
 -- ---
--- expect: {"id": "ts-39", "tables": ["customers"], "filters": ["status"], "rounding": ["ROUND(credit_limit / 5000.0, 0) * 5000"]}
+-- expect: {"id": "ts-39", "tables": ["customers"], "filters": ["status"], "group_by": ["status", "ROUND(credit_limit / 5000.0, 0) * 5000"], "aggregations": ["count"], "rounding": ["ROUND(credit_limit / 5000.0, 0) * 5000"]}
 SELECT status, ROUND(credit_limit / 5000.0, 0) * 5000 AS canonical, COUNT(*) AS n
 FROM dbo.customers
 WHERE status = 'A'

@@ -50,7 +50,7 @@ ORDER BY start_time DESC
 FETCH FIRST 50 ROWS ONLY
 
 -- ---
--- expect: {"id": "or-08", "tables": ["usage_events"], "filters": ["start_time"], "time_columns": ["start_time"], "group_by": ["TRUNC(start_time, 'MM')"], "aggregations": ["count"]}
+-- expect: {"id": "or-08", "tables": ["usage_events"], "filters": ["start_time"], "time_columns": ["start_time"], "group_by": ["TRUNC(start_time, 'MM')"], "aggregations": ["count"], "now_functions": ["sysdate"]}
 SELECT TRUNC(start_time, 'MM') AS month, COUNT(*) AS n
 FROM billing.usage_events
 WHERE start_time >= TRUNC(SYSDATE, 'MM') - 90
@@ -76,7 +76,7 @@ WHERE insertion_time >= SYSDATE - INTERVAL '6' HOUR
   AND start_time >= SYSDATE - INTERVAL '12' HOUR
 
 -- ---
--- expect: {"id": "or-12", "tables": ["usage_events"], "filters": ["client_no", "start_time"], "time_columns": ["start_time"], "aggregations": ["sum"]}
+-- expect: {"id": "or-12", "tables": ["usage_events"], "filters": ["client_no", "start_time"], "time_columns": ["start_time"], "group_by": ["client_no"], "aggregations": ["sum"]}
 SELECT /*+ INDEX(ue IDX_UE_START_TIME) */ ue.client_no, SUM(ue.bytes) AS total
 FROM billing.usage_events ue
 WHERE ue.client_no = '0000000042'
@@ -98,7 +98,7 @@ WHERE name LIKE '%בנק%'
   AND status = 'פעיל'
 
 -- ---
--- expect: {"id": "or-15", "tables": ["usage_events", "customers"], "joins": [{"tables": ["recent", "customers"], "columns": ["cust_id", "cust_id"]}], "filters": ["start_time"], "time_columns": ["start_time"], "aggregations": ["count"], "now_functions": ["sysdate"]}
+-- expect: {"id": "or-15", "tables": ["usage_events", "customers"], "joins": [{"tables": ["recent", "customers"], "columns": ["cust_id", "cust_id"]}], "filters": ["start_time"], "time_columns": ["start_time"], "group_by": ["cust_id"], "aggregations": ["count", "sum"], "now_functions": ["sysdate"]}
 WITH recent AS (
   SELECT cust_id, SUM(bytes) AS bytes
   FROM billing.usage_events
@@ -141,14 +141,14 @@ FROM crm.customers
 WHERE status = 'A'
 
 -- ---
--- expect: {"id": "or-20", "tables": ["customers"], "rounding": ["limit_k * 10"]}
+-- expect: {"id": "or-20", "tables": ["customers"], "filters": ["cust_no", "limit_k"], "rounding": ["limit_k * 10"]}
 SELECT cust_no, limit_k * 10 AS credit_limit
 FROM erp.customers
 WHERE cust_no > 0
   AND limit_k IS NOT NULL
 
 -- ---
--- expect: {"id": "or-21", "tables": ["customers"], "filters": ["status"], "aggregations": ["count"]}
+-- expect: {"id": "or-21", "tables": ["customers"], "filters": ["status"], "group_by": ["status"], "aggregations": ["count"]}
 SELECT status, RATIO_TO_REPORT(COUNT(*)) OVER () AS share
 FROM crm.customers
 WHERE status <> 'C'
@@ -162,7 +162,7 @@ JOIN billing.accounts e
   ON c.cust_id = TO_NUMBER(e.client_no)
 
 -- ---
--- expect: {"id": "or-23", "tables": ["usage_events"], "filters": ["insertion_time"], "time_columns": ["insertion_time"], "now_functions": ["systimestamp"]}
+-- expect: {"id": "or-23", "tables": ["usage_events"], "filters": ["insertion_time"], "time_columns": ["insertion_time"], "aggregations": ["max"], "now_functions": ["systimestamp"]}
 SELECT MAX(insertion_time) AS last_load
 FROM billing.usage_events
 WHERE insertion_time >= SYSTIMESTAMP - INTERVAL '1' DAY

@@ -46,7 +46,7 @@ WHERE insertion_time >= now() - interval '6 hours'
   AND start_time >= now() - interval '12 hours'
 
 -- ---
--- expect: {"id": "pg-06", "tables": ["accounts", "customers"], "joins": [{"tables": ["customers", "accounts"], "columns": ["cust_id", "client_no"], "conversion": "lpad", "conversion_expr": "LPAD(c.cust_id::varchar, 10, '0')"}]}
+-- expect: {"id": "pg-06", "tables": ["accounts", "customers"], "joins": [{"tables": ["customers", "accounts"], "columns": ["cust_id", "client_no"], "conversion": "lpad", "conversion_expr": "LPAD(c.cust_id::varchar, 10, '0')"}], "filters": ["status"]}
 SELECT c.cust_id, c.status, e.client_no
 FROM crm.customers AS c
 JOIN billing.accounts AS e
@@ -146,7 +146,7 @@ FROM billing.usage_events
 GROUP BY EXTRACT(YEAR FROM start_time)
 
 -- ---
--- expect: {"id": "pg-19", "tables": ["customers"], "filters": ["status"], "aggregations": ["count"]}
+-- expect: {"id": "pg-19", "tables": ["customers"], "filters": ["status"], "group_by": ["status"], "aggregations": ["count"]}
 SELECT status, COUNT(*) AS n
 FROM crm.customers
 WHERE status = 'A'
@@ -197,7 +197,7 @@ SELECT cust_id, CAST(credit_limit AS NUMERIC(12, 2)) / 1000 AS credit_k
 FROM crm.customers
 
 -- ---
--- expect: {"id": "pg-26", "tables": ["customers"], "rounding": ["credit_limit::numeric / 1000"]}
+-- expect: {"id": "pg-26", "tables": ["customers"], "filters": ["status"], "rounding": ["credit_limit::numeric / 1000"]}
 SELECT cust_id, credit_limit::numeric / 1000 AS credit_k
 FROM crm.customers
 WHERE status = 'A'
@@ -225,7 +225,7 @@ WHERE c.cust_id NOT IN (
 )
 
 -- ---
--- expect: {"id": "pg-30", "tables": ["accounts", "customers"], "joins": [{"tables": ["customers", "accounts"], "columns": ["cust_id", "client_no"], "conversion": "lpad", "conversion_expr": "LPAD(c.cust_id::varchar, 10, '0')"}], "filters": ["client_no"]}
+-- expect: {"id": "pg-30", "tables": ["accounts", "customers"], "joins": [{"tables": ["customers", "accounts"], "columns": ["cust_id", "client_no"], "conversion": "lpad", "conversion_expr": "LPAD(c.cust_id::varchar, 10, '0')"}], "filters": ["status"]}
 SELECT c.cust_id, c.status
 FROM crm.customers AS c
 WHERE EXISTS (
@@ -296,7 +296,7 @@ FROM crm.customers
 WHERE status = 'A'
 
 -- ---
--- expect: {"id": "pg-40", "tables": ["customers"], "rounding": ["limit_k * 10"]}
+-- expect: {"id": "pg-40", "tables": ["customers"], "filters": ["cust_no"], "rounding": ["limit_k * 10"]}
 SELECT cust_no, limit_k * 10 AS credit_limit
 FROM erp.customers
 WHERE cust_no > 0
