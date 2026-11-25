@@ -173,7 +173,9 @@ def test_frozen_rerun_reproduces_the_original_window_and_exec_ts(
     assert [payload(f) for f in plan.fragments] == [payload(f) for f in recorded.fragments]
     assert plan.fragments[0].exec_ts == recorded.exec_ts
     assert plan.fragments[0].sql == WEEKLY_FROZEN
-    assert "2026-11-18 16:00:00" in plan.fragments[0].sql, "the 7-day window start must not move"
+    assert "2026-11-18 16:00:00" in (plan.fragments[0].sql or ""), (
+        "the 7-day window start must not move"
+    )
 
 
 def test_frozen_rerun_carries_the_stored_spec_so_the_window_is_replannable(

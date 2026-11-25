@@ -52,8 +52,8 @@ from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, cast
 
-import sqlglot
 from pydantic import Field, model_validator
+from sqlglot.errors import SqlglotError
 
 from mdqm.models import (
     ErrorResponse,
@@ -614,7 +614,7 @@ def _rewrite(sql: str, dialect: str, exec_ts: datetime, what: str) -> str:
     """``rewrite_sql`` with a parser failure reported as a history refusal, not a traceback."""
     try:
         return rewrite_sql(sql, dialect=dialect, exec_ts=exec_ts).sql
-    except (ValueError, sqlglot.errors.SqlglotError) as exc:
+    except (ValueError, SqlglotError) as exc:
         raise HistoryError(f"{what}: {exc}") from exc
 
 
@@ -622,7 +622,7 @@ def _replacements(sql: str, dialect: str, exec_ts: datetime, what: str) -> int:
     """How many now-like values ``sql`` still holds (0 means the payload is time-independent)."""
     try:
         return len(rewrite_sql(sql, dialect=dialect, exec_ts=exec_ts).replacements)
-    except (ValueError, sqlglot.errors.SqlglotError) as exc:
+    except (ValueError, SqlglotError) as exc:
         raise HistoryError(f"{what}: {exc}") from exc
 
 
