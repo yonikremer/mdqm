@@ -315,7 +315,7 @@ def test_unclassified_tables_are_never_fresh(
                 theta=theta,
                 min_ttl=min_ttl,
                 max_ttl=max_ttl,
-                mutability=mutability,  # type: ignore[arg-type]
+                mutability=mutability,
             )
             is False
         )
