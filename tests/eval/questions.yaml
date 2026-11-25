@@ -1,0 +1,468 @@
+# Phase-0 analyst question set (task E01): 15 questions, Hebrew and English, with ground truth.
+#
+# Every question carries
+#   * `text.he` and `text.en`: two phrasings of ONE question, so they share one `answer` and one
+#     `spec`. A pairing bug (the two languages meaning different things) shows up as one of them
+#     disagreeing with the world;
+#   * `spec` (or `statement` for the blocked write): the canonical request an agent should send,
+#     validated with `mdqm.spec.parse_spec`;
+#   * `answer`: the expected result as data. `kind: rows` means columns + rows; `kind: error` means
+#     a structured refusal with a stable `ErrorCode`, and no source is touched at all;
+#   * `oracle_sql`: hand-written SQL over the same storage forms the world writes, using explicit
+#     per-source normalisation. It is the second opinion on the answer, never the thing under test:
+#     the compiler/executor/semantic-layer code of `src/mdqm` must not be involved in producing any
+#     answer here, or the eval measures nothing but its own bug.
+#
+# The answers are derived from the seeded synthetic organisation of `mdqm.testing.world` (task D02,
+# `tests/data/world/`). `world_sha256` pins the data the answers belong to: if the generator changes,
+# the hash changes and the answers must be regenerated on purpose instead of drifting silently.
+#
+# Numbers are money or counts, sorted ascending unless a question asks for a ranking. Floats are the
+# exact IEEE-754 doubles DuckDB returns; compare them with `float_tolerance`, not by string equality.
+
+version: 1
+
+world:
+  seed: 1
+  customers: 2000
+  months: 8
+  events_per_customer: 25
+  anchor: "2026-01-01T00:00:00+00:00"
+  max_lag_seconds: 21600
+  sha256: acf40914c31a057646514552930ce7bbdb9e96c97b09ab0f74dbdd66c2bca8b8
+  semantic_layer: examples/semantic_example.yaml
+
+#: Relative tolerance for average (float) columns. Money averages come from integer sums of at most
+#: ~3.5e7, so two correct implementations agree to within a few ULPs; a truncated digit still fails.
+float_tolerance: 1.0e-15
+
+#: The semantic layer items these questions assume. `customer_status` and `credit_limit_r5000` come
+#: from examples/semantic_example.yaml; `usage_units` is not in the example yet, so it is spelled out
+#: here: usage events carry a unit count, every row has one, and it is canonical in every source, so
+#: `count(usage_units)` is a row count and `sum(usage_units)` is a usage total.
+semantic_assumptions:
+  value_maps: [customer_status]
+  measures:
+    credit_limit_r5000: "canonical round-half-up to 5000; crm identity, billing ROUND(x/5000)*5000, erp x*10"
+    usage_units: "units per usage event; identity in every source; never NULL, so count() is a row count"
+  approved_joins: [usage_to_customers]
+
+#: Closed vocabulary of difficulty tags. Counts required by the task: >=3 needs_conversion,
+#: >=3 needs_value_map, >=2 needs_insertion_time.
+difficulty_tags:
+  single_table: "one table, no join"
+  cross_source: "reads more than one source"
+  needs_conversion: "the 5000 rounding, the raw-to-rounded step or the erp /10 must be applied"
+  needs_value_map: "a source status code or a Hebrew/English label must be resolved to a canonical value"
+  needs_partition_pruning: "billing.usage_events is partitioned monthly on start_time, so a window is needed"
+  needs_insertion_time: "the ingestion time, not the event time, answers it"
+  needs_join: "an approved cross-source join, with the key conversion it owns"
+  expected_refusal: "the correct answer is a structured refusal, not rows"
+
+questions:
+  # ---------------------------------------------------------------- credit limit, three sources
+  - id: avg_limit_by_status_crm
+    language: he
+    difficulty: [single_table, needs_value_map]
+    note: "crm stores the canonical rounded limit, so the value map is the only translation needed"
+    text:
+      he: "מה מגבלת האשראי הממוצעת לפי סטטוס לקוח ב-CRM?"
+      en: "What is the average credit limit by customer status in the CRM?"
+    spec:
+      from: crm.customers
+      select: [{measure: credit_limit_r5000, agg: avg}]
+      group_by: [customer_status]
+      order_by: [{by: customer_status, direction: asc}]
+      limit: 50
+    answer:
+      kind: rows
+      columns: [customer_status, credit_limit_r5000_avg]
+      rows:
+        - [active, 29731.68654173765]
+        - [churned, 29768.97689768977]
+        - [suspended, 26954.545454545456]
+    oracle_sql: |
+      -- crm stores round_half_up(raw, 5000) already: normalisation is the identity.
+      SELECT CASE status WHEN 'A' THEN 'active' WHEN 'C' THEN 'churned' WHEN 'S' THEN 'suspended'
+             END AS customer_status,
+             AVG(credit_limit) AS credit_limit_r5000_avg
+      FROM crm.customers
+      GROUP BY 1
+      ORDER BY 1
+
+  - id: avg_limit_by_status_billing
+    language: en
+    difficulty: [single_table, needs_conversion, needs_value_map]
+    note: "billing stores the raw limit and 6 planted NULLs; the rounding must be applied before averaging"
+    text:
+      he: "מה מגבלת האשראי הממוצעת לפי מצב חשבון בחיוב?"
+      en: "What is the average credit limit by account state in billing?"
+    spec:
+      from: billing.accounts
+      select: [{measure: credit_limit_r5000, agg: avg}]
+      group_by: [customer_status]
+      order_by: [{by: customer_status, direction: asc}]
+      limit: 50
+    answer:
+      kind: rows
+      columns: [customer_status, credit_limit_r5000_avg]
+      rows:
+        - [active, 29722.459436379162]
+        - [churned, 29701.492537313432]
+        - [suspended, 26954.545454545456]
+    oracle_sql: |
+      -- raw limit -> canonical: round half-up to 5000 with integer arithmetic (ties go up),
+      -- and a NULL limit takes its account out of the average instead of counting as zero.
+      SELECT CASE state WHEN 'Active' THEN 'active' WHEN 'Closed' THEN 'churned'
+             WHEN 'Hold' THEN 'suspended' END AS customer_status,
+             AVG(((credit_limit + 2500) // 5000) * 5000) AS credit_limit_r5000_avg
+      FROM billing.accounts
+      WHERE credit_limit IS NOT NULL
+      GROUP BY 1
+      ORDER BY 1
+
+  - id: avg_limit_by_status_erp
+    language: he
+    difficulty: [single_table, needs_conversion, needs_value_map]
+    note: "erp stores rounded/10 and 6 identical duplicate rows: dedupe on cust_no, then multiply by 10"
+    text:
+      he: "מה מגבלת האשראי הממוצעת לפי סטטוס לקוח במערכת ה-ERP?"
+      en: "What is the average credit limit by customer status in the ERP?"
+    spec:
+      from: erp.customers
+      select: [{measure: credit_limit_r5000, agg: avg}]
+      group_by: [customer_status]
+      order_by: [{by: customer_status, direction: asc}]
+      limit: 50
+    answer:
+      kind: rows
+      columns: [customer_status, credit_limit_r5000_avg]
+      rows:
+        - [active, 29748.722316865416]
+        - [churned, 29801.980198019803]
+        - [suspended, 26954.545454545456]
+    oracle_sql: |
+      -- limit_k is the rounded limit divided by 10, so the canonical value is limit_k * 10.
+      -- Identical duplicate rows exist: a naive AVERAGE would double count them, so dedupe on the key.
+      SELECT CASE status_code WHEN 1 THEN 'active' WHEN 2 THEN 'churned'
+             WHEN 3 THEN 'suspended' END AS customer_status,
+             AVG(limit_k * 10) AS credit_limit_r5000_avg
+      FROM (SELECT DISTINCT cust_no, status_code, limit_k FROM erp.customers)
+      GROUP BY 1
+      ORDER BY 1
+
+  - id: avg_limit_by_region_billing
+    language: en
+    difficulty: [single_table, needs_conversion]
+    note: "same normalisation as the state question, grouped differently: the conversion is not a one-off"
+    text:
+      he: "מה מגבלת האשראי הממוצעת לפי אזור בחיוב?"
+      en: "What is the average credit limit by region in billing?"
+    spec:
+      from: billing.accounts
+      select: [{measure: credit_limit_r5000, agg: avg}]
+      group_by: [region]
+      order_by: [{by: region, direction: asc}]
+      limit: 50
+    answer:
+      kind: rows
+      columns: [region, credit_limit_r5000_avg]
+      rows:
+        - [center, 28918.91891891892]
+        - [north, 29175.25773195876]
+        - [south, 29700.7722007722]
+        - [tel_aviv, 29803.92156862745]
+    oracle_sql: |
+      SELECT region,
+             AVG(((credit_limit + 2500) // 5000) * 5000) AS credit_limit_r5000_avg
+      FROM billing.accounts
+      WHERE credit_limit IS NOT NULL
+      GROUP BY 1
+      ORDER BY 1
+
+  - id: sum_limit_by_status_erp
+    language: en
+    difficulty: [single_table, needs_conversion, needs_value_map]
+    note: "a SUM exposes a missed dedupe or a missed *10 much louder than an average does"
+    text:
+      he: "מה סך מגבלות האשראי לפי סטטוס לקוח ב-ERP?"
+      en: "What is the total credit limit by customer status in the ERP?"
+    spec:
+      from: erp.customers
+      select: [{measure: credit_limit_r5000, agg: sum}]
+      group_by: [customer_status]
+      order_by: [{by: customer_status, direction: asc}]
+      limit: 50
+    answer:
+      kind: rows
+      columns: [customer_status, credit_limit_r5000_sum]
+      rows:
+        - [active, 34925000]
+        - [churned, 18060000]
+        - [suspended, 5930000]
+    oracle_sql: |
+      SELECT CASE status_code WHEN 1 THEN 'active' WHEN 2 THEN 'churned'
+             WHEN 3 THEN 'suspended' END AS customer_status,
+             SUM(limit_k * 10) AS credit_limit_r5000_sum
+      FROM (SELECT DISTINCT cust_no, status_code, limit_k FROM erp.customers)
+      GROUP BY 1
+      ORDER BY 1
+
+  # ---------------------------------------------------------------- usage, windows and partitions
+  - id: usage_units_by_status_window
+    language: he
+    difficulty: [cross_source, needs_join, needs_value_map, needs_partition_pruning]
+    note: "the approved join owns the '0000001234' <-> 1234 key conversion; the window prunes partitions"
+    text:
+      he: "כמה יחידות שימוש צברו הלקוחות לפי סטטוס בנובמבר ובדצמבר 2025?"
+      en: "How many usage units did customers accrue, by status, in November and December 2025?"
+    spec:
+      from: billing.usage_events
+      select: [{measure: usage_units, agg: sum}]
+      joins: [usage_to_customers]
+      time: {mode: events_in_range, from: "2025-11-01", to: "2026-01-01"}
+      group_by: [customer_status]
+      order_by: [{by: customer_status, direction: asc}]
+      limit: 50
+    answer:
+      kind: rows
+      columns: [customer_status, usage_units_sum]
+      rows:
+        - [active, 1810474]
+        - [churned, 956379]
+        - [suspended, 354603]
+    oracle_sql: |
+      -- billing.usage_events.client_no is a zero-padded VARCHAR(10); crm.customers.cust_id is an INT.
+      -- Events with a client_no that has no customer are dropped by the join, as the report counts them.
+      SELECT CASE c.status WHEN 'A' THEN 'active' WHEN 'C' THEN 'churned'
+             WHEN 'S' THEN 'suspended' END AS customer_status,
+             SUM(e.units) AS usage_units_sum
+      FROM billing.usage_events AS e
+      JOIN crm.customers AS c
+        ON LPAD(CAST(c.cust_id AS VARCHAR), 10, '0') = e.client_no
+      WHERE e.start_time >= TIMESTAMP '2025-11-01 00:00:00'
+        AND e.start_time <  TIMESTAMP '2026-01-01 00:00:00'
+      GROUP BY 1
+      ORDER BY 1
+
+  - id: events_count_window
+    language: en
+    difficulty: [single_table, needs_partition_pruning]
+    note: "no window on start_time means every monthly partition: the query must be refused, so this one has a window"
+    text:
+      he: "כמה אירועי שימוש נרשמו ברבעון האחרון של 2025?"
+      en: "How many usage events were recorded in the last quarter of 2025?"
+    spec:
+      from: billing.usage_events
+      select: [{measure: usage_units, agg: count}]
+      time: {mode: events_in_range, from: "2025-10-01", to: "2026-01-01"}
+      limit: 10
+    answer:
+      kind: rows
+      columns: [usage_units_count]
+      rows:
+        - [18946]
+    oracle_sql: |
+      SELECT COUNT(units) AS usage_units_count
+      FROM billing.usage_events
+      WHERE start_time >= TIMESTAMP '2025-10-01 00:00:00'
+        AND start_time <  TIMESTAMP '2026-01-01 00:00:00'
+
+  - id: usage_events_all_partitions_refused
+    language: en
+    difficulty: [needs_partition_pruning, expected_refusal]
+    note: "the refusal is the answer: 8 of 8 partitions would be scanned and no source is called"
+    text:
+      he: "כמה אירועי שימוש יש בסך הכול בטבלה?"
+      en: "How many usage events are in the table in total?"
+    spec:
+      from: billing.usage_events
+      select: [{measure: usage_units, agg: count}]
+      limit: 10
+    answer:
+      kind: error
+      code: PARTITION_SCAN_ALL
+      problem: "billing.usage_events is partitioned monthly on start_time and this request has no window on it"
+      fix: "add time: {mode: events_in_range, last: '30d'}"
+    refusal_check:
+      kind: no_partition_key_filter
+      table: billing.usage_events
+      partition_key: start_time
+
+  # ---------------------------------------------------------------- ingestion time
+  - id: new_since_resync
+    language: he
+    difficulty: [needs_insertion_time, needs_partition_pruning]
+    note: "a late row has start_time before `since`: only the ingestion time finds it, plus the derived event-time bound"
+    text:
+      he: "מה חדש מאז 1 בדצמבר 2025? אני מסנכרן מחדש את הדוח שלי."
+      en: "What is new since 1 December 2025? I am resyncing my report."
+    spec:
+      from: billing.usage_events
+      select: [{measure: usage_units, agg: count}]
+      time: {mode: new_since, since: "2025-12-01T00:00:00Z"}
+      limit: 10
+    answer:
+      kind: rows
+      columns: [usage_units_count]
+      rows:
+        - [6316]
+    oracle_sql: |
+      -- 'what is new' is ingestion time: a row that happened in July but landed in December counts.
+      -- The planner adds start_time >= since - max_lag only to narrow the scan; the result is this one.
+      SELECT COUNT(units) AS usage_units_count
+      FROM billing.usage_events
+      WHERE insertion_time >= TIMESTAMP '2025-12-01 00:00:00'
+
+  - id: units_new_since
+    language: he
+    difficulty: [needs_insertion_time, needs_partition_pruning]
+    note: "same ingestion-time bound as the previous question with SUM instead of COUNT"
+    text:
+      he: "כמה יחידות שימוש נכנסו מאז אמצע נובמבר 2025?"
+      en: "How many usage units have arrived since mid-November 2025?"
+    spec:
+      from: billing.usage_events
+      select: [{measure: usage_units, agg: sum}]
+      time: {mode: new_since, since: "2025-11-15T00:00:00Z"}
+      limit: 10
+    answer:
+      kind: rows
+      columns: [usage_units_sum]
+      rows:
+        - [2401918]
+    oracle_sql: |
+      SELECT SUM(units) AS usage_units_sum
+      FROM billing.usage_events
+      WHERE insertion_time >= TIMESTAMP '2025-11-15 00:00:00'
+
+  - id: known_as_of_snapshot
+    language: en
+    difficulty: [needs_insertion_time, needs_partition_pruning]
+    note: "'what did we know on the 15th' is an ingestion-time upper bound on top of an event-time window"
+    text:
+      he: "מה ידענו ב-15 בדצמבר 2025 על אירועי דצמבר?"
+      en: "What did we know on 15 December 2025 about December events?"
+    spec:
+      from: billing.usage_events
+      select: [{measure: usage_units, agg: count}]
+      time: {mode: events_in_range, from: "2025-12-01", to: "2026-01-01"}
+      filters:
+        - {column: insertion_time, op: lte, value: "2025-12-15T00:00:00Z"}
+      limit: 10
+    answer:
+      kind: rows
+      columns: [usage_units_count]
+      rows:
+        - [2897]
+    oracle_sql: |
+      -- as-of-T: the event-time window still decides which events are in scope, the ingestion-time
+      -- bound decides what we could have seen at T. Both are half-open/closed on purpose.
+      SELECT COUNT(units) AS usage_units_count
+      FROM billing.usage_events
+      WHERE insertion_time <= TIMESTAMP '2025-12-15 00:00:00'
+        AND start_time >= TIMESTAMP '2025-12-01 00:00:00'
+        AND start_time <  TIMESTAMP '2026-01-01 00:00:00'
+
+  # ---------------------------------------------------------------- value maps and plain reporting
+  - id: churned_customers_hebrew
+    language: he
+    difficulty: [needs_value_map]
+    note: "the agent writes the Hebrew word for churned; the value map resolves it to the crm code 'C'"
+    text:
+      he: "כמה לקוחות עזבו?"
+      en: "How many customers have churned?"
+    spec:
+      from: crm.customers
+      select: [{measure: credit_limit_r5000, agg: count}]
+      filters:
+        - {column: customer_status, op: eq, value: "עזב"}
+      limit: 10
+    answer:
+      kind: rows
+      columns: [credit_limit_r5000_count]
+      rows:
+        - [606]
+    oracle_sql: |
+      -- 'עזב' is the Hebrew label of the canonical value 'churned', stored as 'C' in crm.
+      -- COUNT(credit_limit) is COUNT(*) here: every crm row carries a limit.
+      SELECT COUNT(credit_limit) AS credit_limit_r5000_count
+      FROM crm.customers
+      WHERE status = 'C'
+
+  - id: customers_by_region_crm
+    language: he
+    difficulty: [single_table]
+    note: "the baseline: no conversion, no value map, no window. It should be the easiest question of the set"
+    text:
+      he: "כמה לקוחות יש בכל אזור?"
+      en: "How many customers are there in each region?"
+    spec:
+      from: crm.customers
+      select: [{measure: credit_limit_r5000, agg: count}]
+      group_by: [region]
+      order_by: [{by: region, direction: asc}]
+      limit: 50
+    answer:
+      kind: rows
+      columns: [region, credit_limit_r5000_count]
+      rows:
+        - [center, 482]
+        - [north, 486]
+        - [south, 522]
+        - [tel_aviv, 510]
+    oracle_sql: |
+      SELECT region, COUNT(credit_limit) AS credit_limit_r5000_count
+      FROM crm.customers
+      GROUP BY 1
+      ORDER BY 1
+
+  - id: top_clients_by_usage_december
+    language: en
+    difficulty: [single_table, needs_partition_pruning]
+    note: "a ranking needs a stable tie-break: without the secondary sort the last row can flip between runs"
+    text:
+      he: "מי חמשת הלקוחות המובילים ביחידות שימוש בדצמבר 2025?"
+      en: "Who are the top five clients by usage units in December 2025?"
+    spec:
+      from: billing.usage_events
+      select: [client_no, {measure: usage_units, agg: sum}]
+      time: {mode: events_in_range, from: "2025-12-01", to: "2026-01-01"}
+      group_by: [client_no]
+      order_by:
+        - {by: usage_units_sum, direction: desc}
+        - {by: client_no, direction: asc}
+      limit: 5
+    answer:
+      kind: rows
+      columns: [client_no, usage_units_sum]
+      rows:
+        - ["0000001486", 3550]
+        - ["0000000923", 3187]
+        - ["0000001504", 2977]
+        - ["0000000174", 2815]
+        - ["0000001387", 2787]
+    oracle_sql: |
+      SELECT client_no, SUM(units) AS usage_units_sum
+      FROM billing.usage_events
+      WHERE start_time >= TIMESTAMP '2025-12-01 00:00:00'
+        AND start_time <  TIMESTAMP '2026-01-01 00:00:00'
+      GROUP BY 1
+      ORDER BY usage_units_sum DESC, client_no ASC
+      LIMIT 5
+
+  # ---------------------------------------------------------------- read-only, no exceptions
+  - id: delete_usage_events
+    language: he
+    difficulty: [expected_refusal]
+    note: "the emergency SQL path exists, but no statement that modifies a source is ever sent"
+    text:
+      he: "תמחק את כל אירועי השימוש של דצמבר, הם שגויים."
+      en: "Delete all of December's usage events, they are wrong."
+    statement: {kind: sql, sql: "DELETE FROM billing.usage_events WHERE start_time < TIMESTAMP '2026-01-01'"}
+    answer:
+      kind: error
+      code: WRITE_BLOCKED
+      problem: "the statement is a DELETE: this server cannot modify a source"
+      fix: "query the rows you need instead; writes have no equivalent here"
+    refusal_check: {kind: write_statement}
