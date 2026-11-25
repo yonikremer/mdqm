@@ -28,13 +28,14 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from types import TracebackType
+from typing import Generic, Protocol, TypeVar
 
-from mdqm.adapters.base import OPTIONAL_METHODS, NotSupported, SourceAdapter
+from mdqm.adapters.base import OPTIONAL_METHODS, NotSupported
 from mdqm.cache.freshness import Clock, SystemClock
 from mdqm.models import Capabilities, Capability
 
-__all__ = ["DEFAULT_PROBE_TIMEOUT_S", "ProbeRunner", "describe_failure"]
+__all__ = ["DEFAULT_PROBE_TIMEOUT_S", "ProbeRunner", "ProbeTarget", "describe_failure"]
 
 #: Default per-call budget. Short on purpose: a probe runs on every re-probe and must never be the
 #: reason a nightly job is slow. An operator raises it for a genuinely slow source.
@@ -52,6 +53,19 @@ _SECRETS: tuple[tuple[re.Pattern[str], str], ...] = (
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 
 _T = TypeVar("_T")
+
+
+class ProbeTarget(Protocol):
+    """What probing needs from a source: one ``probe()`` call, nothing more.
+
+    Deliberately not :class:`~mdqm.adapters.base.SourceAdapter`: probing never touches
+    catalog/execute, and the caller already knows the name and the adapter kind (it passes them
+    in), so a test double with a single method is a valid argument.
+    """
+
+    def probe(self) -> Capabilities:
+        """Detect what this source supports."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -82,14 +96,15 @@ class ProbeRunner:
 
     # --- adapter probe ---------------------------------------------------------------------
 
-    def probe_adapter(self, adapter: SourceAdapter, *, name: str | None = None) -> Capabilities:
+    def probe_adapter(self, adapter: ProbeTarget, *, name: str, kind: str) -> Capabilities:
         """One adapter's capability map, or an all-unknown map naming why it failed.
 
-        ``name`` is the configured source name: it is authoritative, because an adapter may know
-        itself by its kind while the operator knows it by the name in ``mdqm.yaml``.
+        ``name`` is the configured source name and ``kind`` the adapter kind: both are supplied by
+        the caller, because the report must use the name the operator configured, whatever the
+        adapter calls itself.
         """
         started = self._clock.now()
-        source = name or adapter.kind
+        source = name
 
         def call() -> Capabilities:
             try:
@@ -98,7 +113,7 @@ class ProbeRunner:
                 # A normal answer, not a failure: the adapter declares what it cannot do.
                 return Capabilities(
                     source=source,
-                    adapter=adapter.kind,
+                    adapter=kind,
                     retrieved_at=started,
                     capabilities={exc.capability: Capability(supported=False, detail=exc.detail)},
                 )
@@ -108,7 +123,7 @@ class ProbeRunner:
             probed = outcome.value
             return Capabilities(
                 source=source,
-                adapter=adapter.kind,
+                adapter=kind,
                 version=probed.version,
                 retrieved_at=started,
                 capabilities=probed.capabilities,
@@ -116,7 +131,7 @@ class ProbeRunner:
         detail = outcome.failure.detail if outcome.failure is not None else None
         return Capabilities(
             source=source,
-            adapter=adapter.kind,
+            adapter=kind,
             retrieved_at=started,
             capabilities={
                 capability: Capability(supported=None, detail=detail)
@@ -163,7 +178,12 @@ class ProbeRunner:
     def __enter__(self) -> ProbeRunner:
         return self
 
-    def __exit__(self, *exc_info: object) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         self.close()
 
     # --- the guard -------------------------------------------------------------------------

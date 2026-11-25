@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 
 from pydantic import Field
 from ruamel.yaml import YAML
@@ -53,6 +53,12 @@ _TOP_KEYS: tuple[str, ...] = ("defaults", "sources")
 
 #: The only keys one capability entry may carry.
 _ENTRY_KEYS: tuple[str, ...] = ("supported", "detail")
+
+
+class _KeyMarker(Protocol):
+    """ruamel's ``lc.key(key)``: the 0-based (line, column) a mapping key starts on."""
+
+    def __call__(self, key: Any, /) -> tuple[int, int]: ...
 
 
 class CapabilityOverride(MDQMModel):
@@ -224,8 +230,9 @@ def _line(node: object, key: Any) -> str:
     locate = getattr(locations, "key", None)
     if not callable(locate):
         return ""
+    marker = cast(_KeyMarker, locate)
     try:
-        line = locate(key)[0]
+        line = marker(key)[0]
     except (KeyError, TypeError):
         return ""
     return f"line {line + 1}: " if isinstance(line, int) else ""

@@ -83,7 +83,8 @@ def run_probe(
     try:
         probed: dict[str, Capabilities] = {}
         for name in sorted(sources):
-            capability_map = active.probe_adapter(sources[name], name=name)
+            adapter = sources[name]
+            capability_map = active.probe_adapter(adapter, name=name, kind=adapter.kind)
             probed[name] = apply_overrides(capability_map, overrides)
         hooks = metadata_store_probes() if store_probes is None else store_probes
         if hooks:

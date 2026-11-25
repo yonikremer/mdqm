@@ -20,15 +20,16 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, ClassVar, Protocol, cast
 
 import pytest
 from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
-from mdqm.adapters.base import OPTIONAL_METHODS, NotSupported
+from mdqm.adapters.base import OPTIONAL_METHODS, NotSupported, SourceAdapter
 from mdqm.cli import app
 from mdqm.config.settings import ConfigError
 from mdqm.models import (
@@ -47,6 +48,7 @@ from mdqm.probe import (
     OVERRIDES_FILE,
     OverrideSet,
     ProbeDiff,
+    ProbeOutcome,
     ProbeReport,
     ProbeRunner,
     apply_overrides,
@@ -62,6 +64,7 @@ from mdqm.probe import (
     write_report,
 )
 from mdqm.probe.overrides import CapabilityOverride
+from mdqm.probe.runner import ProbeTarget
 from mdqm.semantic.loader import GENERATED_DIR
 from mdqm.testing.fake_adapter import FakeAdapter
 
@@ -93,6 +96,18 @@ def _now() -> datetime:
     return NOW
 
 
+def _probe(sources: Mapping[str, ProbeTarget], **kwargs: Any) -> ProbeOutcome:
+    """``run_probe`` over test doubles.
+
+    F05's ``FakeAdapter.kind`` is ``Final[str]`` while F04's ``SourceAdapter`` declares
+    ``kind: str``, so a type checker rejects the fake as a ``SourceAdapter`` even though every
+    adapter agrees at runtime (the registry accepts it, and conformance passes). One cast here
+    keeps the production
+    signature honest instead of widening it for tests.
+    """
+    return run_probe(cast("Mapping[str, SourceAdapter]", sources), **kwargs)
+
+
 def _crm(**kwargs: object) -> FakeAdapter:
     """A FakeAdapter named ``crm`` with a frozen clock, so goldens are stable."""
     options: dict[str, object] = {"name": "crm", "clock": _now}
@@ -103,7 +118,7 @@ def _crm(**kwargs: object) -> FakeAdapter:
 def _partitioning() -> Partitioning:
     return Partitioning(
         strategy=PartitionStrategy.RANGE,
-        key=["start_time"],
+        key=("start_time",),
         bounds=(
             PartitionBound(name="p1", row_estimate=10),
             PartitionBound(name="p2", row_estimate=10),
@@ -120,10 +135,10 @@ def _write(tmp_path: Path, report: ProbeReport) -> str:
     return _normalised(write_report(tmp_path, report).read_text(encoding="utf-8"))
 
 
-def _report(tmp_path: Path, sources: dict[str, object], **kwargs: object) -> ProbeReport:
+def _report(tmp_path: Path, sources: Mapping[str, ProbeTarget], **kwargs: object) -> ProbeReport:
     """Run one probe over ``sources`` and return the report (no metadata store, no diff)."""
-    outcome = run_probe(
-        sources,  # type: ignore[arg-type]
+    outcome = _probe(
+        sources,
         store_probes={},
         clock=FixedClock(),
         **kwargs,  # type: ignore[arg-type]
@@ -168,9 +183,7 @@ def test_fallbacks_for_the_three_states(
     verdicts: dict[str, bool | None], expected: list[str]
 ) -> None:
     """Every gap state is recorded; only a positive ``True`` opens the gate."""
-    capabilities = {
-        name: Capability(supported=value) for name, value in verdicts.items()
-    }
+    capabilities = {name: Capability(supported=value) for name, value in verdicts.items()}
     reported = fallbacks_for(capabilities)
     if not verdicts:
         assert {item.feature for item in reported} == {feature.name for feature in FEATURES}
@@ -308,9 +321,7 @@ def _probed(**verdicts: bool | None) -> Capabilities:
         adapter="fake",
         version="fake-1",
         retrieved_at=NOW,
-        capabilities={
-            name: Capability(supported=value) for name, value in verdicts.items()
-        },
+        capabilities={name: Capability(supported=value) for name, value in verdicts.items()},
     )
 
 
@@ -323,6 +334,7 @@ def test_override_wins_and_says_so() -> None:
     assert entry.detail is not None
     assert "admin override" in entry.detail
     assert "probe said unsupported" in entry.detail
+
 
 def test_override_keeps_the_operator_detail() -> None:
     overrides = parse_overrides(
@@ -435,7 +447,7 @@ def test_a_corrupt_report_names_the_file(tmp_path: Path, text: str) -> None:
 class StubAdapter:
     """Minimal adapter-shaped object: the probe runner needs ``kind`` and ``probe()`` only."""
 
-    kind = "stub"
+    kind: ClassVar[str] = "stub"
 
     def __init__(self, outcome: Capabilities | Exception) -> None:
         self._outcome = outcome
@@ -450,7 +462,7 @@ def test_raising_probe_is_unknown() -> None:
     """A probe that raises becomes ``unknown`` for every optional capability, with detail."""
     adapter = StubAdapter(RuntimeError("the driver exploded"))
     with ProbeRunner(timeout_s=1.0, clock=FixedClock()) as runner:
-        caps = runner.probe_adapter(adapter, name="crm")
+        caps = runner.probe_adapter(adapter, name="crm", kind="stub")
     assert caps.source == "crm"
     assert caps.adapter == "stub"
     assert set(caps.capabilities) == set(OPTIONAL_METHODS.values())
@@ -461,7 +473,7 @@ def test_raising_probe_is_unknown() -> None:
 def test_not_supported_from_probe_is_unsupported_with_detail() -> None:
     adapter = StubAdapter(NotSupported("explain_plan", "no PLAN_TABLE privileges"))
     with ProbeRunner(timeout_s=1.0, clock=FixedClock()) as runner:
-        caps = runner.probe_adapter(adapter, name="crm")
+        caps = runner.probe_adapter(adapter, name="crm", kind="stub")
     entry = caps.get("explain_plan")
     assert entry.supported is False
     assert entry.detail == "no PLAN_TABLE privileges"
@@ -474,7 +486,8 @@ def test_a_hanging_probe_times_out_instead_of_hanging_the_run() -> None:
             return super().probe()
 
     with ProbeRunner(timeout_s=0.05, clock=FixedClock()) as runner:
-        caps = runner.probe_adapter(SlowAdapter(_probed(explain_plan=True)), name="crm")
+        slow = SlowAdapter(_probed(explain_plan=True))
+        caps = runner.probe_adapter(slow, name="crm", kind="stub")
     assert all(entry.supported is None for entry in caps.capabilities.values())
     details = [entry.detail or "" for entry in caps.capabilities.values()]
     assert all("timed out after 0.05s" in detail for detail in details)
@@ -503,11 +516,7 @@ def test_timed_out_feature_is_unknown_and_the_others_still_report() -> None:
 def test_a_dead_probe_does_not_stop_the_run(tmp_path: Path) -> None:
     """The run completes and writes the artifact even when a source refuses to answer."""
     sources = {"crm": _crm(), "erp": StubAdapter(RuntimeError("gone"))}
-    outcome = run_probe(
-        sources,  # type: ignore[arg-type]
-        store_probes={},
-        clock=FixedClock(),
-    )
+    outcome = _probe(sources, store_probes={}, clock=FixedClock())
     assert set(outcome.report.sources) == {"crm", "erp"}
     assert outcome.report.sources["crm"].capabilities["explain_plan"].supported is True
     assert all(
@@ -534,7 +543,7 @@ def test_failure_detail_masks_key_value_secrets() -> None:
 
 
 def test_metadata_store_is_probed_through_a_hook(tmp_path: Path) -> None:
-    outcome = run_probe(
+    outcome = _probe(
         {"crm": _crm()},
         store_probes=metadata_store_probes(),
         clock=FixedClock(),
@@ -557,10 +566,10 @@ def test_override_wins_and_survives_reprobe(tmp_path: Path) -> None:
     overrides = parse_overrides(
         {"sources": {"crm": {"explain_plan": False}}}, path=Path("overrides.yaml")
     )
-    first = run_probe({"crm": _crm()}, overrides=overrides, store_probes={}, clock=FixedClock())
+    first = _probe({"crm": _crm()}, overrides=overrides, store_probes={}, clock=FixedClock())
     assert first.report.sources["crm"].get_capability("explain_plan").supported is False
 
-    second = run_probe(
+    second = _probe(
         {"crm": _crm()},
         overrides=overrides,
         previous=first.report,
@@ -576,11 +585,11 @@ def test_override_wins_and_survives_reprobe(tmp_path: Path) -> None:
 
 def test_diff_reports_the_flipped_capability(tmp_path: Path) -> None:
     """The probe says supported; the admin pins it off; the diff names the flip."""
-    before = run_probe({"crm": _crm()}, store_probes={}, clock=FixedClock()).report
+    before = _probe({"crm": _crm()}, store_probes={}, clock=FixedClock()).report
     overrides = parse_overrides(
         {"sources": {"crm": {"explain_plan": False}}}, path=Path("overrides.yaml")
     )
-    after = run_probe(
+    after = _probe(
         {"crm": _crm()}, overrides=overrides, previous=before, store_probes={}, clock=FixedClock()
     )
     assert "crm.explain_plan: supported -> unsupported" in after.diff.changed
@@ -592,12 +601,10 @@ def test_diff_records_a_resolved_capability() -> None:
     overrides = parse_overrides(
         {"sources": {"crm": {"explain_plan": False}}}, path=Path("overrides.yaml")
     )
-    before = run_probe(
+    before = _probe(
         {"crm": _crm()}, overrides=overrides, store_probes={}, clock=FixedClock()
     ).report
-    after = run_probe(
-        {"crm": _crm()}, previous=before, store_probes={}, clock=FixedClock()
-    ).report
+    after = _probe({"crm": _crm()}, previous=before, store_probes={}, clock=FixedClock()).report
     assert "crm.explain_plan: unsupported -> supported" in diff_reports(before, after).changed
 
 
@@ -605,22 +612,22 @@ def test_diff_reports_an_overridden_unknown() -> None:
     overrides = parse_overrides(
         {"sources": {"crm": {"query_mode": None}}}, path=Path("overrides.yaml")
     )
-    before = run_probe({"crm": _crm()}, store_probes={}, clock=FixedClock()).report
-    after = run_probe(
+    before = _probe({"crm": _crm()}, store_probes={}, clock=FixedClock()).report
+    after = _probe(
         {"crm": _crm()}, overrides=overrides, previous=before, store_probes={}, clock=FixedClock()
     ).report
     assert "crm.query_mode: absent -> unknown" in diff_reports(before, after).changed
 
 
 def test_first_run_has_no_diff() -> None:
-    outcome = run_probe({"crm": _crm()}, store_probes={}, clock=FixedClock())
+    outcome = _probe({"crm": _crm()}, store_probes={}, clock=FixedClock())
     assert outcome.diff == ProbeDiff()
     assert outcome.diff.is_empty
 
 
 def test_removed_source_is_reported() -> None:
-    before = run_probe({"crm": _crm(), "erp": _crm()}, store_probes={}, clock=FixedClock()).report
-    after = run_probe({"crm": _crm()}, store_probes={}, clock=FixedClock()).report
+    before = _probe({"crm": _crm(), "erp": _crm()}, store_probes={}, clock=FixedClock()).report
+    after = _probe({"crm": _crm()}, store_probes={}, clock=FixedClock()).report
     assert "erp: source removed" in diff_reports(before, after).changed
 
 

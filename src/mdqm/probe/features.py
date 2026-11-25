@@ -129,8 +129,6 @@ def fallbacks_for(capabilities: Mapping[str, Capability]) -> tuple[FeatureFallba
         )
         if missing:
             gaps.append(
-                FeatureFallback(
-                    feature=feature.name, missing=missing, fallback=feature.fallback
-                )
+                FeatureFallback(feature=feature.name, missing=missing, fallback=feature.fallback)
             )
     return tuple(gaps)

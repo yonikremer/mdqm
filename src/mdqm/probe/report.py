@@ -145,9 +145,7 @@ def build_report(
         generated_at=now,
         overrides_path=None if overrides is None else overrides.path,
         unregistered_overrides=() if overrides is None else overrides.unregistered(),
-        sources={
-            name: SourceReport.from_capabilities(probed[name]) for name in sorted(probed)
-        },
+        sources={name: SourceReport.from_capabilities(probed[name]) for name in sorted(probed)},
     )
 
 
@@ -210,8 +208,6 @@ def read_report(path: Path) -> ProbeReport | None:
 def _fallback_payload(item: FeatureFallback) -> dict[str, Any]:
     return {
         "feature": item.feature,
-        "missing": [
-            {"capability": gap.capability, "state": gap.state} for gap in item.missing
-        ],
+        "missing": [{"capability": gap.capability, "state": gap.state} for gap in item.missing],
         "fallback": item.fallback,
     }
