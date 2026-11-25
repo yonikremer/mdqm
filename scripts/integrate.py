@@ -56,7 +56,7 @@ def acquire_lock(timeout=900):
 
 def main():
     if len(sys.argv) != 2:
-        die(__doc__, 1)
+        die(__doc__ or "", 1)
     tid = sys.argv[1]
     branch = f"task/{tid}"
     root = main_root()

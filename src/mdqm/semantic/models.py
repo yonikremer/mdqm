@@ -90,8 +90,10 @@ class FrozenMapping(dict[_K, _V]):
     pop = _immutable
     popitem = _immutable
     clear = _immutable
-    update = _immutable
-    setdefault = _immutable
+    # `dict.update`/`dict.setdefault` declare `self` as a constrained protocol, so no override can
+    # match their overloads; the assignment is deliberate and the call always raises.
+    update = _immutable  # pyright: ignore[reportAssignmentType]
+    setdefault = _immutable  # pyright: ignore[reportAssignmentType]
 
 
 def _freeze(mapping: Mapping[str, _T]) -> dict[str, _T]:

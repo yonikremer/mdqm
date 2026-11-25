@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 HERE = Path(__file__).resolve().parent
 REPO_FILES_ROOT = HERE.parent
@@ -57,6 +58,6 @@ def done_ids() -> set[str]:
     return out
 
 
-def die(msg: str, code: int = 1) -> None:
+def die(msg: str, code: int = 1) -> NoReturn:
     print(msg, file=sys.stderr)
     raise SystemExit(code)

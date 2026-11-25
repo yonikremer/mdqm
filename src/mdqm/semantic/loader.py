@@ -185,13 +185,18 @@ def _merge(
             for overridden in value:
                 origins.record_key(current, overridden, path, value)
         elif _named_list(current) and _named_list(value):
-            lower[key] = _merge_named(list(current), list(value), origins, path)
+            lower[key] = _merge_named(_list_of(current), _list_of(value), origins, path)
             origins.record_key(lower, key, path, higher)
         else:
             lower[key] = value
             origins.record_key(lower, key, path, higher)
             origins.record(value, path)
     return lower
+
+
+def _list_of(node: Any) -> list[Any]:
+    """The items of a list node; empty for anything else (the callers check the shape first)."""
+    return list(node) if isinstance(node, list) else []
 
 
 def _merge_named(
