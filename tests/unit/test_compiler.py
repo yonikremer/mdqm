@@ -562,7 +562,10 @@ def _adapter(name: str, tables: Mapping[str, pa.Table]) -> FakeAdapter:
     documented deployment assumption, not a workaround for the compiler.
     """
     adapter = FakeAdapter(name=name, tables=dict(tables))
-    adapter._con.execute("SET TimeZone='UTC'")  # noqa: SLF001 - the fake exposes no session knob
+    # The fake exposes no session knob, and its connection is Optional until it is closed.
+    connection = adapter._con  # noqa: SLF001
+    assert connection is not None
+    connection.execute("SET TimeZone='UTC'")
     return adapter
 
 
