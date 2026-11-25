@@ -266,9 +266,10 @@ def _as_table(
     extra memory. An empty stream still has a schema, which is what an empty answer reports.
     """
     if isinstance(data, pa.Table):
-        return data, data.schema
+        # pyarrow ships no stubs, so the checker cannot narrow away Iterable[Unknown] here.
+        return data, data.schema  # pyright: ignore[reportAttributeAccessIssue]
     if isinstance(data, pa.RecordBatch):
-        return pa.Table.from_batches([data]), data.schema
+        return pa.Table.from_batches([data]), data.schema  # pyright: ignore[reportAttributeAccessIssue]
     batches = list(data)
     if batches:
         return pa.Table.from_batches(batches), batches[0].schema
@@ -314,7 +315,8 @@ def _distinct(column: pa.ChunkedArray) -> tuple[int, DistinctKind]:
         # count_distinct has no dictionary kernel; the value type is the same data, decoded.
         scanned = scanned.cast(scanned.type.value_type)
     try:
-        count = pc.count_distinct(scanned)
+        # C-generated: absent from pyarrow's (untyped) namespace as far as the checker can see.
+        count = pc.count_distinct(scanned)  # pyright: ignore[reportAttributeAccessIssue]
     except (pa.ArrowNotImplementedError, pa.ArrowInvalid):
         return 0, "unavailable"
     return int(count.as_py()), kind
@@ -323,7 +325,7 @@ def _distinct(column: pa.ChunkedArray) -> tuple[int, DistinctKind]:
 def _min_max(column: pa.ChunkedArray) -> tuple[Any, Any]:
     """Min and max as JSON scalars, or ``(None, None)`` when the type has no ordering."""
     try:
-        bounds = pc.min_max(column)
+        bounds = pc.min_max(column)  # pyright: ignore[reportAttributeAccessIssue]
     except (pa.ArrowNotImplementedError, pa.ArrowInvalid):
         return None, None
     return _json_scalar(bounds["min"].as_py()), _json_scalar(bounds["max"].as_py())
