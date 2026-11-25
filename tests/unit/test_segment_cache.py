@@ -12,6 +12,7 @@ and every ``fetched_at`` assertion is exact. Nothing here touches the network or
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -200,7 +201,7 @@ def clock() -> _Clock:
 
 
 @pytest.fixture
-def cache(clock: _Clock) -> SegmentCache:
+def cache(clock: _Clock) -> Iterator[SegmentCache]:
     store = SegmentCache(clock=clock, min_ttl=timedelta(seconds=30))
     yield store
     store.close()

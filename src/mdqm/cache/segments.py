@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import duckdb
 import pyarrow as pa
@@ -248,8 +248,8 @@ class SegmentPart:
     @property
     def rows(self) -> int:
         """Rows this piece contributes to the answer."""
-        # pyarrow ships no py.typed marker, so num_rows is Any to mypy: int() restores the type.
-        return int(self.table.num_rows)
+        # pyarrow ships no py.typed marker, so num_rows crosses as Any.
+        return _as_int(self.table.num_rows, "a segment's row count")
 
     # The rows keep the order DuckDB produced when merging, which is not the source's ORDER BY
     # order. A caller that promises an order must sort the assembled answer itself.
@@ -350,6 +350,18 @@ def _is_tail(window: Range, exec_ts: datetime, granularity: PartitionGranularity
     return window.upper > last.lower
 
 
+def _as_int(value: Any, what: str) -> int:
+    """A DuckDB count/sum as ``int``. A non-numeric value means corrupt metadata, so it is raised.
+
+    ``int()`` is wrapped rather than trusted: the value crosses from DuckDB untyped, and a silently
+    coerced ``0`` would understate a row count or a byte total.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{what} returned a non-numeric value {value!r}") from exc
+
+
 def _human(value: timedelta) -> str:
     """A short, readable duration for a ``reason``: ``'7.2h'``, ``'30s'``, ``'3.5d'``."""
     seconds = value.total_seconds()
@@ -403,6 +415,7 @@ class SegmentCache:
         self._max_ttl = max_ttl
         self._max_bytes = max_bytes
         self._lock = threading.Lock()
+        self._closed = False
 
         if path is None:
             self._con = duckdb.connect(":memory:")
@@ -412,11 +425,13 @@ class SegmentCache:
             self._con = duckdb.connect(str(target))
         # UTC everywhere: a stored segment's fetched_at must round-trip to the same instant.
         self._con.execute("SET TimeZone='UTC'")
-        self._con.execute(f"SET memory_limit='{memory_limit}'")
+        # DuckDB cannot bind a SET value as a parameter; _require_size has already restricted it to
+        # <number><unit>, so nothing but a size can reach this statement.
+        self._con.execute(f"SET memory_limit='{memory_limit}'")  # nosemgrep
         if spill_dir is not None:
             spill = Path(spill_dir)
             spill.mkdir(parents=True, exist_ok=True)
-            self._con.execute(f"SET temp_directory='{spill.as_posix()}'")
+            self._con.execute(f"SET temp_directory='{spill.as_posix()}'")  # nosemgrep
         self._con.execute(_METADATA_DDL)
 
     # --- lifecycle ------------------------------------------------------------------------
@@ -424,15 +439,14 @@ class SegmentCache:
     def close(self) -> None:
         """Close the DuckDB database. Idempotent."""
         with self._lock:
-            con = getattr(self, "_con", None)
-            if con is not None:
-                con.close()
-                self._con = None  # type: ignore[assignment]
+            if not self._closed:
+                self._closed = True
+                self._con.close()
 
     def __enter__(self) -> SegmentCache:
         return self
 
-    def __exit__(self, *_: object) -> None:
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         self.close()
 
     # --- lookup ---------------------------------------------------------------------------
@@ -699,7 +713,7 @@ class SegmentCache:
         rows = self._con.execute(
             "SELECT fetched_at, nrows FROM _mdqm_segments WHERE key = ?", [key]
         ).fetchall()
-        return None if not rows else (rows[0][0], int(rows[0][1]))
+        return None if not rows else (rows[0][0], _as_int(rows[0][1], "a segment's row count"))
 
     def _read_rows(self, spec: SegmentSpec, window: Range) -> pa.Table:
         """Read a stored segment's rows back as Arrow, preserving the original column order."""
@@ -763,7 +777,8 @@ class SegmentCache:
             return
         with self._lock:
             for key, ident, _bytes, _fetched in rows:
-                self._con.execute(f'DROP TABLE IF EXISTS main."{ident}"')
+                # ident is 'seg_' + 32 hex digits of a sha256 (see _row_table_name).
+                self._con.execute(f'DROP TABLE IF EXISTS main."{ident}"')  # nosemgrep
                 self._con.execute("DELETE FROM _mdqm_segments WHERE key = ?", [key])
 
     # --- reporting ------------------------------------------------------------------------
@@ -772,7 +787,7 @@ class SegmentCache:
         """How many segments are stored right now."""
         with self._lock:
             rows = self._con.execute("SELECT count(*) FROM _mdqm_segments").fetchall()
-        return int(rows[0][0]) if rows else 0
+        return _as_int(rows[0][0], "the segment count") if rows else 0
 
     def total_bytes(self) -> int:
         """Row bytes the store currently holds."""
@@ -780,4 +795,4 @@ class SegmentCache:
             rows = self._con.execute(
                 "SELECT coalesce(sum(nbytes), 0) FROM _mdqm_segments"
             ).fetchall()
-        return int(rows[0][0]) if rows else 0
+        return _as_int(rows[0][0], "the cached byte total") if rows else 0
