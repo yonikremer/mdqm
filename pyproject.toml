@@ -76,3 +76,9 @@ python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["src"]
+
+# pyarrow ships no py.typed marker (checked on the pinned version), so strict mode would reject
+# every annotation that names an Arrow type instead of using it.
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
