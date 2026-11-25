@@ -73,4 +73,7 @@ class StructuredLLM(Protocol):
         *,
         system: str | None = None,
         prompt_version: str = DEFAULT_PROMPT_VERSION,
-    ) -> LLMResult[ModelT]: ...
+    ) -> LLMResult[ModelT]:
+        # Protocol stub by design: `ModelClient.structured` and `FakeLLM.structured` implement
+        # it. The body is `...` because a Protocol is never called directly.
+        ...
