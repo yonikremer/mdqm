@@ -137,12 +137,7 @@ def _write(tmp_path: Path, report: ProbeReport) -> str:
 
 def _report(tmp_path: Path, sources: Mapping[str, ProbeTarget], **kwargs: object) -> ProbeReport:
     """Run one probe over ``sources`` and return the report (no metadata store, no diff)."""
-    outcome = _probe(
-        sources,
-        store_probes={},
-        clock=FixedClock(),
-        **kwargs,  # type: ignore[arg-type]
-    )
+    outcome = _probe(sources, store_probes={}, clock=FixedClock(), **kwargs)
     return outcome.report
 
 
@@ -303,6 +298,18 @@ def test_broken_yaml_names_the_file(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as caught:
         load_overrides(path)
     assert "invalid YAML" in str(caught.value)
+
+
+def test_a_yaml_tag_is_refused_before_it_is_constructed(tmp_path: Path) -> None:
+    """No tag may reach a constructor, so a python tag cannot execute — it is refused by line."""
+    path = _write_overrides(
+        tmp_path,
+        "sources:\n  crm:\n    x: !!python/object/apply:os.system ['echo hi']\n",
+    )
+    with pytest.raises(ConfigError) as caught:
+        load_overrides(path)
+    assert "YAML tags are not allowed" in str(caught.value)
+    assert "line 3" in str(caught.value)
 
 
 def test_parse_overrides_accepts_a_plain_mapping() -> None:
@@ -515,7 +522,10 @@ def test_timed_out_feature_is_unknown_and_the_others_still_report() -> None:
 
 def test_a_dead_probe_does_not_stop_the_run(tmp_path: Path) -> None:
     """The run completes and writes the artifact even when a source refuses to answer."""
-    sources = {"crm": _crm(), "erp": StubAdapter(RuntimeError("gone"))}
+    sources: dict[str, ProbeTarget] = {
+        "crm": _crm(),
+        "erp": StubAdapter(RuntimeError("gone")),
+    }
     outcome = _probe(sources, store_probes={}, clock=FixedClock())
     assert set(outcome.report.sources) == {"crm", "erp"}
     assert outcome.report.sources["crm"].capabilities["explain_plan"].supported is True

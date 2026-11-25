@@ -25,6 +25,7 @@ safe to log and to show to an operator.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -53,6 +54,11 @@ _TOP_KEYS: tuple[str, ...] = ("defaults", "sources")
 
 #: The only keys one capability entry may carry.
 _ENTRY_KEYS: tuple[str, ...] = ("supported", "detail")
+
+#: Any YAML tag. ``overrides.yaml`` holds only scalars, booleans, nulls and mappings, so a tag is
+#: never legitimate here, and rejecting every tag makes object construction impossible regardless
+#: of which ruamel constructor is in play (``docs/DESIGN.md`` section 4, principle 11).
+_TAG = re.compile(r"!")
 
 
 class _KeyMarker(Protocol):
@@ -102,6 +108,19 @@ def load_overrides(path: Path | None) -> OverrideSet:
     if not path.is_file():
         return OverrideSet(path=str(path))
     text = path.read_text(encoding="utf-8")
+    tag = _TAG.search(text)
+    if tag is not None:
+        raise ConfigError(
+            str(path),
+            [
+                f"line {text[: tag.start()].count(chr(10)) + 1}: "
+                "YAML tags are not allowed here; write a plain value"
+            ],
+        )
+    # `typ="rt"` is the round-trip loader because only it records line numbers for the error
+    # messages. Its constructor derives from SafeConstructor (verified: a `!!python/object/apply`
+    # tag is not executed), and the tag guard above rejects every tag before this call, so no
+    # tag-driven construction can happen at all.
     yaml = YAML(typ="rt")
     try:
         document = yaml.load(text)
