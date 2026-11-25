@@ -30,6 +30,7 @@ dev = [
   "pytest-asyncio>=0.24",
   "pytest-socket>=0.7",
   "hypothesis>=6.100",
+  "jsonschema>=4",                # tests/unit/test_models.py validates the exported JSON Schemas
   "fastapi>=0.110",                   # only for the mock OpenAPI service in tests
   "ruff>=0.6",
   "mypy>=1.11",
