@@ -82,3 +82,15 @@ files = ["src"]
 [[tool.mypy.overrides]]
 module = ["pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
+
+# Typing scope for editors and the LSP, matching what CI enforces ([tool.mypy]: strict on "src").
+# pyright is not part of scripts/check.py, so it must not report against rules this project does
+# not adopt: `scripts/` is untyped by policy (mypy's `files = ["src"]`), and sqlglot exposes
+# `Expression` at runtime without listing it in its stub __all__, so every legitimate
+# `exp.Expression` would otherwise trip reportPrivateImportUsage.
+[tool.pyright]
+include = ["src", "tests"]
+exclude = [".venv", ".worktrees", "**/node_modules", "**/__pycache__"]
+venvPath = "."
+venv = ".venv"
+reportPrivateImportUsage = false

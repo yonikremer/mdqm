@@ -34,8 +34,6 @@ import sqlglot
 from pydantic import BaseModel, ConfigDict, Field
 from sqlglot import exp
 
-UTC: Final = UTC
-
 #: sqlglot dialects this module knows the now-like function names of.
 SUPPORTED_DIALECTS: Final[frozenset[str]] = frozenset(
     {"duckdb", "mysql", "oracle", "postgres", "tsql"}
