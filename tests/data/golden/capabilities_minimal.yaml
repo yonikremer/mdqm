@@ -1,0 +1,65 @@
+# Written by mdqm's bootstrap pipeline. Do not edit: every run replaces this file.
+generated_at: '2026-01-01T12:00:00+00:00'
+overrides_path:
+unregistered_overrides: []
+sources:
+  crm:
+    adapter: fake
+    version: duckdb-<installed>
+    probed_at: '2026-01-01T12:00:00+00:00'
+    capabilities:
+      explain_plan:
+        supported: true
+        detail:
+        source: probed
+      mutability_counters:
+        supported: false
+        detail:
+        source: probed
+      partition_metadata:
+        supported: false
+        detail:
+        source: probed
+      query_store:
+        supported: false
+        detail:
+        source: probed
+    fallbacks:
+    - feature: context_search
+      missing:
+      - capability: fts5
+        state: unknown
+      fallback: search the semantic layer by scanning with LIKE instead of using
+        the FTS index
+    - feature: elastic_query_mode
+      missing:
+      - capability: query_mode
+        state: unknown
+      fallback: send Query DSL, the mode every Elasticsearch serves
+    - feature: mutability_classification
+      missing:
+      - capability: mutability_counters
+        state: unsupported
+      fallback: checksum a sample; without that, classify the table as unknown 
+        (= mutable)
+    - feature: partition_planning
+      missing:
+      - capability: partition_metadata
+        state: unsupported
+      fallback: plan from indexes and the cost gate only, with no partition 
+        pruning
+    - feature: profiling
+      missing:
+      - capability: sampling
+        state: unknown
+      fallback: profile from catalog statistics and a small, timed fetch
+    - feature: query_mining
+      missing:
+      - capability: query_store
+        state: unsupported
+      fallback: mine the MCP's own query history only
+    - feature: structured_model_output
+      missing:
+      - capability: structured_output
+        state: unknown
+      fallback: validate the model's JSON in code, up to two retries

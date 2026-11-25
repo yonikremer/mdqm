@@ -4,6 +4,7 @@ import typer
 
 from mdqm import __version__
 from mdqm.config.settings import Settings
+from mdqm.probe.cli import probe as probe_command
 from mdqm.server.app import AuthConfigError
 from mdqm.server.app import serve as serve_mcp
 from mdqm.store.audit import DEFAULT_RETENTION_DAYS, AuditLog
@@ -14,6 +15,9 @@ audit_app = typer.Typer(
     help="Audit log: verify the hash chain, apply retention.", no_args_is_help=True
 )
 app.add_typer(audit_app, name="audit")
+# `mdqm probe` (task A01): refresh generated/capabilities.yaml. The command body lives in
+# mdqm.probe.cli so the probe package owns its own surface.
+app.command(name="probe")(probe_command)
 
 
 @app.callback(invoke_without_command=True)

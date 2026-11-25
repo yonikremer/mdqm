@@ -1,0 +1,48 @@
+# Written by mdqm's bootstrap pipeline. Do not edit: every run replaces this file.
+generated_at: '2026-01-01T12:00:00+00:00'
+overrides_path:
+unregistered_overrides: []
+sources:
+  crm:
+    adapter: fake
+    version: duckdb-<installed>
+    probed_at: '2026-01-01T12:00:00+00:00'
+    capabilities:
+      explain_plan:
+        supported: true
+        detail:
+        source: probed
+      mutability_counters:
+        supported: true
+        detail:
+        source: probed
+      partition_metadata:
+        supported: true
+        detail:
+        source: probed
+      query_store:
+        supported: true
+        detail:
+        source: probed
+    fallbacks:
+    - feature: context_search
+      missing:
+      - capability: fts5
+        state: unknown
+      fallback: search the semantic layer by scanning with LIKE instead of using
+        the FTS index
+    - feature: elastic_query_mode
+      missing:
+      - capability: query_mode
+        state: unknown
+      fallback: send Query DSL, the mode every Elasticsearch serves
+    - feature: profiling
+      missing:
+      - capability: sampling
+        state: unknown
+      fallback: profile from catalog statistics and a small, timed fetch
+    - feature: structured_model_output
+      missing:
+      - capability: structured_output
+        state: unknown
+      fallback: validate the model's JSON in code, up to two retries
