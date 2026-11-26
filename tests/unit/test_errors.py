@@ -55,6 +55,7 @@ EXPECTED_CODES = frozenset(
         "QUOTA_EXCEEDED",
         "TIMEOUT",
         "RESULT_TOO_LARGE",
+        "NOT_FOUND",
         "SOURCE_UNAVAILABLE",
         "NOT_SUPPORTED",
         "INTERNAL_ERROR",
@@ -221,6 +222,19 @@ CASES: tuple[Case, ...] = (
         {"max_rows": 10000},
         fix_must=('"limit": 10000',),
         problem_must=("cap is 10000 rows",),
+    ),
+    # Sources.
+    Case(
+        ErrorCode.NOT_FOUND,
+        {"what": "result handle", "fix": "Call `query` again to get a fresh handle."},
+        fix_must=("fresh handle",),
+        problem_must=("result handle", "this user"),
+    ),
+    Case(
+        ErrorCode.NOT_FOUND,
+        {"what": "run id", "fix": "Call `history` to list your own run ids."},
+        fix_must=("history",),
+        problem_must=("run id",),
     ),
     # Sources.
     Case(

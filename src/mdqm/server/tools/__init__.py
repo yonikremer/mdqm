@@ -1,9 +1,12 @@
 """The five coarse tools the agent sees (``docs/DESIGN.md`` section 9).
 
 ``query`` does most of the work; the other four are lookups around it. Descriptions are written for
-a weak model: what it does, when to call it, and one example. The bodies are stubs in M01 -- they
-return a typed ``NOT_IMPLEMENTED`` answer and never invent data. The pipeline tasks replace each
-body; the signature, the description and the wire schema stay.
+a weak model: what it does, when to call it, and one example.
+
+This module is the package's front door: it holds the two tools whose bodies are still stubs
+(``find_data`` in M02, ``query`` in M03) plus the shared answer model, and re-exports the three
+lookup tools from :mod:`mdqm.server.tools.misc` (M05). Each tool gets its own module as its body
+lands; the name, description and wire schema stay put, because that is the agent's contract.
 """
 
 from __future__ import annotations
@@ -16,17 +19,44 @@ from pydantic import Field
 
 from mdqm.models.base import MDQMModel
 from mdqm.server.context import current_context
+from mdqm.server.tools.misc import (
+    Answer,
+    FeedbackAnswer,
+    GetMoreAnswer,
+    HistoryAnswer,
+    HistoryItem,
+    ServicesUnavailable,
+    ToolServices,
+    configure_services,
+    current_services,
+    feedback,
+    get_more,
+    history,
+    reset_services,
+    use_services,
+)
 from mdqm.spec.models import QuerySpec
 
 __all__ = [
     "TOOL_NAMES",
+    "Answer",
+    "FeedbackAnswer",
+    "GetMoreAnswer",
+    "HistoryAnswer",
+    "HistoryItem",
     "NotImplementedResult",
+    "ServicesUnavailable",
+    "ToolServices",
+    "configure_services",
+    "current_services",
     "feedback",
     "find_data",
     "get_more",
     "history",
     "query",
     "register_tools",
+    "reset_services",
+    "use_services",
 ]
 
 #: The five tools, in the order the agent should learn them.
@@ -91,64 +121,8 @@ def query(
     )
 
 
-def get_more(
-    handle: str,
-    offset: Annotated[
-        int, Field(ge=0, description="Rows to skip; 0 for the next page in order.")
-    ] = 0,
-    limit: Annotated[int, Field(ge=1, le=1000, description="Rows to return.")] = 100,
-) -> NotImplementedResult:
-    """Page the rest of a result that `query` returned with a handle.
-
-    Call this only with a `handle` from a previous answer, never to re-run a query: the rows come
-    from the cached result, so a repeated call is cheap.
-    Example: get_more({"handle": "h_8f21", "offset": 100, "limit": 100})
-    """
-    return _not_implemented(
-        "get_more",
-        f"no result handles exist yet, so {handle!r} cannot be paged",
-        "re-run `query` once the executor lands; nothing is cached in this build",
-    )
-
-
-def history(
-    limit: Annotated[int, Field(ge=1, le=50, description="How many recent queries to list.")] = 5,
-) -> NotImplementedResult:
-    """List your own recent queries with their ids, so you can ask `feedback` about one.
-
-    Call this when the user refers to something asked before, or when you need a query id.
-    Example: history({"limit": 5})
-    """
-    return _not_implemented(
-        "history",
-        f"the query history store is not wired yet, so the last {limit} queries cannot be listed",
-        "nothing to do; ask the user to restate the question until history lands",
-    )
-
-
-def feedback(
-    query_id: Annotated[
-        str, Field(min_length=1, description="A `query_id` from a previous answer.")
-    ],
-    rating: Annotated[
-        int, Field(ge=1, le=5, description="1 = useless, 5 = exactly what was needed.")
-    ],
-    comment: Annotated[str | None, Field(description="Optional one-line reason.")] = None,
-) -> NotImplementedResult:
-    """Rate a previous answer so the semantic layer learns which tables and measures work.
-
-    Call this once per answered question when the user says the answer was right or wrong.
-    Example: feedback({"query_id": "q_8f21", "rating": 5, "comment": "the 5000 rounding was right"})
-    """
-    return _not_implemented(
-        "feedback",
-        f"feedback for {query_id!r} cannot be stored yet (rating {rating})",
-        "nothing to do; the rating is dropped in this build",
-    )
-
-
 #: The tool functions in :data:`TOOL_NAMES` order. Names and docstrings come from here.
-TOOL_FUNCTIONS: tuple[Callable[..., NotImplementedResult], ...] = (
+TOOL_FUNCTIONS: tuple[Callable[..., MDQMModel], ...] = (
     find_data,
     query,
     get_more,

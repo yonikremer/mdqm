@@ -27,6 +27,7 @@ Who raises what:
 | ``QUOTA_EXCEEDED`` | governor (C15) | nothing: wait until the reset time |
 | ``TIMEOUT`` | governor (C15) | ``"time"`` / ``"group_by"`` |
 | ``RESULT_TOO_LARGE`` | result summariser (C16) | ``"limit"`` / ``"group_by"`` |
+| ``NOT_FOUND`` | the lookup tools (M05) | the id: use one from a previous answer |
 | ``SOURCE_UNAVAILABLE`` | adapters (F04, A02) | nothing: check the source and its secret |
 | ``NOT_SUPPORTED`` | adapters (``NotSupported``) | nothing: use the declared fallback |
 | ``INTERNAL_ERROR`` | any unexpected exception | nothing: retry, then report the id |
@@ -73,6 +74,7 @@ __all__ = [
     "invalid_spec",
     "join_not_approved",
     "multi_statement",
+    "not_found",
     "not_supported",
     "parse_error",
     "partition_scan_all",
@@ -165,6 +167,8 @@ class ErrorCode(StrEnum):
     QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
     TIMEOUT = "TIMEOUT"
     RESULT_TOO_LARGE = "RESULT_TOO_LARGE"
+    # Lookups by id: a handle, a run id, a query id (M05).
+    NOT_FOUND = "NOT_FOUND"
     # Sources (F04, adapters).
     SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
     NOT_SUPPORTED = "NOT_SUPPORTED"
@@ -502,6 +506,23 @@ def result_too_large(*, max_rows: int, rows: int | None = None) -> ErrorResponse
     )
 
 
+# --- lookups by id ----------------------------------------------------------------------
+
+
+def not_found(*, what: str, fix: str) -> ErrorResponse:
+    """Nothing is readable under the id the caller sent (code ``NOT_FOUND``).
+
+    The ``problem`` text is built from ``what`` alone -- never from the id -- so "never existed",
+    "expired" and "belongs to someone else" produce byte-identical answers. That is the whole
+    point of an opaque handle: the id must not become a capability probe for another user's data.
+    """
+    return _build(
+        ErrorCode.NOT_FOUND,
+        f"No {_ident(what)} is available for this user, so nothing was returned.",
+        fix,
+    )
+
+
 # --- sources ----------------------------------------------------------------------------
 
 
@@ -583,6 +604,7 @@ BUILDERS: Mapping[ErrorCode, Callable[..., ErrorResponse]] = MappingProxyType(
         ErrorCode.QUOTA_EXCEEDED: quota_exceeded,
         ErrorCode.TIMEOUT: timeout,
         ErrorCode.RESULT_TOO_LARGE: result_too_large,
+        ErrorCode.NOT_FOUND: not_found,
         ErrorCode.SOURCE_UNAVAILABLE: source_unavailable,
         ErrorCode.NOT_SUPPORTED: not_supported,
         ErrorCode.INTERNAL_ERROR: internal_error,

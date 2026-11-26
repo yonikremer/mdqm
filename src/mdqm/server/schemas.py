@@ -45,5 +45,7 @@ def write_tool_schemas(document: dict[str, Any], path: str | Path = TOOL_SCHEMAS
     """Write the document synchronously; the async caller awaits :func:`tool_schemas` first."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render_tool_schemas(document), encoding="utf-8")
+    # newline="\n": on Windows the default would translate every line to CRLF and turn one changed
+    # schema into a whole-file diff (AGENTS.md: LF line endings).
+    target.write_text(render_tool_schemas(document), encoding="utf-8", newline="\n")
     return target

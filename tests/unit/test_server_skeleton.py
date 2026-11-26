@@ -54,9 +54,9 @@ TOOL_CALLS: tuple[tuple[str, dict[str, Any]], ...] = (
         "query",
         {"spec": {"from": "customers", "select": ["customer_status"], "limit": 5}},
     ),
-    ("get_more", {"handle": "h_1", "offset": 0, "limit": 10}),
+    ("get_more", {"result_handle": "h_1", "offset": 0, "limit": 10}),
     ("history", {"limit": 5}),
-    ("feedback", {"query_id": "q_1", "rating": 5, "comment": "rounding was right"}),
+    ("feedback", {"query_id": "q_1", "ok": True, "corrected": None}),
 )
 
 

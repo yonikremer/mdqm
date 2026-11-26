@@ -2,10 +2,10 @@
   "generated_by": "scripts/gen_tool_schemas.py",
   "tools": [
     {
-      "description": "Rate a previous answer so the semantic layer learns which tables and measures work.\n\n    Call this once per answered question when the user says the answer was right or wrong.\n    Example: feedback({\"query_id\": \"q_8f21\", \"rating\": 5, \"comment\": \"the 5000 rounding was right\"})\n    ",
+      "description": "Rate a previous answer so the semantic layer learns which tables and measures work.\n\n    Call this once per answered question when the user says the answer was right or wrong. The\n    rating is queued, not applied: a human approves anything derived from it.\n    Example: feedback({\"query_id\": \"12\", \"ok\": false, \"corrected\": \"status S means suspended\"})\n    ",
       "inputSchema": {
         "properties": {
-          "comment": {
+          "corrected": {
             "anyOf": [
               {
                 "type": "string"
@@ -15,53 +15,241 @@
               }
             ],
             "default": null,
-            "description": "Optional one-line reason.",
-            "title": "Comment"
+            "description": "When ok is false: one line on what the answer should have been.",
+            "title": "Corrected"
+          },
+          "ok": {
+            "description": "True when the answer was what the caller needed, false when not.",
+            "title": "Ok",
+            "type": "boolean"
           },
           "query_id": {
-            "description": "A `query_id` from a previous answer.",
+            "description": "The run `id` from `history` (`12` or `q_12`) of an answer.",
             "minLength": 1,
             "title": "Query Id",
             "type": "string"
-          },
-          "rating": {
-            "description": "1 = useless, 5 = exactly what was needed.",
-            "maximum": 5,
-            "minimum": 1,
-            "title": "Rating",
-            "type": "integer"
           }
         },
         "required": [
           "query_id",
-          "rating"
+          "ok"
         ],
         "title": "feedbackArguments",
         "type": "object"
       },
       "name": "feedback",
       "outputSchema": {
+        "$defs": {
+          "ErrorResponse": {
+            "additionalProperties": false,
+            "description": "A blockable/repairable failure, addressed to a weak agent.",
+            "properties": {
+              "code": {
+                "minLength": 1,
+                "title": "Code",
+                "type": "string"
+              },
+              "did_you_mean": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Did You Mean"
+              },
+              "fix": {
+                "minLength": 1,
+                "title": "Fix",
+                "type": "string"
+              },
+              "partitions_if_fixed": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Scan estimate after the fix, e.g. '2 of 60'.",
+                "title": "Partitions If Fixed"
+              },
+              "problem": {
+                "minLength": 1,
+                "title": "Problem",
+                "type": "string"
+              },
+              "status": {
+                "const": "error",
+                "default": "error",
+                "title": "Status",
+                "type": "string"
+              },
+              "valid_values": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Valid Values"
+              }
+            },
+            "required": [
+              "code",
+              "problem",
+              "fix"
+            ],
+            "title": "ErrorResponse",
+            "type": "object"
+          },
+          "FeedbackRecord": {
+            "additionalProperties": false,
+            "description": "A stored rating, as the queue and the tool return it.",
+            "properties": {
+              "corrected": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "When ok is false: what the answer should have been.",
+                "title": "Corrected"
+              },
+              "created_at": {
+                "format": "date-time",
+                "title": "Created At",
+                "type": "string"
+              },
+              "id": {
+                "title": "Id",
+                "type": "integer"
+              },
+              "ok": {
+                "description": "True when the answer was what the caller needed.",
+                "title": "Ok",
+                "type": "boolean"
+              },
+              "query_id": {
+                "description": "The id the caller quoted back.",
+                "minLength": 1,
+                "title": "Query Id",
+                "type": "string"
+              },
+              "run_id": {
+                "anyOf": [
+                  {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The caller's own history row, when the id resolved to one.",
+                "title": "Run Id"
+              },
+              "user_id": {
+                "description": "The caller who rated the answer.",
+                "minLength": 1,
+                "title": "User Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id",
+              "query_id",
+              "ok",
+              "id",
+              "created_at"
+            ],
+            "title": "FeedbackRecord",
+            "type": "object"
+          }
+        },
         "additionalProperties": false,
-        "description": "What a stub tool answers: an honest, typed \"not built yet\", plus the authenticated caller.\n\n``user_id`` is here so a misissued token shows up in the first call instead of in an empty\nresult. Once the pipeline lands, the user id moves into the history and audit records.",
+        "description": "The stored rating, as the queue holds it.",
         "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ErrorResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Set when status is 'error'."
+          },
           "fix": {
-            "description": "What to do instead, right now.",
-            "title": "Fix",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What to do instead (not_implemented).",
+            "title": "Fix"
           },
           "problem": {
-            "description": "What is missing.",
-            "title": "Problem",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What is missing (not_implemented).",
+            "title": "Problem"
+          },
+          "saved": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/FeedbackRecord"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "status": {
-            "const": "not_implemented",
-            "default": "not_implemented",
+            "default": "ok",
+            "enum": [
+              "ok",
+              "error",
+              "not_implemented"
+            ],
             "title": "Status",
             "type": "string"
           },
           "surface": {
-            "description": "Which tool (or endpoint) answered.",
+            "description": "Which tool answered.",
             "title": "Surface",
             "type": "string"
           },
@@ -73,11 +261,9 @@
         },
         "required": [
           "surface",
-          "user_id",
-          "problem",
-          "fix"
+          "user_id"
         ],
-        "title": "NotImplementedResult",
+        "title": "FeedbackAnswer",
         "type": "object"
       }
     },
@@ -147,13 +333,9 @@
       }
     },
     {
-      "description": "Page the rest of a result that `query` returned with a handle.\n\n    Call this only with a `handle` from a previous answer, never to re-run a query: the rows come\n    from the cached result, so a repeated call is cheap.\n    Example: get_more({\"handle\": \"h_8f21\", \"offset\": 100, \"limit\": 100})\n    ",
+      "description": "Page the rest of a result that `query` returned with a handle.\n\n    Call this only with a `handle` from a previous answer, never to re-run a query: the rows come\n    from the cached result, so a repeated call is cheap. Your own handles only; someone else's is\n    reported exactly like one that expired.\n    Example: get_more({\"result_handle\": \"h_8f21\", \"offset\": 100, \"limit\": 100})\n    ",
       "inputSchema": {
         "properties": {
-          "handle": {
-            "title": "Handle",
-            "type": "string"
-          },
           "limit": {
             "default": 100,
             "description": "Rows to return.",
@@ -168,37 +350,228 @@
             "minimum": 0,
             "title": "Offset",
             "type": "integer"
+          },
+          "result_handle": {
+            "description": "A `handle` from a previous answer.",
+            "minLength": 1,
+            "title": "Result Handle",
+            "type": "string"
           }
         },
         "required": [
-          "handle"
+          "result_handle"
         ],
         "title": "get_moreArguments",
         "type": "object"
       },
       "name": "get_more",
       "outputSchema": {
+        "$defs": {
+          "ErrorResponse": {
+            "additionalProperties": false,
+            "description": "A blockable/repairable failure, addressed to a weak agent.",
+            "properties": {
+              "code": {
+                "minLength": 1,
+                "title": "Code",
+                "type": "string"
+              },
+              "did_you_mean": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Did You Mean"
+              },
+              "fix": {
+                "minLength": 1,
+                "title": "Fix",
+                "type": "string"
+              },
+              "partitions_if_fixed": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Scan estimate after the fix, e.g. '2 of 60'.",
+                "title": "Partitions If Fixed"
+              },
+              "problem": {
+                "minLength": 1,
+                "title": "Problem",
+                "type": "string"
+              },
+              "status": {
+                "const": "error",
+                "default": "error",
+                "title": "Status",
+                "type": "string"
+              },
+              "valid_values": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Valid Values"
+              }
+            },
+            "required": [
+              "code",
+              "problem",
+              "fix"
+            ],
+            "title": "ErrorResponse",
+            "type": "object"
+          },
+          "Page": {
+            "additionalProperties": false,
+            "description": "One page of a stored result, for the owner only.",
+            "properties": {
+              "expires_at": {
+                "format": "date-time",
+                "title": "Expires At",
+                "type": "string"
+              },
+              "handle": {
+                "title": "Handle",
+                "type": "string"
+              },
+              "next_offset": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Offset of the next page, or null when this is the last.",
+                "title": "Next Offset"
+              },
+              "offset": {
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              },
+              "rows": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Rows",
+                "type": "array"
+              },
+              "rows_total": {
+                "minimum": 0,
+                "title": "Rows Total",
+                "type": "integer"
+              },
+              "truncated": {
+                "description": "True when rows remain after this page.",
+                "title": "Truncated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "handle",
+              "offset",
+              "rows",
+              "rows_total",
+              "truncated",
+              "expires_at"
+            ],
+            "title": "Page",
+            "type": "object"
+          }
+        },
         "additionalProperties": false,
-        "description": "What a stub tool answers: an honest, typed \"not built yet\", plus the authenticated caller.\n\n``user_id`` is here so a misissued token shows up in the first call instead of in an empty\nresult. Once the pipeline lands, the user id moves into the history and audit records.",
+        "description": "A page of a stored result, or the refusal.",
         "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ErrorResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Set when status is 'error'."
+          },
           "fix": {
-            "description": "What to do instead, right now.",
-            "title": "Fix",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What to do instead (not_implemented).",
+            "title": "Fix"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Page"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The rows, and where the next page starts."
           },
           "problem": {
-            "description": "What is missing.",
-            "title": "Problem",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What is missing (not_implemented).",
+            "title": "Problem"
           },
           "status": {
-            "const": "not_implemented",
-            "default": "not_implemented",
+            "default": "ok",
+            "enum": [
+              "ok",
+              "error",
+              "not_implemented"
+            ],
             "title": "Status",
             "type": "string"
           },
           "surface": {
-            "description": "Which tool (or endpoint) answered.",
+            "description": "Which tool answered.",
             "title": "Surface",
             "type": "string"
           },
@@ -210,25 +583,60 @@
         },
         "required": [
           "surface",
-          "user_id",
-          "problem",
-          "fix"
+          "user_id"
         ],
-        "title": "NotImplementedResult",
+        "title": "GetMoreAnswer",
         "type": "object"
       }
     },
     {
-      "description": "List your own recent queries with their ids, so you can ask `feedback` about one.\n\n    Call this when the user refers to something asked before, or when you need a query id.\n    Example: history({\"limit\": 5})\n    ",
+      "description": "List your own recent queries, search them, or show what a re-run would send.\n\n    Call this when the user refers to something asked before, to get a run `id` for `feedback`, or\n    with `rerun_id` to repeat an old question exactly: `rerun_mode` 'frozen' keeps the original time\n    window, 'relative' moves it to now. Only your own runs are listed.\n    Example: history({\"text\": \"credit limit\", \"limit\": 5}) or history({\"rerun_id\": 12,\n    \"rerun_mode\": \"relative\"})\n    ",
       "inputSchema": {
         "properties": {
           "limit": {
             "default": 5,
-            "description": "How many recent queries to list.",
+            "description": "How many runs to list.",
             "maximum": 50,
             "minimum": 1,
             "title": "Limit",
             "type": "integer"
+          },
+          "rerun_id": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A run `id` from this list: ask what a re-run would send.",
+            "title": "Rerun Id"
+          },
+          "rerun_mode": {
+            "default": "frozen",
+            "description": "'frozen' repeats the original window; 'relative' moves it to now.",
+            "enum": [
+              "frozen",
+              "relative"
+            ],
+            "title": "Rerun Mode",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Words to look for in your own past runs (Hebrew or English).",
+            "title": "Text"
           }
         },
         "title": "historyArguments",
@@ -236,27 +644,753 @@
       },
       "name": "history",
       "outputSchema": {
-        "additionalProperties": false,
-        "description": "What a stub tool answers: an honest, typed \"not built yet\", plus the authenticated caller.\n\n``user_id`` is here so a misissued token shows up in the first call instead of in an empty\nresult. Once the pipeline lands, the user id moves into the history and audit records.",
-        "properties": {
-          "fix": {
-            "description": "What to do instead, right now.",
-            "title": "Fix",
+        "$defs": {
+          "Agg": {
+            "description": "Aggregation over a measure. ``None`` on a select item means the measure's own default.",
+            "enum": [
+              "avg",
+              "sum",
+              "min",
+              "max",
+              "count",
+              "count_distinct"
+            ],
+            "title": "Agg",
             "type": "string"
+          },
+          "CacheInfo": {
+            "additionalProperties": false,
+            "description": "What the answer came from: a cache hit shows its ``fetched_at``, never \"now\".",
+            "properties": {
+              "fetched_at": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Fetched At"
+              },
+              "fresh": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Fresh"
+              },
+              "hit": {
+                "default": false,
+                "title": "Hit",
+                "type": "boolean"
+              }
+            },
+            "title": "CacheInfo",
+            "type": "object"
+          },
+          "Direction": {
+            "description": "Sort direction.",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "ErrorResponse": {
+            "additionalProperties": false,
+            "description": "A blockable/repairable failure, addressed to a weak agent.",
+            "properties": {
+              "code": {
+                "minLength": 1,
+                "title": "Code",
+                "type": "string"
+              },
+              "did_you_mean": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Did You Mean"
+              },
+              "fix": {
+                "minLength": 1,
+                "title": "Fix",
+                "type": "string"
+              },
+              "partitions_if_fixed": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Scan estimate after the fix, e.g. '2 of 60'.",
+                "title": "Partitions If Fixed"
+              },
+              "problem": {
+                "minLength": 1,
+                "title": "Problem",
+                "type": "string"
+              },
+              "status": {
+                "const": "error",
+                "default": "error",
+                "title": "Status",
+                "type": "string"
+              },
+              "valid_values": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Valid Values"
+              }
+            },
+            "required": [
+              "code",
+              "problem",
+              "fix"
+            ],
+            "title": "ErrorResponse",
+            "type": "object"
+          },
+          "ExecTsMode": {
+            "description": "Which timestamp an execution uses (DESIGN.md section 13).",
+            "enum": [
+              "frozen",
+              "relative"
+            ],
+            "title": "ExecTsMode",
+            "type": "string"
+          },
+          "Filter": {
+            "additionalProperties": false,
+            "description": "One predicate. Hebrew/English labels are fine: the server resolves them to source values.",
+            "properties": {
+              "column": {
+                "minLength": 1,
+                "title": "Column",
+                "type": "string"
+              },
+              "op": {
+                "$ref": "#/$defs/FilterOp"
+              },
+              "value": {
+                "description": "A single value, or a list for op 'in' (any length) and 'range' (exactly 2).",
+                "title": "Value",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "array"
+                ]
+              }
+            },
+            "required": [
+              "column",
+              "op",
+              "value"
+            ],
+            "title": "Filter",
+            "type": "object"
+          },
+          "FilterOp": {
+            "description": "Comparison on one column: a list for ``in``/``range``, a scalar for everything else.",
+            "enum": [
+              "eq",
+              "ne",
+              "in",
+              "contains",
+              "gt",
+              "gte",
+              "lt",
+              "lte",
+              "range"
+            ],
+            "title": "FilterOp",
+            "type": "string"
+          },
+          "Fragment": {
+            "additionalProperties": false,
+            "description": "A single-source query, ready to hand to an adapter.",
+            "properties": {
+              "dialect": {
+                "description": "sqlglot dialect name, or 'dsl' for ES and APIs.",
+                "minLength": 1,
+                "title": "Dialect",
+                "type": "string"
+              },
+              "dsl": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Dsl"
+              },
+              "exec_ts": {
+                "format": "date-time",
+                "title": "Exec Ts",
+                "type": "string"
+              },
+              "params": {
+                "additionalProperties": true,
+                "description": "Bound values. JSON scalars only, so the fragment round-trips through JSON.",
+                "title": "Params",
+                "type": "object"
+              },
+              "request": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Request"
+              },
+              "source": {
+                "minLength": 1,
+                "title": "Source",
+                "type": "string"
+              },
+              "sql": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Sql"
+              },
+              "tables": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "title": "Tables",
+                "type": "array"
+              }
+            },
+            "required": [
+              "source",
+              "dialect",
+              "exec_ts"
+            ],
+            "title": "Fragment",
+            "type": "object"
+          },
+          "HistoryItem": {
+            "additionalProperties": false,
+            "description": "One of the caller's past runs, in the shape a weak model can recognise.\n\nThe spec or the SQL is included because that is what makes a run recognisable; result rows and\ncredentials never are (``mdqm.store.history`` stores neither).",
+            "properties": {
+              "cache": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CacheInfo"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "created_at": {
+                "format": "date-time",
+                "title": "Created At",
+                "type": "string"
+              },
+              "error_code": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Set when the run failed.",
+                "title": "Error Code"
+              },
+              "exec_ts": {
+                "description": "The one timestamp that run's time window used.",
+                "format": "date-time",
+                "title": "Exec Ts",
+                "type": "string"
+              },
+              "id": {
+                "description": "The run id, which `feedback` and `rerun_id` take.",
+                "minimum": 1,
+                "title": "Id",
+                "type": "integer"
+              },
+              "mode": {
+                "description": "'frozen' when the window did not move with the clock.",
+                "title": "Mode",
+                "type": "string"
+              },
+              "rerunnable": {
+                "description": "False when a credential was redacted out of the row.",
+                "title": "Rerunnable",
+                "type": "boolean"
+              },
+              "spec": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/QuerySpec"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "sql": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The raw SQL, when the run was raw SQL.",
+                "title": "Sql"
+              },
+              "tool": {
+                "title": "Tool",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "created_at",
+              "exec_ts",
+              "tool",
+              "mode",
+              "rerunnable"
+            ],
+            "title": "HistoryItem",
+            "type": "object"
+          },
+          "MeasureSelect": {
+            "additionalProperties": false,
+            "description": "One aggregate over a measure: ``{\"measure\": \"credit_limit_r5000\", \"agg\": \"avg\"}``.",
+            "properties": {
+              "agg": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Agg"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Aggregation; omit for the measure default."
+              },
+              "alias": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Output column name; defaults to measure_agg.",
+                "title": "Alias"
+              },
+              "measure": {
+                "description": "A measure name from the semantic layer.",
+                "minLength": 1,
+                "title": "Measure",
+                "type": "string"
+              }
+            },
+            "required": [
+              "measure"
+            ],
+            "title": "MeasureSelect",
+            "type": "object"
+          },
+          "OrderBy": {
+            "additionalProperties": false,
+            "description": "Sort key: a column, a measure name or a select alias, plus a direction.",
+            "properties": {
+              "by": {
+                "description": "A selected column, measure or alias, or a group_by key.",
+                "minLength": 1,
+                "title": "By",
+                "type": "string"
+              },
+              "direction": {
+                "$ref": "#/$defs/Direction",
+                "default": "asc"
+              }
+            },
+            "required": [
+              "by"
+            ],
+            "title": "OrderBy",
+            "type": "object"
+          },
+          "QuerySpec": {
+            "additionalProperties": false,
+            "description": "One query, as an agent sends it. Frozen: a validated spec never changes under the server.",
+            "properties": {
+              "dry_run": {
+                "default": false,
+                "description": "Plan and lint, return no rows.",
+                "title": "Dry Run",
+                "type": "boolean"
+              },
+              "filters": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Filter"
+                },
+                "title": "Filters",
+                "type": "array"
+              },
+              "fresh": {
+                "default": false,
+                "description": "Skip the cache and fetch from the source now.",
+                "title": "Fresh",
+                "type": "boolean"
+              },
+              "from": {
+                "description": "Table (or endpoint/index) name from the catalog.",
+                "minLength": 1,
+                "title": "From",
+                "type": "string"
+              },
+              "group_by": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "title": "Group By",
+                "type": "array"
+              },
+              "joins": {
+                "default": [],
+                "description": "Approved join names from the semantic layer; never a join condition.",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Joins",
+                "type": "array"
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Row cap; the server adds its own cap when this is missing.",
+                "title": "Limit"
+              },
+              "order_by": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/OrderBy"
+                },
+                "title": "Order By",
+                "type": "array"
+              },
+              "select": {
+                "description": "Columns and aggregates to return.",
+                "items": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "$ref": "#/$defs/MeasureSelect"
+                    }
+                  ]
+                },
+                "minItems": 1,
+                "title": "Select",
+                "type": "array"
+              },
+              "time": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TimeSpec"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "from",
+              "select"
+            ],
+            "title": "QuerySpec",
+            "type": "object"
+          },
+          "RerunPlan": {
+            "additionalProperties": false,
+            "description": "What a re-run will execute: one ``exec_ts`` for the whole plan, and the payloads at it.",
+            "properties": {
+              "exec_ts": {
+                "format": "date-time",
+                "title": "Exec Ts",
+                "type": "string"
+              },
+              "fragments": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Fragment"
+                },
+                "title": "Fragments",
+                "type": "array"
+              },
+              "mode": {
+                "$ref": "#/$defs/ExecTsMode"
+              },
+              "run_id": {
+                "title": "Run Id",
+                "type": "integer"
+              },
+              "spec": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/QuerySpec"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "sql": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The run's SQL rendered with this plan's exec_ts.",
+                "title": "Sql"
+              }
+            },
+            "required": [
+              "run_id",
+              "mode",
+              "exec_ts"
+            ],
+            "title": "RerunPlan",
+            "type": "object"
+          },
+          "TimeMode": {
+            "description": "The time intent. The agent says what it means; the server picks the column.\n\n``events_in_range`` asks about a period (event time). ``new_since`` asks what is new since a\nprevious fetch (ingestion time, with a derived bound so late rows are not missed).",
+            "enum": [
+              "events_in_range",
+              "new_since"
+            ],
+            "title": "TimeMode",
+            "type": "string"
+          },
+          "TimeSpec": {
+            "additionalProperties": false,
+            "description": "The time window intent, never a column (the server maps it: DESIGN section 6).\n\n``events_in_range`` needs ``last`` (a trailing window from the execution time) **or** an\nabsolute ``from``/``to``. ``new_since`` needs ``since`` and is answered on the ingestion time\nwith a derived bound, so nothing is missed when a row arrives late.",
+            "properties": {
+              "from": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Window start.",
+                "title": "From"
+              },
+              "last": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Trailing window, e.g. '3mo'."
+              },
+              "mode": {
+                "$ref": "#/$defs/TimeMode"
+              },
+              "since": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Ingestion-time lower bound.",
+                "title": "Since"
+              },
+              "to": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Window end (exclusive).",
+                "title": "To"
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "title": "TimeSpec",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The caller's runs, and/or the plan a re-run would execute.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ErrorResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Set when status is 'error'."
+          },
+          "fix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What to do instead (not_implemented).",
+            "title": "Fix"
           },
           "problem": {
-            "description": "What is missing.",
-            "title": "Problem",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What is missing (not_implemented).",
+            "title": "Problem"
+          },
+          "rerun": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RerunPlan"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What a re-run executes: one exec_ts and the payloads at it."
+          },
+          "runs": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HistoryItem"
+            },
+            "title": "Runs",
+            "type": "array"
           },
           "status": {
-            "const": "not_implemented",
-            "default": "not_implemented",
+            "default": "ok",
+            "enum": [
+              "ok",
+              "error",
+              "not_implemented"
+            ],
             "title": "Status",
             "type": "string"
           },
           "surface": {
-            "description": "Which tool (or endpoint) answered.",
+            "description": "Which tool answered.",
             "title": "Surface",
             "type": "string"
           },
@@ -268,11 +1402,9 @@
         },
         "required": [
           "surface",
-          "user_id",
-          "problem",
-          "fix"
+          "user_id"
         ],
-        "title": "NotImplementedResult",
+        "title": "HistoryAnswer",
         "type": "object"
       }
     },
