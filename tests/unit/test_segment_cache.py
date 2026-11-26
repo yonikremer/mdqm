@@ -128,9 +128,13 @@ def _limits() -> Limits:
 
 
 def _run(adapter: FakeAdapter, sql: str, *, exec_ts: datetime = EXEC_TS) -> pa.Table:
-    """Run one fragment on the fake adapter and materialise its rows."""
+    """Run one fragment on the fake adapter and materialise its rows.
+
+    ``sql`` is built by the helpers below from this module's own constants; no user input reaches
+    it. The marker is for the taint scanner, which cannot see that across the call boundary.
+    """
     fragment = Fragment(source="billing", dialect="duckdb", sql=sql, exec_ts=exec_ts)
-    stream = adapter.execute(fragment, _limits())
+    stream = adapter.execute(fragment, _limits())  # nosemgrep
     try:
         batches = list(stream)
     finally:
@@ -357,7 +361,7 @@ def test_tail_refresh_merges_new_rows_and_dedupes_by_key(
                 "units, corrects_event_id) VALUES "
                 f"(4, 'C1', TIMESTAMP '{stamp}', TIMESTAMP '{stamp}', 400, NULL), "
                 f"(5, 'C1', TIMESTAMP '{stamp}', TIMESTAMP '{stamp}', 50, NULL)"
-            ),
+            ),  # nosemgrep
             exec_ts=exec_ts,
         ),
         _limits(),
