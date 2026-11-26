@@ -1,0 +1,22 @@
+# Build context for the `api` profile (docker/api.Dockerfile). Keep it small: the Dockerfile copies
+# pyproject.toml, README.md and src/, so nothing else needs to travel to the daemon.
+.git
+.gitignore
+.venv
+venv
+.worktrees
+data
+dist
+build
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+tests
+docs
+progress
+examples
+plugin
+.env

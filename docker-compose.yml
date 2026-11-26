@@ -1,0 +1,144 @@
+# mdqm development services (task D01). See docs/dev-env.md for how to use this file.
+#
+# Every service sits behind a Compose *profile* so a task starts only what it needs:
+#
+#     python scripts/dev.py up pg          # the MVP target, ~1 GB of RAM
+#     python scripts/dev.py down           # stops everything and removes the volumes
+#
+# Conventions this file keeps, because integration tests and adapters rely on them:
+#   * no `latest` tag: every image is pinned to a major (or an exact patch) version;
+#   * every published port is bound to 127.0.0.1 on a non-default host port, so a locally
+#     installed database is never shadowed and nothing listens on the network;
+#   * every service has a healthcheck, so `dev.py up` can wait for real readiness;
+#   * no credential is written here: the values live in `.env` (copy of `.env.example`), and a
+#     missing one makes Compose fail loudly instead of starting a service with a blank password.
+name: mdqm
+
+services:
+  # PostgreSQL 16: the MVP target. crm/billing/erp are three databases in one server, so the
+  # cross-source conversions are testable with Postgres alone.
+  pg:
+    profiles: ["pg"]
+    image: postgres:16
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - track_io_timing=on
+    environment:
+      POSTGRES_PASSWORD: ${MDQM_PG_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      POSTGRES_DB: crm
+      # The init script creates the other two databases and the read-only role from this value.
+      MDQM_RO_PASSWORD: ${MDQM_RO_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${MDQM_PG_PORT:-55432}:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./docker/pg/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d crm -h 127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    shm_size: 256mb
+
+  # Oracle Free in Thin mode. Slow first start (a few minutes) and the largest single consumer.
+  oracle:
+    profiles: ["oracle"]
+    image: gvenzl/oracle-free:23-slim-faststart
+    environment:
+      ORACLE_PASSWORD: ${MDQM_ORACLE_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      ORACLE_DATABASE: MDQM
+      APP_USER: mdqm_ro
+      APP_USER_PASSWORD: ${MDQM_RO_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${MDQM_ORACLE_PORT:-51521}:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD", "/opt/oracle/healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 60
+      start_period: 300s
+    shm_size: 1gb
+
+  # SQL Server 2022 (Developer edition). The image has no mssql-tools, so the probe uses bash's
+  # /dev/tcp instead of sqlcmd: it proves the listener accepts a connection, nothing more.
+  mssql:
+    profiles: ["mssql"]
+    image: mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MDQM_MSSQL_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      MSSQL_PID: Developer
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${MDQM_MSSQL_PORT:-51433}:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/1433'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # Elasticsearch 8.x, single node, security off (dev only). 1 GB heap on purpose: the default
+  # would take 50% of the container memory and starve the other engines.
+  es:
+    profiles: ["es"]
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.http.ssl.enabled: "false"
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${MDQM_ES_PORT:-59200}:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      # `green` is not required: a single node with one index reports `yellow` for a while.
+      test: ["CMD-SHELL", "curl -fsS 'http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=1s'"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  # The mock internal API from D04 (src/mdqm/testing/mock_api.py): a served OpenAPI document plus
+  # endpoints with an API key, filters, cursor paging and a 429. Also runs in process in unit tests;
+  # this service exists for the cases that need a real port.
+  api:
+    profiles: ["api"]
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: mdqm/mock-api:dev
+    environment:
+      MDQM_MOCK_API_KEY: ${MDQM_MOCK_API_KEY:?copy .env.example to .env (python scripts/dev.py env)}
+      MDQM_MOCK_API_HOST: 0.0.0.0
+      MDQM_MOCK_API_PORT: "8000"
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${MDQM_API_PORT:-58000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  pg-data:
+  oracle-data:
+  mssql-data:
+  es-data:
