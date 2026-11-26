@@ -192,7 +192,10 @@ def _spec_duration(value: timedelta | None) -> SpecDuration | None:
     if value is None:
         return None
     total = int(value.total_seconds())
-    return SpecDuration(days=total // 86_400, seconds=total % 86_400)
+    # `months` defaults to 0; pyright reads a pydantic field with a default as required.
+    return SpecDuration(  # pyright: ignore[reportCallIssue]
+        days=total // 86_400, seconds=total % 86_400
+    )
 
 
 def _value_literal(value: str | int | float | bool) -> exp.Expression:

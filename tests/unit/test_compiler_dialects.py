@@ -29,6 +29,7 @@ from typing import Any, cast
 
 import pytest
 import sqlglot
+from sqlglot import exp
 from sqlglot.errors import ErrorLevel, UnsupportedError
 
 from mdqm.compiler import CompileContext, CompiledQuery, compile_spec
@@ -311,13 +312,17 @@ def test_the_padded_join_key_is_translated_for_tsql_and_kept_for_oracle(
 )
 def test_pad_rewrite_matches_the_sql_server_idiom(function: str, expected: str) -> None:
     """The LPAD/RPAD rewrite is the textbook T-SQL equivalent, not something approximate."""
-    padded = sqlglot.parse_one(f"SELECT {function}(cust_id, 10, '0')", read="postgres")
+    padded = cast(
+        exp.Expression, sqlglot.parse_one(f"SELECT {function}(cust_id, 10, '0')", read="postgres")
+    )
     assert rewrite(padded, "tsql").sql(dialect="tsql") == f"SELECT {expected}"
 
 
 def test_pad_rewrite_is_tsql_only() -> None:
     """The other dialects have LPAD: rewriting there would only make the SQL harder to read."""
-    padded = sqlglot.parse_one("SELECT LPAD(cust_id, 10, '0')", read="postgres")
+    padded = cast(
+        exp.Expression, sqlglot.parse_one("SELECT LPAD(cust_id, 10, '0')", read="postgres")
+    )
     for dialect in ("postgres", "oracle", "duckdb", "mysql"):
         assert rewrite(padded, dialect).sql(dialect=dialect) == "SELECT LPAD(cust_id, 10, '0')"
 
@@ -381,7 +386,10 @@ def test_sqlglot_refuses_instead_of_degrading() -> None:
     Without the flag sqlglot happily writes this statement for T-SQL, dropping the LATERAL and
     changing the answer. That is the failure mode this compiler refuses to inherit.
     """
-    statement = sqlglot.parse_one("SELECT * FROM t, LATERAL (SELECT 1) AS s", read="postgres")
+    statement = cast(
+        exp.Expression,
+        sqlglot.parse_one("SELECT * FROM t, LATERAL (SELECT 1) AS s", read="postgres"),
+    )
     assert statement is not None
     with pytest.raises(UnsupportedError):
         render(statement, "tsql")
