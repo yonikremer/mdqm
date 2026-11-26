@@ -21,6 +21,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
+from typer.testing import Result as CliRunnerResult
 
 from mdqm.review.queue import (
     Proposal,
@@ -36,6 +38,9 @@ from mdqm.review.queue import (
 from mdqm.semantic.loader import load
 from mdqm.store.audit import AuditLog
 from mdqm.store.db import Store
+
+#: What the CLI fixture seeds: the queue and the id of the one pending proposal.
+Seeded = tuple[ReviewQueue, str]
 
 NOW = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
 
@@ -97,13 +102,13 @@ def make(
     """Build a proposal through the real id function, as a pipeline would."""
     body = patch if patch is not None else {"canonical": ["active", "churned", "suspended"]}
     return Proposal(
-        id=proposal_id(kind, section, key, field, body),  # type: ignore[arg-type]
+        id=proposal_id(kind, section, key, field, body),
         kind=kind,
         section=section,
         key=key,
         field=field,
         collection=collection,
-        patch=body,  # type: ignore[arg-type]
+        patch=body,
         evidence=evidence,
         confidence=confidence,
         proposed_at=at,
@@ -315,7 +320,7 @@ class TestApproveWritesCurated:
 
     def test_join_is_appended_to_the_list(self, queue: ReviewQueue, root: Path) -> None:
         """``approved_joins`` is a list of named entries, matched by name, never duplicated."""
-        join = {
+        join: dict[str, object] = {
             "name": "usage_to_customers",
             "left": "billing.usage_events.client_no",
             "right": "crm.customers.cust_id",
@@ -640,7 +645,7 @@ class TestCli:
     """``mdqm review``: the operator's entry point, driven in-process through Typer's runner."""
 
     @pytest.fixture
-    def seeded(self, root: Path, clock: FakeClock) -> tuple[ReviewQueue, str]:
+    def seeded(self, root: Path, clock: FakeClock) -> Seeded:
         """Seed the store the CLI opens by default: ``data/mdqm.sqlite`` under the CWD."""
         (root / "data").mkdir()
         store = Store(root / "data" / "mdqm.sqlite")
@@ -649,9 +654,8 @@ class TestCli:
         store.close()
         return queue, created.proposal.id
 
-    def invoke(self, root: Path, *args: str):  # noqa: ANN001, ANN201 - test helper
-        from typer.testing import CliRunner
-
+    def invoke(self, root: Path, *args: str) -> CliRunnerResult:
+        """Run one CLI invocation with the CWD inside ``root``, as an operator would."""
         from mdqm.cli import app
 
         # Settings resolves relative paths against the CWD, so run where the fixture lives.
@@ -662,7 +666,7 @@ class TestCli:
         finally:
             os.chdir(previous)
 
-    def test_list_shows_the_pending_proposal(self, root: Path, seeded) -> None:  # noqa: ANN001
+    def test_list_shows_the_pending_proposal(self, root: Path, seeded: Seeded) -> None:
         _queue, pid = seeded
         result = self.invoke(root, "review", "list")
         assert result.exit_code == 0, result.stderr
@@ -674,21 +678,21 @@ class TestCli:
         assert result.exit_code == 0
         assert "nothing to review" in result.stdout
 
-    def test_approve_writes_curated(self, root: Path, seeded) -> None:  # noqa: ANN001
+    def test_approve_writes_curated(self, root: Path, seeded: Seeded) -> None:
         _queue, pid = seeded
         result = self.invoke(root, "review", "approve", pid[:12], "--by", "data-team")
         assert result.exit_code == 0, result.stderr
         written = (root / "semantic" / "curated" / "value_maps.yaml").read_text(encoding="utf-8")
         assert "data-team" in written
 
-    def test_export_patch_prints_a_diff(self, root: Path, seeded) -> None:  # noqa: ANN001
+    def test_export_patch_prints_a_diff(self, root: Path, seeded: Seeded) -> None:
         _queue, pid = seeded
         result = self.invoke(root, "review", "export-patch", pid[:12])
         assert result.exit_code == 0, result.stderr
         assert "+++ b/curated/value_maps.yaml" in result.stdout
         assert not (root / "semantic" / "curated" / "value_maps.yaml").exists()
 
-    def test_reject_keeps_curated_untouched(self, root: Path, seeded) -> None:  # noqa: ANN001
+    def test_reject_keeps_curated_untouched(self, root: Path, seeded: Seeded) -> None:
         _queue, pid = seeded
         result = self.invoke(root, "review", "reject", pid[:12], "--by", "data-team")
         assert result.exit_code == 0, result.stderr
