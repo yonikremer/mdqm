@@ -1061,11 +1061,14 @@ def _scaled(observed: int, seen: int, estimate: int | None) -> int:
     return min(estimate, max(observed, int(round(observed * estimate / seen))))
 
 
-def _rows_of(batch: object) -> list[Mapping[str, Any]]:
-    """One Arrow batch as row mappings; anything that is not a batch contributes no rows."""
-    if isinstance(batch, pa.RecordBatch):
-        return [row for row in batch.to_pylist()]
-    return []
+def _rows_of(batch: pa.RecordBatch) -> list[Mapping[str, Any]]:
+    """One Arrow batch as row mappings, ready for the pure shaping functions above.
+
+    Typed as the batch the adapter contract already promises (:class:`~mdqm.adapters.base.
+    ArrowStream` yields ``pa.RecordBatch``), so no defensive ``isinstance`` stands between the
+    protocol and the call.
+    """
+    return list(batch.to_pylist())
 
 
 def _section(source: str) -> str:

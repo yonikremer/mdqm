@@ -117,8 +117,11 @@ def create_server(
         instructions=SERVER_INSTRUCTIONS,
         token_verifier=verifier,
         auth=AuthSettings(
-            issuer_url=f"{public_url.rstrip('/')}/",
-            resource_server_url=f"{public_url.rstrip('/')}/mcp",
+            # AuthSettings is a pydantic model whose fields are AnyHttpUrl: pydantic coerces these
+            # strings on validation (mypy --strict accepts it), but pyright only sees the declared
+            # field type. False positive, so editors stay green.
+            issuer_url=f"{public_url.rstrip('/')}/",  # pyright: ignore[reportArgumentType]
+            resource_server_url=f"{public_url.rstrip('/')}/mcp",  # pyright: ignore[reportArgumentType]
             required_scopes=[READ_SCOPE],
             # Tokens are opaque personal tokens, not RFC 8707 resource-bound grants.
             validate_token_resource=False,
