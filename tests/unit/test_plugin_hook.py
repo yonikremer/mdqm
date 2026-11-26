@@ -38,6 +38,7 @@ import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 import pytest
@@ -104,13 +105,21 @@ class Stub:
     @property
     def url(self) -> str:
         host, port = self._server.server_address[:2]
+        # `server_address` is typed loosely; a bytes host would f-string to "b'127.0.0.1'" and every
+        # URL assertion below would fail for a reason that has nothing to do with the hook.
+        assert isinstance(host, str) and isinstance(port, int)
         return f"http://{host}:{port}"
 
     def __enter__(self) -> Stub:
         self._thread.start()
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=5)
