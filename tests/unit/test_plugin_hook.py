@@ -94,7 +94,7 @@ class Stub:
                 self.end_headers()
                 self.wfile.write(payload)
 
-            def log_message(self, *args: Any) -> None:
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - the base class's names
                 """Silence the default stderr logging: a test run should not look like a server."""
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
