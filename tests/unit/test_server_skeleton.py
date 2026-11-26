@@ -303,7 +303,7 @@ def test_missing_token_file_is_a_clean_error(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# Health and the /context stub
+# Health and /context
 # --------------------------------------------------------------------------------------------------
 
 
@@ -327,7 +327,10 @@ async def test_context_requires_a_token(endpoint: str, token: str | None) -> Non
     assert response.json()["error"] == "invalid_token"
 
 
-async def test_context_stub_names_the_caller(endpoint: str) -> None:
+async def test_context_answers_the_hook_with_a_pack_or_an_honest_refusal(endpoint: str) -> None:
+    # This server was built with no semantic layer, so the route must say so with an agent-facing
+    # refusal instead of an empty block (M06 owns the populated behaviour, tests/unit/
+    # test_context_endpoint.py). Either way the hook contract is one field or one error shape.
     async with httpx2.AsyncClient(timeout=30.0) as http:
         response = await http.post(
             f"{base_url(endpoint)}/context",
@@ -335,11 +338,15 @@ async def test_context_stub_names_the_caller(endpoint: str) -> None:
             headers={"Authorization": f"Bearer {TOKENS[1].token}"},
         )
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     body = response.json()
-    assert body["status"] == "not_implemented"
-    assert body["surface"] == "context"
-    assert body["user_id"] == "bob"
+    assert body["status"] == "error"
+    assert body["code"] == "NOT_SUPPORTED"
+    assert body["fix"]
+    # A hook only ever injects `additionalContext`; a refusal must not carry one.
+    assert "additionalContext" not in body
+    # Nothing about the caller travels in the answer: the block is the same for every reader.
+    assert TOKENS[1].token not in response.text
 
 
 # --------------------------------------------------------------------------------------------------

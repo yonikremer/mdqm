@@ -6,7 +6,8 @@ unknown token is refused with ``401`` before a tool handler is reached. The two 
 exempt from that middleware (``MCPServer.custom_route`` documents this), so ``/healthz`` is public
 and ``/context`` checks the bearer token itself.
 
-Nothing here reads a data source: the tool bodies are stubs (``mdqm.server.tools``).
+Nothing here reads a data source: the tool bodies are stubs (``mdqm.server.tools``). ``/context``
+reads the semantic layer only (``mdqm.server.context_endpoint``).
 """
 
 from __future__ import annotations
@@ -30,7 +31,12 @@ from mdqm.server.auth import (
     identity_from_access_token,
 )
 from mdqm.server.context import RequestContextUnavailable
-from mdqm.server.tools import NotImplementedResult, register_tools
+from mdqm.server.context_endpoint import (
+    ContextPackSource,
+    answer_context,
+    context_source_from_settings,
+)
+from mdqm.server.tools import register_tools
 
 __all__ = [
     "DEFAULT_PUBLIC_URL",
@@ -94,6 +100,7 @@ def create_server(
     verifier: TokenVerifier,
     public_url: str = DEFAULT_PUBLIC_URL,
     version: str = __version__,
+    context_source: ContextPackSource | None = None,
 ) -> MCPServer:
     """Build the server object. No I/O and no clock: the caller supplies the verifier.
 
@@ -101,6 +108,8 @@ def create_server(
         verifier: Who a bearer token belongs to. Required: a server with no auth is never served.
         public_url: Base URL advertised as the issuer and resource, e.g. ``https://mdqm.internal``.
         version: Reported at initialize; defaults to this distribution's version.
+        context_source: The indexed semantic layer ``POST /context`` answers from. ``None`` is a
+            supported state: the route then refuses with ``NOT_SUPPORTED`` and a ``fix``.
     """
     server: MCPServer = MCPServer(
         name="mdqm",
@@ -125,17 +134,11 @@ def create_server(
 
     @server.custom_route("/context", methods=["POST"])  # type: ignore[untyped-decorator]
     async def context_endpoint(request: Request) -> Response:
-        """Context Pack endpoint for the client hook (stub in this build)."""
+        """Context Pack for the client hook: authenticated like the tools, never echoing a token."""
         identity = await _bearer_identity(verifier, request.headers.get("authorization"))
         if identity is None:
             return _unauthorized()
-        stub = NotImplementedResult(
-            surface="context",
-            user_id=identity.user_id,
-            problem="the Context Pack is not built yet, so no context is injected for this prompt",
-            fix="carry on without injected context; ask the user for table and column names",
-        )
-        return JSONResponse(stub.model_dump())
+        return await answer_context(request, source=context_source)
 
     return server
 
@@ -146,12 +149,18 @@ def serve(*, host: str, port: int) -> None:
     Raises:
         AuthConfigError: the token file is missing or unreadable. Serving without auth is not an
             option, so the caller must fail rather than start an open server.
+        SemanticError: a semantic layer exists but does not load. Starting without it would serve
+            guesses, so the server refuses to start instead.
     """
     verifier = StaticTokenVerifier.from_file(tokens_file_path())
     logger.info(
         "serving mdqm %s on %s:%d for %d token(s)", __version__, host, port, len(verifier.users)
     )
-    server = create_server(verifier=verifier, public_url=f"http://{host}:{port}")
+    server = create_server(
+        verifier=verifier,
+        public_url=f"http://{host}:{port}",
+        context_source=context_source_from_settings(),
+    )
     server.run("streamable-http", host=host, port=port)
 
 

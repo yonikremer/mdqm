@@ -226,6 +226,8 @@ Identical concurrent calls are coalesced (single flight).
 Claude Code plugin (one-step install; **verify formats in the current docs**): MCP server entry (HTTP, central server), a `UserPromptSubmit` hook calling `/context`
 and returning `additionalContext`, and a skill that documents the spec. Personal identity via `headersHelper` / OAuth / token from an env var; never keys in shared policy files.
 
+`POST /context` wire contract (task M06, `mdqm.server.context_endpoint`): request `{"prompt": str}` (max 4,000 characters, unknown fields refused), success `200 {"additionalContext": str}` with `""` when nothing is relevant — an irrelevant prompt costs zero tokens and is not an error. Refusals are the agent-facing error shape: `401` from the transport for a bad token, `400` `INVALID_SPEC` for a body the hook should not send, `503` `NOT_SUPPORTED` when the deployment has no semantic layer yet. The block is `build_pack` over the same indexed layer `find_data` uses, so a result row can never travel through the hook.
+
 ## 10. Bootstrap pipeline (semantic layer built autonomously)
 
 Autonomous, scheduled, idempotent (stage inputs are hashed; unchanged input => skip, including model calls). Heavy work (profiling, stats, mining)
