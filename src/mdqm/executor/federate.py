@@ -370,6 +370,10 @@ class FederatedExecutor:
                     ),
                     table=lookup.table,
                 )
+            # SegmentStatus is a StrEnum whose members are exactly StepReport's cache_status
+            # literals, which pydantic validates into the field; pyright does not accept an enum
+            # member where a Literal of its values is declared, so the two call sites below are
+            # ignored for that known limitation (mypy --strict and the runtime both accept it).
             status = lookup.status
         else:
             status = "uncached"
@@ -391,7 +395,7 @@ class FederatedExecutor:
                     source=step.source,
                     table=step.table,
                     sql=step.fragment.sql,
-                    cache_status=status,
+                    cache_status=status,  # pyright: ignore[reportArgumentType]
                     fetched_at=fetched_at,
                 ),
                 error=refusal.response,
@@ -409,7 +413,7 @@ class FederatedExecutor:
             rows=rows,
             nbytes=nbytes,
             fetched=True,
-            cache_status=status,
+            cache_status=status,  # pyright: ignore[reportArgumentType]
             fetched_at=fetched_at,
             row_cap_hit=row_cap_hit,
             byte_cap_hit=byte_cap_hit,
