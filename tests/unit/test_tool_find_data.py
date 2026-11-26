@@ -270,11 +270,13 @@ def with_budget(services: FindDataServices, budget: int) -> FindDataServices:
 
 def table_refs(answer: Any) -> set[str]:
     """The table refs the pack kept (the facts a spec must be written against)."""
+    assert answer.pack is not None, "a successful find_data answer always carries a pack"
     return {item.ref for item in answer.pack.items_of_kind(PackKind.TABLE)}
 
 
 def measure_refs(answer: Any) -> set[str]:
     """The measure refs the pack kept."""
+    assert answer.pack is not None, "a successful find_data answer always carries a pack"
     return {item.ref for item in answer.pack.items_of_kind(PackKind.MEASURE)}
 
 
@@ -311,6 +313,7 @@ def test_hebrew_and_english_ask_the_same_question_get_the_same_tables_and_measur
     )
     assert measure_refs(english) == measure_refs(hebrew)
     assert "credit_limit_r5000" in measure_refs(hebrew)
+    assert hebrew.pack is not None
     # The per-source conversions are the whole point of the pack: Hebrew must carry them too.
     hebrew_measure = next(
         item
@@ -371,7 +374,7 @@ def test_an_unknown_question_is_an_empty_pack_with_a_short_hint(
     assert answer.skeleton is None
     assert answer.tokens_total == 0
     assert answer.hint == EMPTY_HINT
-    assert len(answer.hint) <= 300, "a hint is one line, not a report"
+    assert len(EMPTY_HINT) <= 300, "a hint is one line, not a report"
 
 
 def test_an_empty_answer_is_logged_as_an_unanswered_question(
