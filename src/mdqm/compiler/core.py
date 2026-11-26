@@ -36,7 +36,9 @@ from typing import Final, NoReturn, cast
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.errors import UnsupportedError
 
+from mdqm.compiler.dialects import render, rewrite, timestamp_literal, trunc_expression
 from mdqm.compiler.resolve import (
     TIME_BUCKETS,
     ColumnRef,
@@ -202,17 +204,17 @@ def _value_literal(value: str | int | float | bool) -> exp.Expression:
     return exp.Literal.string(value)
 
 
-def _instant_literal(text: str) -> exp.Expression:
+def _instant_literal(text: str, dialect: str) -> exp.Expression:
     """An ISO-8601 instant as a timestamp literal, normalised to UTC.
 
     A cast is explicit because a bare string compares as text on Oracle and SQL Server, where
-    ``'2025-11-01' < start_time`` is a type error or a silent string comparison.
+    ``'2025-11-01' < start_time`` is a type error or a silent string comparison. The literal's exact
+    form is the dialect's problem: see :func:`mdqm.compiler.dialects.timestamp_literal`.
     """
     moment = datetime.fromisoformat(text.strip())
     if moment.tzinfo is not None:
         moment = moment.astimezone(UTC).replace(tzinfo=None)
-    node = exp.cast(exp.Literal.string(moment.isoformat(sep=" ")), exp.DataType.build("TIMESTAMP"))
-    return cast(exp.Expression, node)
+    return timestamp_literal(moment, dialect)
 
 
 def _code_literal(code: str) -> exp.Expression:
@@ -419,9 +421,20 @@ class _Compilation:
                 )
             column, _ = chosen
             table = self._require_anchor().physical if self.joins else None
-            bucketed = exp.TimestampTrunc(
-                unit=exp.var(key.upper()), this=exp.column(column, table=table)
-            )
+            bucketed = trunc_expression(key, exp.column(column, table=table), self.context.dialect)
+            if bucketed is None:
+                # A dialect with no faithful form (T-SQL weeks depend on DATEFIRST) must refuse:
+                # the same answer in a different week is a wrong answer, not a degraded one.
+                self._fail(
+                    invalid_spec(
+                        field=path,
+                        reason=(
+                            f'the time bucket "{key}" has no fixed meaning on '
+                            f"{self.context.dialect!r}"
+                        ),
+                        expected=sorted(TIME_BUCKETS),
+                    )
+                )
             return key, bucketed
         reference = self._column(key, path)
         return key, self._canonical(reference)
@@ -470,13 +483,9 @@ class _Compilation:
         reference = self._measure_column(measure, item, path)
         qualified = f"{reference.table.key}.{reference.column}"
         identifier = (
-            f"{reference.table.physical}.{reference.column}"
-            if self.joins
-            else reference.column
+            f"{reference.table.physical}.{reference.column}" if self.joins else reference.column
         )
-        rendered = render_normalize(
-            measure, qualified, identifier, dialect=self.context.dialect
-        )
+        rendered = render_normalize(measure, qualified, identifier, dialect=self.context.dialect)
         if rendered is None:  # unreachable: the column came from measure.sources
             self._fail(
                 invalid_spec(field=f"{path}.measure", reason="the measure lists no such column")
@@ -676,7 +685,7 @@ class _Compilation:
         if isinstance(value, str) and (
             ordering or reference.column in reference.table.semantics.time_columns
         ):
-            return _instant_literal(value)
+            return _instant_literal(value, self.context.dialect)
         if isinstance(value, (str, int, float, bool)):
             return _value_literal(value)
         self._fail(invalid_spec(field=f"{path}.value", reason="the value is not a JSON scalar"))
@@ -708,7 +717,15 @@ class _Compilation:
                 f"applied the server row cap of {limit} because the spec names no limit"
             )
         query = query.limit(limit)
-        return query.sql(dialect=self.context.dialect)
+        try:
+            return render(rewrite(query, self.context.dialect), self.context.dialect)
+        except UnsupportedError as exc:  # sqlglot says itself that it cannot translate this
+            self._fail(
+                invalid_spec(
+                    field="spec",
+                    reason=(f"the spec cannot be expressed in {self.context.dialect!r}: {exc}"),
+                )
+            )
 
     def _order_by(self) -> tuple[exp.Ordered, ...]:
         """``ORDER BY`` over the output expressions themselves, never over an alias.

@@ -1,0 +1,1 @@
+SELECT TOP 200 event_id, client_no, units FROM usage_events WHERE insertion_time >= CAST('2026-11-25T14:00:00.000000' AS DATETIME2) AND start_time >= CAST('2026-11-25T08:00:00.000000' AS DATETIME2)
