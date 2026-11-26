@@ -172,7 +172,10 @@ def injected(stdout: bytes) -> str:
     assert set(parsed) == {"hookSpecificOutput"}
     output = parsed["hookSpecificOutput"]
     assert output["hookEventName"] == "UserPromptSubmit"
-    return output["additionalContext"]
+    context = output["additionalContext"]
+    # A non-string here would still be JSON-valid and Claude Code would inject nothing useful.
+    assert isinstance(context, str)
+    return context
 
 
 # --------------------------------------------------------------------------------------------------
