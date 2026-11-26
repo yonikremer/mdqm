@@ -165,13 +165,14 @@ def _tail_fetcher(adapter: FakeAdapter) -> Callable[[TailFetch], pa.Table]:
     """A ``fetch_tail`` that filters ingestion time and adds the derived event bound."""
 
     def fetch(request: TailFetch) -> pa.Table:
+        # The column names and bounds here are this test's own values, never user input.
         sql = (
             'SELECT * FROM "usage_events" '
             f"WHERE \"insertion_time\" >= TIMESTAMP '{_litsql(request.since)}'"
         )
         if request.event_bound is not None and request.event_column is not None:
             sql += f" AND \"{request.event_column}\" >= TIMESTAMP '{_litsql(request.event_bound)}'"
-        return _run(adapter, sql + " ORDER BY event_id")
+        return _run(adapter, sql + " ORDER BY event_id")  # nosemgrep
 
     return fetch
 
@@ -385,7 +386,7 @@ def test_tail_refresh_merges_new_rows_and_dedupes_by_key(
 
 @pytest.mark.parametrize("mutability", ["mutable_critical", "unknown"])
 def test_uncacheable_tables_never_populate_the_store(
-    cache: SegmentCache, clock: _Clock, mutability: str
+    cache: SegmentCache, clock: _Clock, mutability: Mutability
 ) -> None:
     """A row that changes under us must never be served from a segment."""
     adapter = _adapter(_january_rows())
