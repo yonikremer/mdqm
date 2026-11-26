@@ -3,22 +3,34 @@
 ``query`` does most of the work; the other four are lookups around it. Descriptions are written for
 a weak model: what it does, when to call it, and one example.
 
-This module is the package's front door: it holds the two tools whose bodies are still stubs
-(``find_data`` in M02, ``query`` in M03) plus the shared answer model, and re-exports the three
-lookup tools from :mod:`mdqm.server.tools.misc` (M05). Each tool gets its own module as its body
-lands; the name, description and wire schema stay put, because that is the agent's contract.
+This module is the package's front door: it holds the one tool whose body is still a stub
+(``query`` in M03) plus the shared answer model, and re-exports the other four from
+:mod:`mdqm.server.tools.misc` (M05) and :mod:`mdqm.server.tools.find_data` (M02). Each tool gets
+its own module as its body lands; the name, description and wire schema stay put, because that is
+the agent's contract.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated, Literal
+from typing import Literal
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from mdqm.models.base import MDQMModel
 from mdqm.server.context import current_context
+from mdqm.server.tools.find_data import (
+    EMPTY_HINT,
+    FindDataAnswer,
+    FindDataServices,
+    SpecSkeleton,
+    configure_find_data,
+    current_find_data,
+    find_data,
+    reset_find_data,
+    use_find_data,
+)
 from mdqm.server.tools.misc import (
     Answer,
     FeedbackAnswer,
@@ -38,16 +50,22 @@ from mdqm.server.tools.misc import (
 from mdqm.spec.models import QuerySpec
 
 __all__ = [
+    "EMPTY_HINT",
     "TOOL_NAMES",
     "Answer",
     "FeedbackAnswer",
+    "FindDataAnswer",
+    "FindDataServices",
     "GetMoreAnswer",
     "HistoryAnswer",
     "HistoryItem",
     "NotImplementedResult",
     "ServicesUnavailable",
+    "SpecSkeleton",
     "ToolServices",
+    "configure_find_data",
     "configure_services",
+    "current_find_data",
     "current_services",
     "feedback",
     "find_data",
@@ -55,7 +73,9 @@ __all__ = [
     "history",
     "query",
     "register_tools",
+    "reset_find_data",
     "reset_services",
+    "use_find_data",
     "use_services",
 ]
 
@@ -81,24 +101,6 @@ def _not_implemented(surface: str, problem: str, fix: str) -> NotImplementedResu
     """Build the stub answer for the authenticated caller of this message."""
     return NotImplementedResult(
         surface=surface, user_id=current_context().user_id, problem=problem, fix=fix
-    )
-
-
-def find_data(
-    question: str,
-    limit: Annotated[int, Field(ge=1, le=50, description="How many matches to return.")] = 10,
-) -> NotImplementedResult:
-    """Find tables, columns and values that match a question. Call this first when unsure of a name.
-
-    Searches the semantic dictionary (Hebrew and English names, synonyms, categorical values) and
-    returns what exists, so you never guess a table or column name.
-    Example: find_data({"question": "credit limit by customer status"})
-    """
-    return _not_implemented(
-        "find_data",
-        f"the semantic dictionary is not loaded yet, so {question!r} cannot be searched",
-        "search is not available in this build; call `query` with a spec from the examples, or ask "
-        "the operator to run the bootstrap pipeline (`mdqm bootstrap`)",
     )
 
 
