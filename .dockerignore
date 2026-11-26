@@ -1,22 +1,52 @@
-# Build context for the `api` profile (docker/api.Dockerfile). Keep it small: the Dockerfile copies
-# pyproject.toml, README.md and src/, so nothing else needs to travel to the daemon.
+# Build context for the mdqm images: the server image (./Dockerfile, task M08) and the mock API image
+# (docker/api.Dockerfile, task D01). Keep it small: the server build copies pyproject.toml,
+# README.md, src/ and wheelhouse/, so nothing else needs to travel to the daemon.
+# `wheelhouse/` is deliberately NOT ignored: the server builder installs from it (air-gapped build).
+
 .git
+.gitattributes
+.github
 .gitignore
+
+# local environments and per-session worktrees
 .venv
 venv
 .worktrees
-data
+
+# build output
 dist
 build
+*.egg-info
+
+# tool caches
 **/__pycache__
 **/*.pyc
 .pytest_cache
 .mypy_cache
 .ruff_cache
-*.egg-info
-tests
-docs
-progress
-examples
-plugin
+.hypothesis
+
+# local runtime state: never bake a developer's database, cache or spill files into an image
+data
+cache
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.duckdb
+*.duckdb.wal
+
+# secrets and dev tokens
 .env
+tokens.json
+*.pem
+
+# not needed at build time (the images ship the package, the CLI, and nothing else)
+tests
+progress
+plugin
+docs
+examples
+TASKS.md
+tasks.json
+AGENT_PROMPT.md
+SUMMARY_HE.md
