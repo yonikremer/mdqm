@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${user_config.mdqm_python}",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/context_hook.py"],
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

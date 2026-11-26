@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "mdqm": {
+      "type": "http",
+      "url": "${MDQM_URL}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MDQM_TOKEN}"
+      },
+      "alwaysLoad": true
+    }
+  }
+}
