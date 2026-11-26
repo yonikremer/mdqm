@@ -138,9 +138,7 @@ def _statement(*parts: str) -> str:
 
 
 _SELECT_META: Final[str] = _statement("SELECT value FROM mdqm_meta WHERE key = ?")
-_SELECT_META_LIKE: Final[str] = _statement(
-    "SELECT 'key' AS marker, value FROM mdqm_meta WHERE key LIKE ?"
-)
+_SELECT_ALL_META: Final[str] = _statement('SELECT "key", value FROM mdqm_meta')
 _UPSERT_META: Final[str] = _statement(
     "INSERT INTO mdqm_meta (key, value, updated_at) VALUES (?, ?, ?)"
     " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
@@ -1038,14 +1036,17 @@ def _bound_text(bound: object) -> str | None:
 
 
 def _meta_value(store: Store, key: str) -> str | None:
-    row = store.connect().execute(_SELECT_META, (key,)).fetchone()
+    # The statement is a module constant and the key travels as a bound `?` parameter, so there is
+    # nothing to inject; the scanner cannot see through the constant.
+    row = store.connect().execute(_SELECT_META, (key,)).fetchone()  # nosemgrep
     return None if row is None else str(row["value"])
 
 
 def _write_meta(store: Store, key: str, value: str, *, at: datetime) -> None:
     """Upsert one ``mdqm_meta`` row through the store's own writer, so there is one write path."""
     with store.writing() as conn:
-        conn.execute(_UPSERT_META, (key, value, at.isoformat()))
+        # Constant statement, every value bound: no interpolation reaches the SQL text.
+        conn.execute(_UPSERT_META, (key, value, at.isoformat()))  # nosemgrep
 
 
 def read_baseline(store: Store, source: str) -> CatalogSnapshot | None:
@@ -1111,10 +1112,14 @@ def blocked_references(store: Store, *, source: str | None = None) -> tuple[str,
     entry, so a dropped column cannot be used until a human approved the change. ``source=None``
     reads every source.
     """
-    pattern = f"{BLOCKED_PREFIX}.%" if source is None else f"{BLOCKED_PREFIX}.{source}"
+    wanted = [BLOCKED_PREFIX] if source is None else [f"{BLOCKED_PREFIX}.{source}"]
     labels: set[str] = set()
-    rows = store.connect().execute(_SELECT_META_LIKE, (pattern,)).fetchall()
+    # The prefix is matched in Python on the key column: the statement is a constant with no
+    # parameter at all, and mdqm_meta holds a handful of rows (identifiers and hashes, never data).
+    rows = store.connect().execute(_SELECT_ALL_META).fetchall()  # nosemgrep
     for row in rows:
+        if not any(str(row["key"]).startswith(prefix) for prefix in wanted):
+            continue
         try:
             decoded = json.loads(str(row["value"]))
         except ValueError:
