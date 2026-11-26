@@ -1,0 +1,63 @@
+Weekly review digest
+2026-03-04 · 10/10
+
+1. Approve the value mapping for status_0?
+   status_0 · 0.90 · 95cf8d33cc26
+   Evidence:
+   - 3 values in crm.customers.status; billing.accounts.client_no joins at 99.8%
+   Reply: yes / no / other
+
+2. Approve the synonym for status_1?
+   status_1 · 0.85 · 6ab20a614e06
+   Evidence:
+   - ערכי הסטטוס תואמים ב-99.8% בין שלושת המקורות
+   - עמודת usage_events.status
+   Reply: yes / no / other
+
+3. Approve the name for status_2?
+   status_2 · 0.80 · 287664ac8a6f
+   Evidence:
+   - pg_stat_statements: 412 calls in 30 days
+   Reply: yes / no / other
+
+4. Approve the measure for status_3?
+   status_3 · 0.75 · 20a514365728
+   Evidence:
+   - אותו מדד מחושב בשתי דרכים: ROUND(x/5000)*5000
+   Reply: yes / no / other
+
+5. Approve the join for status_4?
+   status_4 · 0.70 · 5dde751d7fb5
+   Evidence:
+   - join key needs LPAD(client_no, 10, '0')
+   Reply: yes / no / other
+
+6. Approve the mutability for status_5?
+   status_5 · 0.65 · 173a9406bd3d
+   Evidence:
+   - הטבלה מתעדכנת 3 פעמים ביום
+   Reply: yes / no / other
+
+7. Approve the value mapping for status_6?
+   status_6 · 0.60 · 9cb75e822a3c
+   Evidence:
+   - column renamed in erp on 2026-02-11
+   Reply: yes / no / other
+
+8. Approve the synonym for status_7?
+   status_7 · 0.55 · 7f618bace888
+   Evidence:
+   - ערכי הקטגוריה בעברית ובאנגלית
+   Reply: yes / no / other
+
+9. Approve the name for status_8?
+   status_8 · 0.50 · a3932358d293
+   Evidence:
+   - measure appears in 7 saved questions
+   Reply: yes / no / other
+
+10. Approve the measure for status_9?
+   status_9 · 0.45 · 75084a9bc6d8
+   Evidence:
+   - partition key is start_time, events arrive late
+   Reply: yes / no / other

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<title>Weekly review digest</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:48rem;margin:2rem auto;padding:0 1rem}
+li{margin:0 0 1.5rem 0}
+.prompt{font-weight:600;margin:0 0 .25rem 0}
+.meta,.ref{color:#555;font-size:.85rem;margin:.15rem 0}
+.answers{margin:.35rem 0 0 0}
+</style>
+</head>
+<body>
+<h1>Weekly review digest</h1>
+<p class="meta">2026-03-04 · 10/10</p>
+<ol class="questions">
+<li id="q1">
+<p class="prompt">Approve the value mapping for status_0?</p>
+<p class="meta">status_0 · 0.90 · 95cf8d33cc26</p>
+<p>Evidence:</p>
+<ul>
+<li>3 values in crm.customers.status; billing.accounts.client_no joins at 99.8%</li>
+</ul>
+<p class="answers">yes / no / other</p>
+</li>
+<li id="q2">
+<p class="prompt">Approve the synonym for status_1?</p>
+<p class="meta">status_1 · 0.85 · 6ab20a614e06</p>
+<p>Evidence:</p>
+<ul>
+<li>ערכי הסטטוס תואמים ב-99.8% בין שלושת המקורות</li>
+<li>עמודת usage_events.status</li>
+</ul>
+<p class="answers">yes / no / other</p>
+</li>
+<li id="q3">
+<p class="prompt">Approve the name for status_2?</p>
+<p class="meta">status_2 · 0.80 · 287664ac8a6f</p>
+<p>Evidence:</p>
+<ul>
+<li>pg_stat_statements: 412 calls in 30 days</li>
+</ul>
+<p class="answers">yes / no / other</p>
+</li>
+<li id="q4">
+<p class="prompt">Approve the measure for status_3?</p>
+<p class="meta">status_3 · 0.75 · 20a514365728</p>
+<p>Evidence:</p>
+<ul>
+<li>אותו מדד מחושב בשתי דרכים: ROUND(x/5000)*5000</li>
+</ul>
+<p class="answers">yes / no / other</p>
+</li>
+<li id="q5">
+<p class="prompt">Approve the join for status_4?</p>
+<p class="meta">status_4 · 0.70 · 5dde751d7fb5</p>
+<p>Evidence:</p>
+<ul>
+<li>join key needs LPAD(client_no, 10, '0')</li>
+</ul>
+<p class="answers">yes / no / other</p>
+</li>
+<li id="q6">
+<p class="prompt">Approve the mutability for status_5?</p>
+<p class="meta">status_5 · 0.65 · 173a9406bd3d</p>
+<p>Evidence:</p>
+<ul>
+<li>הטבלה מתעדכנת 3 פעמים ביום</li>
+</ul>
+<p class="answers">yes / no / other</p>
+</li>
+<li id="q7">
+<p class="prompt">Approve the value mapping for status_6?</p>
+<p class="meta">status_6 · 0.60 · 9cb75e822a3c</p>
+<p>Evidence:</p>
+<ul>
+<li>column renamed in erp on 2026-02-11</li>
+</ul>
+<p class="answers">yes / no / other</p>
+</li>
+<li id="q8">
+<p class="prompt">Approve the synonym for status_7?</p>
+<p class="meta">status_7 · 0.55 · 7f618bace888</p>
+<p>Evidence:</p>
+<ul>
+<li>ערכי הקטגוריה בעברית ובאנגלית</li>
+</ul>
+<p class="answers">yes / no / other</p>
+</li>
+<li id="q9">
+<p class="prompt">Approve the name for status_8?</p>
+<p class="meta">status_8 · 0.50 · a3932358d293</p>
+<p>Evidence:</p>
+<ul>
+<li>measure appears in 7 saved questions</li>
+</ul>
+<p class="answers">yes / no / other</p>
+</li>
+<li id="q10">
+<p class="prompt">Approve the measure for status_9?</p>
+<p class="meta">status_9 · 0.45 · 75084a9bc6d8</p>
+<p>Evidence:</p>
+<ul>
+<li>partition key is start_time, events arrive late</li>
+</ul>
+<p class="answers">yes / no / other</p>
+</li>
+</ol>
+</body>
+</html>

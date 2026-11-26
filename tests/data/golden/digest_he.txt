@@ -1,0 +1,63 @@
+תקציר שבועי לאישור הצעות
+2026-03-04 · 10/10
+
+1. לאשר מיפוי ערכים עבור status_0?
+   status_0 · 0.90 · 95cf8d33cc26
+   הראיות:
+   - 3 values in crm.customers.status; billing.accounts.client_no joins at 99.8%
+   השיבו: כן / לא / אחר
+
+2. לאשר מילה נרדפת עבור status_1?
+   status_1 · 0.85 · 6ab20a614e06
+   הראיות:
+   - ערכי הסטטוס תואמים ב-99.8% בין שלושת המקורות
+   - עמודת usage_events.status
+   השיבו: כן / לא / אחר
+
+3. לאשר שם עבור status_2?
+   status_2 · 0.80 · 287664ac8a6f
+   הראיות:
+   - pg_stat_statements: 412 calls in 30 days
+   השיבו: כן / לא / אחר
+
+4. לאשר מדד עבור status_3?
+   status_3 · 0.75 · 20a514365728
+   הראיות:
+   - אותו מדד מחושב בשתי דרכים: ROUND(x/5000)*5000
+   השיבו: כן / לא / אחר
+
+5. לאשר קישור בין מקורות עבור status_4?
+   status_4 · 0.70 · 5dde751d7fb5
+   הראיות:
+   - join key needs LPAD(client_no, 10, '0')
+   השיבו: כן / לא / אחר
+
+6. לאשר תכיפות שינוי עבור status_5?
+   status_5 · 0.65 · 173a9406bd3d
+   הראיות:
+   - הטבלה מתעדכנת 3 פעמים ביום
+   השיבו: כן / לא / אחר
+
+7. לאשר מיפוי ערכים עבור status_6?
+   status_6 · 0.60 · 9cb75e822a3c
+   הראיות:
+   - column renamed in erp on 2026-02-11
+   השיבו: כן / לא / אחר
+
+8. לאשר מילה נרדפת עבור status_7?
+   status_7 · 0.55 · 7f618bace888
+   הראיות:
+   - ערכי הקטגוריה בעברית ובאנגלית
+   השיבו: כן / לא / אחר
+
+9. לאשר שם עבור status_8?
+   status_8 · 0.50 · a3932358d293
+   הראיות:
+   - measure appears in 7 saved questions
+   השיבו: כן / לא / אחר
+
+10. לאשר מדד עבור status_9?
+   status_9 · 0.45 · 75084a9bc6d8
+   הראיות:
+   - partition key is start_time, events arrive late
+   השיבו: כן / לא / אחר
