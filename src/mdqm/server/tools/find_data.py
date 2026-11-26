@@ -477,8 +477,12 @@ def _skeleton(pack: ContextPack, layer: SemanticLayer) -> SpecSkeleton:
         if column is not None:
             select.insert(0, column)
         return SpecSkeleton(
-            spec=QuerySpec(
-                from_table=bare,
+            # pyright binds a pydantic constructor by alias, and SpecModel declares alias="from"
+            # (a keyword Python cannot spell) while name validation is on, so reportCallIssue is a
+            # false positive here: proven by the runtime call and by mypy --strict. Ignored to keep
+            # editors green.
+            spec=QuerySpec(  # pyright: ignore[reportCallIssue]
+                from_table=bare,  # pyright: ignore[reportCallIssue]
                 select=tuple(select),
                 group_by=() if column is None else (column,),
             ),
