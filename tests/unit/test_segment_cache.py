@@ -20,6 +20,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from mdqm.cache.freshness import Mutability
 from mdqm.cache.segments import (
     EvictionReport,
     SegmentCache,
@@ -56,9 +57,9 @@ class _Clock:
         self.moment += delta
 
 
-def _ts(*parts: int) -> datetime:
-    """A UTC instant from ``datetime``-style positional parts, for terse fixtures."""
-    return datetime(*parts, tzinfo=UTC)  # type: ignore[arg-type]
+def _ts(year: int, month: int, day: int) -> datetime:
+    """Midnight UTC on a date, for terse fixtures."""
+    return datetime(year, month, day, tzinfo=UTC)
 
 
 def _month(year: int, month: int) -> Range:
@@ -150,10 +151,11 @@ def _window_fetcher(
     def fetch(window: Range) -> pa.Table:
         low = _litsql(window.lower)
         high = _litsql(window.upper)
+        # The column name and bounds here are this test's own literals, never user input.
         sql = (
             f'SELECT * FROM "usage_events" WHERE "{column}" >= TIMESTAMP \'{low}\' '
             f"AND \"{column}\" < TIMESTAMP '{high}' ORDER BY event_id"
-        )
+        )  # nosemgrep
         return _run(adapter, sql)
 
     return fetch
@@ -174,28 +176,38 @@ def _tail_fetcher(adapter: FakeAdapter) -> Callable[[TailFetch], pa.Table]:
     return fetch
 
 
-def _spec(**overrides: object) -> SegmentSpec:
-    base: dict[str, object] = {
-        "source": "billing",
-        "table": "usage_events",
-        "fragment_hash": "fh-annual-units",
-        "version_hash": "sem-v1",
-    }
-    base.update(overrides)
-    return SegmentSpec(**base)  # type: ignore[arg-type]
+def _spec(
+    *,
+    source: str = "billing",
+    table: str = "usage_events",
+    fragment_hash: str = "fh-annual-units",
+    version_hash: str = "sem-v1",
+    mutability: Mutability = "append_only",
+    granularity: PartitionGranularity = PartitionGranularity.MONTH,
+    tail: TailPolicy | None = None,
+) -> SegmentSpec:
+    """A spec with every component defaulted, so a test varies exactly the one it is about."""
+    return SegmentSpec(
+        source=source,
+        table=table,
+        fragment_hash=fragment_hash,
+        version_hash=version_hash,
+        mutability=mutability,
+        granularity=granularity,
+        tail=tail,
+    )
 
 
-def _tail_spec(**overrides: object) -> SegmentSpec:
-    base: dict[str, object] = {
-        "tail": TailPolicy(
+def _tail_spec() -> SegmentSpec:
+    """A spec whose table is append-only with a unique key, so a tail refresh is possible."""
+    return _spec(
+        tail=TailPolicy(
             ingestion_column="insertion_time",
             unique_key=("event_id",),
             event_column="start_time",
             max_lag=timedelta(minutes=5),
         )
-    }
-    base.update(overrides)
-    return _spec(**base)
+    )
 
 
 @pytest.fixture
