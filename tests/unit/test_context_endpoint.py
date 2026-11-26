@@ -31,7 +31,7 @@ import httpx
 import pytest
 import pytest_socket
 
-from mdqm.config.settings import Settings
+from mdqm.config.settings import PathsSettings, Settings
 from mdqm.context.index import ApprovedExample
 from mdqm.context.pack import DEFAULT_PACK_BUDGET
 from mdqm.results.summary import estimate_tokens
@@ -353,7 +353,9 @@ def write_semantic(root: Path) -> Path:
 
 def settings_for(tmp_path: Path, semantic_dir: Path) -> Settings:
     """Settings pointing at throwaway paths: no file in the repo, no env var."""
-    return Settings(paths={"semantic_dir": semantic_dir, "metadata_db": tmp_path / "meta.sqlite"})
+    return Settings(
+        paths=PathsSettings(semantic_dir=semantic_dir, metadata_db=tmp_path / "meta.sqlite")
+    )
 
 
 def test_no_semantic_directory_means_no_source(tmp_path: Path) -> None:
