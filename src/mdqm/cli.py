@@ -4,6 +4,7 @@ import typer
 
 from mdqm import __version__
 from mdqm.config.settings import Settings
+from mdqm.pipeline.cli import bootstrap_app
 from mdqm.probe.cli import probe as probe_command
 from mdqm.review.queue import ReviewError, ReviewQueue
 from mdqm.server.app import AuthConfigError
@@ -24,6 +25,9 @@ app.add_typer(audit_app, name="audit")
 # mdqm.probe.cli so the probe package owns its own surface.
 app.command(name="probe")(probe_command)
 app.add_typer(review_app, name="review")
+# `mdqm bootstrap run` (task S01): the idempotent, resumable stage runner. The body lives in
+# mdqm.pipeline.cli so the pipeline package owns its own surface.
+app.add_typer(bootstrap_app, name="bootstrap")
 
 
 def _review_queue(opened: Store) -> ReviewQueue:
