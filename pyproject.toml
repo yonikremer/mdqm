@@ -32,6 +32,7 @@ dev = [
   "hypothesis>=6.100",
   "jsonschema>=4",                # tests/unit/test_models.py validates the exported JSON Schemas
   "fastapi>=0.110",                   # only for the mock OpenAPI service in tests
+  "uvicorn>=0.30",                # D04: the mock's ephemeral-port fixture and its container entry point
   "ruff>=0.6",
   "mypy>=1.11",
   "types-PyYAML",

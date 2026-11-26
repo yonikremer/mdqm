@@ -1,0 +1,393 @@
+openapi: 3.1.0
+info:
+  title: MDQM mock internal API
+  description: 'A local stand-in for an internal API with an OpenAPI spec: GET-only collections with filters and cursor paging, an API key header, rate-limit headers, one error envelope.'
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      tags:
+        - meta
+      summary: Liveness
+      description: 'Open on purpose and free of charge: a liveness probe must not spend the budget.'
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /rates:
+    get:
+      tags:
+        - rates
+      summary: Daily FX rates
+      description: 'Rows matching the filters, one page at a time: a filter is an index in the real API.'
+      operationId: rates_rates_get
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: currency
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            description: ISO-4217 code, e.g. 'USD'. Case-insensitive.
+            title: Currency
+          description: ISO-4217 code, e.g. 'USD'. Case-insensitive.
+        - name: date_from
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+                format: date
+              - type: 'null'
+            description: Inclusive lower bound on `date`.
+            title: Date From
+          description: Inclusive lower bound on `date`.
+        - name: date_to
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+                format: date
+              - type: 'null'
+            description: Inclusive upper bound on `date`.
+            title: Date To
+          description: Inclusive upper bound on `date`.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+            minimum: 1
+            description: Rows per page.
+            default: 10
+            title: Limit
+          description: Rows per page.
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+                pattern: ^c[0-9]+$
+              - type: 'null'
+            description: '`next_cursor` of the previous page.'
+            title: Cursor
+          description: '`next_cursor` of the previous page.'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RatePage'
+          headers:
+            X-RateLimit-Limit:
+              description: Requests allowed per window, per key.
+              schema: &id002
+                type: integer
+            X-RateLimit-Remaining:
+              description: Requests left in the current window.
+              schema: &id003
+                type: integer
+            X-RateLimit-Reset:
+              description: Seconds until the window resets.
+              schema: &id004
+                type: integer
+        '401':
+          description: Missing or wrong X-API-Key header.
+          content:
+            application/json:
+              schema: &id001
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: The request budget for this key is spent.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema: *id001
+  /customers/{customer_id}/score:
+    get:
+      tags:
+        - customers
+      summary: Credit score of one customer
+      description: One resource behind a path parameter, so the adapter has a non-collection shape too.
+      operationId: customer_score_customers__customer_id__score_get
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: customer_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^C-[0-9]{4}$
+            description: Customer id, e.g. 'C-0007'.
+            title: Customer Id
+          description: Customer id, e.g. 'C-0007'.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerScore'
+          headers:
+            X-RateLimit-Limit:
+              description: Requests allowed per window, per key.
+              schema: *id002
+            X-RateLimit-Remaining:
+              description: Requests left in the current window.
+              schema: *id003
+            X-RateLimit-Reset:
+              description: Seconds until the window resets.
+              schema: *id004
+        '401':
+          description: Missing or wrong X-API-Key header.
+          content:
+            application/json:
+              schema: *id001
+        '429':
+          description: The request budget for this key is spent.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema: *id001
+  /slow:
+    get:
+      tags:
+        - meta
+      summary: Answers after a delay
+      description: For client-timeout tests; the delay is capped by ``MockApiConfig.max_delay_ms``.
+      operationId: slow_slow_get
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: delay_ms
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            description: How long to wait before answering.
+            default: 100
+            title: Delay Ms
+          description: How long to wait before answering.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlowAnswer'
+          headers:
+            X-RateLimit-Limit:
+              description: Requests allowed per window, per key.
+              schema: *id002
+            X-RateLimit-Remaining:
+              description: Requests left in the current window.
+              schema: *id003
+            X-RateLimit-Reset:
+              description: Seconds until the window resets.
+              schema: *id004
+        '401':
+          description: Missing or wrong X-API-Key header.
+          content:
+            application/json:
+              schema: *id001
+        '429':
+          description: The request budget for this key is spent.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema: *id001
+  /_stats:
+    get:
+      tags:
+        - meta
+      summary: Per-endpoint call counts
+      description: 'Test-only: how many times each endpoint was actually handled.'
+      operationId: stats__stats_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+components:
+  schemas:
+    CustomerScore:
+      properties:
+        customer_id:
+          type: string
+          title: Customer Id
+          description: The id from the path.
+        score:
+          type: integer
+          title: Score
+          description: Credit score, 0-100.
+        band:
+          type: string
+          title: Band
+          description: "'low', 'medium' or 'high'."
+      additionalProperties: false
+      type: object
+      required:
+        - customer_id
+        - score
+        - band
+      title: CustomerScore
+    Health:
+      properties:
+        status:
+          type: string
+          title: Status
+          description: "'ok' when the service answers."
+        version:
+          type: string
+          title: Version
+          description: Service version, from the app's OpenAPI info.
+      additionalProperties: false
+      type: object
+      required:
+        - status
+        - version
+      title: Health
+    RatePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/RateRow'
+          type: array
+          title: Items
+          description: This page's rows.
+        next_cursor:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Next Cursor
+          description: Pass back as `cursor` for the next page; null on the last page.
+        total:
+          type: integer
+          title: Total
+          description: Rows matching the filters, across all pages.
+      additionalProperties: false
+      type: object
+      required:
+        - items
+        - total
+      title: RatePage
+    RateRow:
+      properties:
+        currency:
+          type: string
+          title: Currency
+          description: ISO-4217 code, upper case.
+        date:
+          type: string
+          format: date
+          title: Date
+          description: The day the rate applies to.
+        rate:
+          type: number
+          title: Rate
+          description: Units of the currency per one EUR.
+        source:
+          type: string
+          title: Source
+          description: Which feed published the rate.
+      additionalProperties: false
+      type: object
+      required:
+        - currency
+        - date
+        - rate
+        - source
+      title: RateRow
+    SlowAnswer:
+      properties:
+        requested_ms:
+          type: integer
+          title: Requested Ms
+          description: The delay the caller asked for.
+        slept_ms:
+          type: integer
+          title: Slept Ms
+          description: The delay actually slept, after capping.
+        capped:
+          type: boolean
+          title: Capped
+          description: True when the server's cap shortened the delay.
+      additionalProperties: false
+      type: object
+      required:
+        - requested_ms
+        - slept_ms
+        - capped
+      title: SlowAnswer
+    Stats:
+      properties:
+        calls:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Calls
+          description: Endpoint path -> successful handle count.
+        total_calls:
+          type: integer
+          title: Total Calls
+          description: Sum of `calls`.
+        rate_limited:
+          type: integer
+          title: Rate Limited
+          description: Requests refused with 429.
+        unauthorized:
+          type: integer
+          title: Unauthorized
+          description: Requests refused with 401.
+        budget_limit:
+          type: integer
+          title: Budget Limit
+          description: Requests allowed per window, per key.
+        budget_remaining:
+          type: integer
+          title: Budget Remaining
+          description: Requests left in the current window for the key.
+      additionalProperties: false
+      type: object
+      required:
+        - calls
+        - total_calls
+        - rate_limited
+        - unauthorized
+        - budget_limit
+        - budget_remaining
+      title: Stats
+      description: 'Per-endpoint call counts: the evidence that cache/coalescing avoided source calls.'
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      description: The API key issued to the server (a secret reference in mdqm config).
+      in: header
+      name: X-API-Key
