@@ -290,14 +290,20 @@ class AdminNotification(MDQMModel):
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> AdminNotification | None:
-        """Rebuild from :meth:`payload`; ``None`` when the stored document does not fit."""
+        """Rebuild from :meth:`payload`; ``None`` when the stored document does not fit.
+
+        ``created_at`` arrives as the ISO text that :meth:`payload` wrote, so it is parsed here
+        rather than handed to pydantic as a string: a field declared ``UtcDatetime`` must be given
+        a datetime, and an unparseable one means the row is damaged, not that the caller should
+        see a validation error.
+        """
         try:
             return cls(
                 source=str(payload["source"]),
                 subject=str(payload["subject"]),
                 body=str(payload["body"]),
                 blocked=tuple(str(label) for label in payload.get("blocked", ())),
-                created_at=str(payload["created_at"]),
+                created_at=datetime.fromisoformat(str(payload["created_at"])),
             )
         except (KeyError, ValueError):
             return None
@@ -1354,9 +1360,7 @@ def _decided(change: DriftChange, queue: ReviewQueue | None) -> bool:
 
 def _proposal_identity(change: DriftChange) -> str:
     """The review queue's content id for this change: one row per (table, change), rerun-safe."""
-    return proposal_id(
-        ProposalKind.OTHER, "tables", change.table, "", _proposal_patch(change)
-    )
+    return proposal_id(ProposalKind.OTHER, "tables", change.table, "", _proposal_patch(change))
 
 
 def _proposal_patch(change: DriftChange) -> dict[str, Any]:
