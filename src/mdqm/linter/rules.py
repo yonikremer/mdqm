@@ -69,10 +69,15 @@ def spec_duration(window: object) -> Duration:
     to lose.
     """
     if window is None:
-        return Duration()
+        # Every Duration field defaults to 0; pyright reads a pydantic field with a default as
+        # required, so a zero-arg construction it accepts at runtime is reported as incomplete.
+        return Duration()  # pyright: ignore[reportCallIssue]
     if isinstance(window, timedelta):
         total = int(window.total_seconds())
-        return Duration(days=total // 86_400, seconds=total % 86_400)
+        # Same false positive: ``months`` keeps its default of 0 here, which pyright still counts.
+        return Duration(  # pyright: ignore[reportCallIssue]
+            days=total // 86_400, seconds=total % 86_400
+        )
     return _DURATION.validate_python(window)
 
 
