@@ -193,6 +193,20 @@ class ResultStore:
         with self._lock:
             return self._lookup_locked(handle, owner).handle
 
+    def table(self, handle: str, *, owner: str) -> pa.Table:
+        """The whole stored table, for its owner. For an in-process caller, never for the wire.
+
+        A tool returns summary + sample + handle; another lane (the federated executor) needs the
+        rows themselves to join them locally, and paging them back through
+        :meth:`get_more`'s JSON conversion would lose their types. Ownership and expiry are the
+        same checks as :meth:`meta`, so this cannot be used to read someone else's result.
+
+        Raises:
+            HandleNotFound: the handle is unknown, expired, or another user's.
+        """
+        with self._lock:
+            return self._lookup_locked(handle, owner).table
+
     def get_more(self, handle: str, *, owner: str, offset: int, limit: int) -> Page:
         """One page of the stored result, for its owner.
 

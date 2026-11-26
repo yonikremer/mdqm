@@ -265,6 +265,9 @@ class FakeAdapter:
         self.calls: list[str] = []
 
         self._con = duckdb.connect(":memory:")
+        # A source session is UTC: comparing a naive TIMESTAMP literal to a TIMESTAMPTZ column reads
+        # the literal in the session zone, so the host's own zone would shift every window.
+        self._con.execute("SET TimeZone='UTC'").fetchall()
         self._con.execute(f"SET memory_limit='{memory_limit}'")
         if spill_dir is not None:
             spill_dir.mkdir(parents=True, exist_ok=True)
