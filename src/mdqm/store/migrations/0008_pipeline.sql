@@ -1,4 +1,4 @@
--- 0007: the bootstrap pipeline ledger (S01): one row per stage attempt.
+-- 0008: the bootstrap pipeline ledger (S01): one row per stage attempt.
 --
 -- The rule DESIGN.md section 10 states is "stage inputs are hashed; unchanged input => skip": a row
 -- here is the memory that makes the rule possible. `status` is the verdict of one attempt, so the
