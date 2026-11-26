@@ -29,7 +29,7 @@ from mdqm.adapters.openapi import (
     OpenApiAdapter,
     OpenApiError,
     OpenApiUnavailable,
-    _endpoints,
+    read_endpoints,
 )
 from mdqm.adapters.registry import AdapterRegistry
 from mdqm.config.secrets import EnvSecretProvider, SecretProvider
@@ -542,7 +542,7 @@ def test_the_paging_style_is_detected_from_the_parameters(
     parameters: list[dict[str, Any]], expected_style: str, expected_param: str | None
 ) -> None:
     """Cursor, offset and page are recognised, and a plain filter is not mistaken for paging."""
-    endpoints, _ = _endpoints(_toy_spec(parameters))
+    endpoints, _ = read_endpoints(_toy_spec(parameters))
     assert len(endpoints) == 1
     assert endpoints[0].paging.style == expected_style
     assert endpoints[0].paging.param == expected_param

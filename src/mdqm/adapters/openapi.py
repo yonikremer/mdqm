@@ -88,6 +88,13 @@ __all__ = [
     "OpenApiAdapter",
     "OpenApiError",
     "OpenApiUnavailable",
+    "SkippedOperation",
+    "SpecColumn",
+    "SpecEndpoint",
+    "SpecPaging",
+    "SpecParam",
+    "read_endpoints",
+    "read_spec",
 ]
 
 _log = logging.getLogger(__name__)
@@ -172,7 +179,7 @@ class _SpecError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class _Column:
+class SpecColumn:
     """One response field, as the catalog and the Arrow schema need it."""
 
     name: str
@@ -181,7 +188,7 @@ class _Column:
 
 
 @dataclass(frozen=True, slots=True)
-class _Param:
+class SpecParam:
     """A declared query parameter: a filterable column in the planner's vocabulary."""
 
     name: str
@@ -190,7 +197,7 @@ class _Param:
 
 
 @dataclass(frozen=True, slots=True)
-class _Paging:
+class SpecPaging:
     """How a collection answers in pages, detected from the parameters and the envelope."""
 
     style: str
@@ -200,15 +207,27 @@ class _Paging:
 
 
 @dataclass(frozen=True, slots=True)
-class _Endpoint:
+class SpecEndpoint:
     """One GET collection: a virtual table."""
 
     table: str
     path: str
-    columns: tuple[_Column, ...]
-    params: tuple[_Param, ...]
-    paging: _Paging
+    columns: tuple[SpecColumn, ...]
+    params: tuple[SpecParam, ...]
+    paging: SpecPaging
     items_key: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SkippedOperation:
+    """An operation in the document that is deliberately not exposed, and why (principle 10).
+
+    The reason is a sentence a human or an agent can act on: "a path parameter means a lookup, not
+    a set" is the fact that explains the missing table, while the label alone explains nothing.
+    """
+
+    label: str
+    reason: str
 
 
 def _resolve(spec: Mapping[str, Any], node: Any) -> Any:
@@ -247,22 +266,22 @@ def _schema_kind(schema: Any) -> str | None:
     return None
 
 
-def _column_from(name: str, schema: Any) -> _Column:
+def _column_from(name: str, schema: Any) -> SpecColumn:
     """Map one JSON Schema property onto a column, keeping the source's own type text."""
     resolved = schema if isinstance(schema, Mapping) else {}
     native = str(resolved.get("format") or _schema_kind(resolved) or "unknown")
     kind = _schema_kind(resolved)
     fmt = resolved.get("format")
     if kind == "string" and fmt == "date":
-        return _Column(name=name, native_type=native, normalized=NormalizedType.DATE)
+        return SpecColumn(name=name, native_type=native, normalized=NormalizedType.DATE)
     if kind == "string" and fmt in {"date-time", "datetime"}:
-        return _Column(name=name, native_type=native, normalized=NormalizedType.TIMESTAMP)
+        return SpecColumn(name=name, native_type=native, normalized=NormalizedType.TIMESTAMP)
     if kind == "array":
-        return _Column(name=name, native_type=native, normalized=NormalizedType.ARRAY)
+        return SpecColumn(name=name, native_type=native, normalized=NormalizedType.ARRAY)
     if kind == "object" or kind is None:
-        return _Column(name=name, native_type=native, normalized=NormalizedType.JSON)
+        return SpecColumn(name=name, native_type=native, normalized=NormalizedType.JSON)
     normalized = _SCALARS.get(kind, (NormalizedType.OTHER, pa.string()))[0]
-    return _Column(name=name, native_type=native, normalized=normalized)
+    return SpecColumn(name=name, native_type=native, normalized=normalized)
 
 
 def _properties(spec: Mapping[str, Any], schema: Any) -> Mapping[str, Any]:
@@ -294,7 +313,7 @@ def _next_key(spec: Mapping[str, Any], schema: Any) -> str | None:
     return None
 
 
-def _paging_for(params: Sequence[_Param], next_key: str | None) -> _Paging:
+def _paging_for(params: Sequence[SpecParam], next_key: str | None) -> SpecPaging:
     """Detect the paging style from the declared parameters (and the envelope's next token).
 
     Deterministic: the first declared parameter naming a style wins, in the order cursor, offset,
@@ -309,8 +328,10 @@ def _paging_for(params: Sequence[_Param], next_key: str | None) -> _Paging:
     ):
         for candidate in candidates:
             if candidate in names:
-                return _Paging(style=style, param=names[candidate], next_key=key, limit_param=limit)
-    return _Paging(style="none", limit_param=limit)
+                return SpecPaging(
+                    style=style, param=names[candidate], next_key=key, limit_param=limit
+                )
+    return SpecPaging(style="none", limit_param=limit)
 
 
 def _operations(spec: Mapping[str, Any]) -> Iterator[tuple[str, str, Mapping[str, Any]]]:
@@ -353,9 +374,9 @@ def _success_schema(spec: Mapping[str, Any], operation: Mapping[str, Any]) -> An
 
 def _params_of(
     spec: Mapping[str, Any], path_item: Mapping[str, Any], operation: Mapping[str, Any]
-) -> tuple[_Param, ...]:
+) -> tuple[SpecParam, ...]:
     """The operation's declared parameters, path-item level ones included and de-duplicated."""
-    found: dict[tuple[str, str], _Param] = {}
+    found: dict[tuple[str, str], SpecParam] = {}
     for source in (path_item.get("parameters"), operation.get("parameters")):
         if not isinstance(source, list):
             continue
@@ -367,24 +388,27 @@ def _params_of(
             location = declared.get("in")
             if not isinstance(name, str) or not isinstance(location, str):
                 continue
-            found[(name, location)] = _Param(
+            found[(name, location)] = SpecParam(
                 name=name, location=location, required=bool(declared.get("required"))
             )
     return tuple(found[key] for key in sorted(found))
 
 
-def _endpoints(spec: Mapping[str, Any]) -> tuple[tuple[_Endpoint, ...], tuple[str, ...]]:
+def read_endpoints(
+    spec: Mapping[str, Any],
+) -> tuple[tuple[SpecEndpoint, ...], tuple[SkippedOperation, ...]]:
     """Read the document into virtual tables plus the operations deliberately not exposed.
 
     Only ``GET`` collections become tables: a path parameter means the caller must substitute a
     value (a lookup, not a set) and a non-array response is one object, not rows. Everything skipped
-    is named in the second return value, so the omission is reported rather than silent.
+    is named in the second return value *with a reason*, so the omission is reported rather than
+    silent, and a reader (stage D4) can forward that reason instead of explaining it again.
     """
     paths = spec.get("paths")
     if not isinstance(paths, Mapping):
         raise _SpecError("the document has no 'paths' object")
-    tables: list[_Endpoint] = []
-    ignored: list[str] = []
+    tables: list[SpecEndpoint] = []
+    ignored: list[SkippedOperation] = []
     for path, item in paths.items():
         if not isinstance(item, Mapping):
             continue
@@ -394,27 +418,47 @@ def _endpoints(spec: Mapping[str, Any]) -> tuple[tuple[_Endpoint, ...], tuple[st
                 continue
             label = f"{verb.upper()} {path}"
             if verb in _WRITE_METHODS:
-                ignored.append(label)
+                ignored.append(
+                    SkippedOperation(
+                        label=label,
+                        reason=f"a {verb.upper()} operation: only GET is ever exposed",
+                    )
+                )
                 continue
             if verb != _READ_METHOD:
                 continue
             params = _params_of(spec, item, operation)
             if any(param.location == "path" for param in params):
-                ignored.append(label)
+                ignored.append(
+                    SkippedOperation(
+                        label=label,
+                        reason="it takes a path parameter: one resource, not a collection",
+                    )
+                )
                 continue
             schema = _success_schema(spec, operation)
             items_key, rows = _array_key(spec, schema)
             if rows is None:
-                ignored.append(label)
+                ignored.append(
+                    SkippedOperation(
+                        label=label,
+                        reason="its success response is not a JSON array: one object, not rows",
+                    )
+                )
                 continue
             columns = tuple(
                 _column_from(name, child) for name, child in _properties(spec, rows).items()
             )
             if not columns:
-                ignored.append(label)
+                ignored.append(
+                    SkippedOperation(
+                        label=label,
+                        reason="its array items declare no properties: no columns to filter on",
+                    )
+                )
                 continue
             tables.append(
-                _Endpoint(
+                SpecEndpoint(
                     table=_table_name(str(path)),
                     path=str(path),
                     columns=columns,
@@ -423,7 +467,7 @@ def _endpoints(spec: Mapping[str, Any]) -> tuple[tuple[_Endpoint, ...], tuple[st
                     items_key=items_key,
                 )
             )
-    return tuple(tables), tuple(sorted(ignored))
+    return tuple(tables), tuple(sorted(ignored, key=lambda item: (item.label, item.reason)))
 
 
 # --- the transport guard -------------------------------------------------------------------------
@@ -549,14 +593,17 @@ class OpenApiAdapter:
         self._monotonic = monotonic or time.monotonic
         self._limiter = limiter
 
-        document = dict(spec) if spec is not None else _read_spec(config)
+        document = dict(spec) if spec is not None else read_spec(config)
         self._spec = document
-        self._endpoints, self._ignored = _endpoints(document)
-        self._by_table: dict[str, _Endpoint] = {e.table: e for e in self._endpoints}
+        self._spec_tables, self._skipped = read_endpoints(document)
+        self._by_table: dict[str, SpecEndpoint] = {e.table: e for e in self._spec_tables}
         self._base_url = _base_url(config, document)
 
-        self.ignored_operations = self._ignored
+        self.ignored_operations: tuple[str, ...] = tuple(item.label for item in self._skipped)
         """Operations in the spec that are deliberately not reachable (writes and lookups)."""
+
+        self.skipped_operations: tuple[SkippedOperation, ...] = self._skipped
+        """The same operations with the reason each one is not a table."""
 
         self._client = httpx.Client(
             base_url=self._base_url,
@@ -655,7 +702,7 @@ class OpenApiAdapter:
                 ),
                 comment=f"{_READ_METHOD.upper()} {endpoint.path}",
             )
-            for endpoint in self._endpoints
+            for endpoint in self._spec_tables
         )
         return CatalogSnapshot(source=self._name, captured_at=self._clock(), tables=tables)
 
@@ -708,7 +755,7 @@ class OpenApiAdapter:
             raise OpenApiError(invalid_spec(field="request.params", reason="it must be an object"))
         return table_name, {str(name): value for name, value in raw.items()}
 
-    def _validate_params(self, endpoint: _Endpoint, params: Mapping[str, Any]) -> None:
+    def _validate_params(self, endpoint: SpecEndpoint, params: Mapping[str, Any]) -> None:
         """Refuse a parameter the spec does not declare: only declared filters reach the source."""
         declared = {param.name for param in endpoint.params if param.location == "query"}
         unknown = sorted(name for name in params if name not in declared)
@@ -723,7 +770,7 @@ class OpenApiAdapter:
 
     # --- the fetch ----------------------------------------------------------------------------
 
-    def _fetch(self, endpoint: _Endpoint, params: Mapping[str, Any], limits: Limits) -> pa.Table:
+    def _fetch(self, endpoint: SpecEndpoint, params: Mapping[str, Any], limits: Limits) -> pa.Table:
         """Page through the endpoint until the rows end, the cap is hit or the deadline passes."""
         deadline = self._monotonic() + limits.timeout_s
         query: dict[str, Any] = dict(params)
@@ -754,7 +801,7 @@ class OpenApiAdapter:
 
     def _next_page(
         self,
-        endpoint: _Endpoint,
+        endpoint: SpecEndpoint,
         page: Sequence[Any],
         body: Mapping[str, Any],
         query: Mapping[str, Any],
@@ -869,7 +916,7 @@ class OpenApiAdapter:
 
     # --- rows -> Arrow ------------------------------------------------------------------------
 
-    def _table(self, endpoint: _Endpoint, rows: Sequence[Mapping[str, Any]]) -> pa.Table:
+    def _table(self, endpoint: SpecEndpoint, rows: Sequence[Mapping[str, Any]]) -> pa.Table:
         """Build the batch's Arrow table from JSON objects, using the spec's declared types."""
         arrays: dict[str, pa.Array] = {}
         for column in endpoint.columns:
@@ -940,7 +987,7 @@ def _coerce(value: Any, normalized: NormalizedType) -> Any:
     return value
 
 
-def _read_spec(config: SourceConfig | None) -> dict[str, Any]:
+def read_spec(config: SourceConfig | None) -> dict[str, Any]:
     """Read the spec named by an OpenAPI source's config (YAML or JSON, one parser).
 
     YAML 1.2 is a superset of JSON, so :mod:`ruamel.yaml` reads both; no second format-specific

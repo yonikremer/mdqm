@@ -36,6 +36,7 @@ from mdqm.config.quiet import QuietWindow
 from mdqm.config.secrets import check_secret_name
 from mdqm.config.settings import AuthSettings, LoadLimits, RateLimitSettings
 from mdqm.models.base import MDQMModel, UtcDatetime
+from mdqm.models.catalog import Column, Index
 from mdqm.models.partitioning import Partitioning
 from mdqm.semantic.durations import Duration
 from mdqm.semantic.text import normalize_label
@@ -305,7 +306,13 @@ class CacheOverride(MDQMModel):
 
 
 class TableSemantics(MDQMModel):
-    """Everything the planner, the linter and the cache need to know about one table."""
+    """Everything the planner, the linter and the cache need to know about one table.
+
+    ``columns`` and ``indexes`` are the *skeleton* a deterministic stage writes: for a database the
+    catalog, for an OpenAPI source one GET collection with its item properties as columns and its
+    query parameters as filterable indexes (stage D4). They are carried through the catalog models
+    rather than copied, so a skeleton and a probe cannot disagree about what a column is.
+    """
 
     key: tuple[str, ...] = ()
     default_window: Duration | None = None
@@ -313,6 +320,8 @@ class TableSemantics(MDQMModel):
     time_columns: Frozen[TimeColumn] = Field(default_factory=lambda: FrozenMapping())
     mutability: MutabilityDecl | None = None
     cache: CacheOverride | None = None
+    columns: tuple[Column, ...] = ()
+    indexes: tuple[Index, ...] = ()
     provenance: Provenance | None = None
 
     @model_validator(mode="before")

@@ -1,0 +1,76 @@
+# Written by mdqm's bootstrap pipeline. Do not edit: every run replaces this file.
+sources:
+  rates_api:
+    adapter: openapi
+    auth:
+      header: X-API-Key
+      secret: rates_api_key
+    provenance:
+      detected_by: stage D4 (openapi spec)
+      evidence:
+      - 'the document declares an apiKey header: X-API-Key'
+      - the source config sends its key in 'X-API-Key'
+      - 'rate-limit headers: Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining,
+        X-RateLimit-Reset'
+tables:
+  rates_api.rates:
+    columns:
+    - name: currency
+      native_type: string
+      normalized_type: string
+      nullable: true
+      ordinal: 1
+    - name: date
+      native_type: date
+      normalized_type: date
+      nullable: true
+      ordinal: 2
+    - name: rate
+      native_type: number
+      normalized_type: float
+      nullable: true
+      ordinal: 3
+    - name: source
+      native_type: string
+      normalized_type: string
+      nullable: true
+      ordinal: 4
+    indexes:
+    - name: currency
+      columns:
+      - currency
+      unique: false
+      primary: false
+      index_type: query_param
+    - name: cursor
+      columns:
+      - cursor
+      unique: false
+      primary: false
+      index_type: query_param
+    - name: date_from
+      columns:
+      - date_from
+      unique: false
+      primary: false
+      index_type: query_param
+    - name: date_to
+      columns:
+      - date_to
+      unique: false
+      primary: false
+      index_type: query_param
+    - name: limit
+      columns:
+      - limit
+      unique: false
+      primary: false
+      index_type: query_param
+    provenance:
+      detected_by: stage D4 (openapi spec)
+      evidence:
+      - GET /rates
+      - "paging: cursor via 'cursor'"
+      - "page size parameter: 'limit'"
+      - rows are the response's 'items' array
+      - the next-page token is the response's 'next_cursor'
