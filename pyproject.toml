@@ -42,6 +42,7 @@ all = ["mdqm[pg,oracle,mssql,dev]"]
 # Adapters register here. Third parties add their own with the same group name.
 [project.entry-points."mdqm.adapters"]
 # postgresql = "mdqm.adapters.postgresql:PostgresAdapter"   (added by task A02)
+openapi = "mdqm.adapters.openapi:OpenApiAdapter"
 
 [project.scripts]
 mdqm = "mdqm.cli:app"
