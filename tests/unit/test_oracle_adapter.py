@@ -430,7 +430,7 @@ def test_connection_parts_builds_an_easy_connect_dsn() -> None:
     )
     assert dsn == "db.internal:1521/MDQM"
     assert user == "MDQM_RO"
-    assert password == "throwaway-dev-password"
+    assert password == "throwaway-dev-password"  # pragma: allowlist secret
 
 
 def test_connection_parts_accepts_a_whole_dsn() -> None:

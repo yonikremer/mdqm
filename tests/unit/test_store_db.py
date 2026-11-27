@@ -342,7 +342,7 @@ def test_writes_from_many_threads_all_land(tmp_path: Path) -> None:
                         "VALUES (?, ?, '2026-01-01T00:00:00+00:00')",
                         (f"k{worker_id}-{index}", "v"),
                     )
-        except BaseException as exc:  # noqa: BLE001 - reported below, never swallowed
+        except BaseException as exc:
             failures.append(exc)
 
     try:

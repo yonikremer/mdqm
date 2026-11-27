@@ -44,7 +44,7 @@ def acquire_lock(timeout=900):
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.close(fd)
-            return lock
+            return lock  # noqa: TRY300 - the lock is the success path of the try
         except FileExistsError:
             if time.time() - lock.stat().st_mtime > 1800:  # stale lock
                 lock.unlink(missing_ok=True)

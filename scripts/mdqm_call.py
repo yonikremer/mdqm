@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     token = read_token(args.tokens)
     try:
         return asyncio.run(run(args.url, token, args.action, args.name, args.arguments))
-    except Exception as exc:  # noqa: BLE001 - a CLI: report, do not traceback at the operator
+    except Exception as exc:
         print(f"mdqm_call: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 

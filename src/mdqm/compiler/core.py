@@ -541,6 +541,7 @@ class _Compilation:
                 expected=sorted(measure.sources),
             )
         )
+        return None
 
     def _column(self, name: str, path: str) -> ColumnRef:
         """Resolve a column, or explain which approved join would make it reachable."""
@@ -549,6 +550,7 @@ class _Compilation:
             return resolved
         hint = self._join_hint(name)
         self._fail(hint if hint is not None else resolved)
+        return None
 
     def _join_hint(self, name: str) -> ErrorResponse | None:
         """The ``JOIN_NOT_APPROVED`` rejection when one approved join would resolve ``name``.
@@ -696,6 +698,7 @@ class _Compilation:
         if isinstance(value, (str, int, float, bool)):
             return _value_literal(value)
         self._fail(invalid_spec(field=f"{path}.value", reason="the value is not a JSON scalar"))
+        return None
 
     # -- statement -----------------------------------------------------------------------
 

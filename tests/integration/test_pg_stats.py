@@ -411,9 +411,7 @@ def test_mutability_counters_move_when_rows_change(
             )
         )
         cur.execute(
-            as_query(
-                f"UPDATE public.{mutable_table} SET note = 'x' WHERE id <= {UPDATED_ROWS}"
-            )
+            as_query(f"UPDATE public.{mutable_table} SET note = 'x' WHERE id <= {UPDATED_ROWS}")
         )
         cur.execute(as_query(f"DELETE FROM public.{mutable_table} WHERE id = 4"))
         conn.commit()

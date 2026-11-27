@@ -67,6 +67,7 @@ Usage::
 from __future__ import annotations
 
 import contextlib
+import itertools
 import logging
 import re
 import threading
@@ -1451,7 +1452,7 @@ def granularity(boundaries: Sequence[datetime]) -> PartitionGranularity | None:
     """
     if len(boundaries) < 2:
         return None
-    steps = list(zip(boundaries, boundaries[1:], strict=False))
+    steps = list(itertools.pairwise(boundaries))
     months = {(b.year - a.year) * 12 + (b.month - a.month) for a, b in steps}
     if months == {1} and all(a.day == 1 and b.day == 1 for a, b in steps):
         return PartitionGranularity.MONTH

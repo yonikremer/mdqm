@@ -8,6 +8,7 @@ fresh venv) are the script's job, run by hand or in the deployment pipeline.
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import subprocess
 import sys
 import zipfile
@@ -244,7 +245,7 @@ def test_the_container_download_is_the_same_contract_plus_the_target_os(
     assert argv[argv.index("--platform") + 1] == "manylinux2014_x86_64"
     assert argv[argv.index("--abi") + 1] == "cp312"
     # Mounted, so the wheels land on the host: the wheelhouse and the requirement list.
-    mounts = [value for flag, value in zip(argv, argv[1:], strict=False) if flag == "--volume"]
+    mounts = [value for flag, value in itertools.pairwise(argv) if flag == "--volume"]
     assert any(mount.endswith(":/wheelhouse") for mount in mounts)
     assert any(mount.endswith(":/requirements.txt:ro") for mount in mounts)
     assert argv[argv.index("--dest") + 1] == "/wheelhouse"

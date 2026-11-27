@@ -1361,7 +1361,7 @@ def _build_tables(
                 fields=fields,
                 docs=sum(docs.get(member, 0) for member in members),
                 aliased=is_alias,
-                time_field=resolved_time if granularity is not None else resolved_time,
+                time_field=resolved_time,
                 granularity=granularity,
             )
         )

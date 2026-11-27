@@ -712,7 +712,7 @@ def from_guard(result: GuardOutcome) -> ErrorResponse | None:
     try:
         code = ErrorCode(raw.code)
     except ValueError:
-        _LOGGER.error("the guard used an error code outside the taxonomy: %s", _safe(raw.code))
+        _LOGGER.exception("the guard used an error code outside the taxonomy: %s", _safe(raw.code))
         return internal_error(correlation_id=_new_correlation_id())
     return _build(
         code,

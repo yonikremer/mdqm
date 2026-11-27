@@ -26,6 +26,11 @@ from ruamel.yaml import YAML
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = REPO_ROOT / "scripts"
 
+# Built from pieces on purpose: the test file must be clean to its own scanner.
+PRIVATE_KEY_HEAD = "-----BEGIN " + "RSA PRIVATE KEY-----"
+AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE"
+PASSWORD_LINE = 'password = "' + "correct-" + "horse-battery" + '"'
+
 
 def _load(name: str) -> ModuleType:
     """Import a script by path: `scripts/` is not a package."""
@@ -60,11 +65,11 @@ def _write(tmp_path: Path, name: str, text: str) -> Path:
 @pytest.mark.parametrize(
     ("content", "expected"),
     [
-        ('key = "-----BEGIN RSA PRIVATE KEY-----"', "private key block"),
-        ('aws = "AKIAIOSFODNN7EXAMPLE"', "AWS access key id"),
+        ('key = "' + PRIVATE_KEY_HEAD + '"', "private key block"),
+        ('aws = "' + AWS_KEY + '"', "AWS access key id"),
         ('token = "ghp_' + "a" * 36 + '"', "GitHub token"),
         ('auth = "Bearer ' + "b" * 30 + '"', "bearer token"),
-        ('password = "correct-horse-battery"', "assigned password"),
+        (PASSWORD_LINE, "assigned password"),
     ],
 )
 def test_a_credential_is_reported(
@@ -79,7 +84,7 @@ def test_a_credential_is_reported(
 @pytest.mark.parametrize(
     "content",
     [
-        'password = secrets.get(config.secret)   # reading, not committing',
+        "password = secrets.get(config.secret)   # reading, not committing",
         'password = "$MDQM_RO_PASSWORD"          # a shell reference',
         'password = "${MDQM_RO_PASSWORD}"',
         'note = "the password is in the vault"',
@@ -103,8 +108,7 @@ def test_the_allowlist_marker_works_on_the_line_and_above(
     above = _write(
         tmp_path,
         "above.md",
-        "# a fixture, not a secret  # pragma: allowlist secret\n"
-        'aws = "AKIAIOSFODNN7EXAMPLE"\n',
+        '# a fixture, not a secret  # pragma: allowlist secret\naws = "AKIAIOSFODNN7EXAMPLE"\n',
     )
     assert list(secrets_module.findings(inline)) == []
     assert list(secrets_module.findings(above)) == []
@@ -112,17 +116,15 @@ def test_the_allowlist_marker_works_on_the_line_and_above(
 
 def test_a_hit_never_echoes_the_value(secrets_module: ModuleType, tmp_path: Path) -> None:
     """The report goes to CI logs, so it must name the file and line only."""
-    secret = "AKIAIOSFODNN7EXAMPLE"
+    secret = AWS_KEY
     path = _write(tmp_path, "leak.py", f'aws = "{secret}"\n')
     hits = list(secrets_module.findings(path))
     assert hits and secret not in hits[0]
 
 
-def test_binary_and_large_files_are_skipped(
-    secrets_module: ModuleType, tmp_path: Path
-) -> None:
+def test_binary_and_large_files_are_skipped(secrets_module: ModuleType, tmp_path: Path) -> None:
     binary = tmp_path / "blob.parquet"
-    binary.write_bytes(b"-----BEGIN RSA PRIVATE KEY-----")
+    binary.write_bytes(PRIVATE_KEY_HEAD.encode())
     assert list(secrets_module.findings(binary)) == []
 
 
@@ -168,13 +170,19 @@ def test_every_hook_is_local_and_uses_the_project_interpreter() -> None:
     assert repos, "the config declares no hooks"
     assert all(repo.get("repo") == "local" for repo in repos), "a remote repo would need a network"
     entries = [hook["entry"] for repo in repos for hook in repo["hooks"]]
-    assert all("precommit_hook.py" in entry or entry.startswith("python scripts/") or "-m " in entry
-               for entry in entries), entries
+    assert all(
+        "precommit_hook.py" in entry or entry.startswith("python scripts/") or "-m " in entry
+        for entry in entries
+    ), entries
 
 
 def test_the_security_family_is_enabled() -> None:
     """`S` is flake8-bandit: the rules the owner asked for first."""
-    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    select_line = next(line for line in text.splitlines() if line.startswith("select = "))
-    for family in ('"S"', '"B"', '"RUF"'):
-        assert family in select_line, f"{family} is not enabled in {select_line}"
+    import tomllib
+
+    config = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    enabled = set(config["tool"]["ruff"]["lint"]["select"])
+    ignored = set(config["tool"]["ruff"]["lint"]["ignore"])
+    for family in ("S", "B", "RUF", "BLE", "TRY", "DTZ"):
+        assert family in enabled, f"{family} is not enabled ({sorted(enabled)})"
+        assert family not in ignored, f"{family} is enabled and ignored at once"

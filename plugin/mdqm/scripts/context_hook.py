@@ -220,7 +220,7 @@ def main() -> int:
     except (ValueError, KeyError) as exc:
         _warn("unexpected response from the server: " + type(exc).__name__)
         return 0
-    except Exception as exc:  # noqa: BLE001 - a hook must never block a prompt, whatever went wrong
+    except Exception as exc:
         _warn("unexpected failure: " + type(exc).__name__)
         return 0
     return 0

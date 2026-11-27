@@ -16,21 +16,32 @@ PH0, MVP, LATER = "0", "MVP", "later"
 T = []
 
 
-def task(id, title, phase, priority, deps, owns, description, acceptance, test, notes=""):
+def task(
+    id,  # noqa: A002 - the field is named `id` in tasks.json
+    title,
+    phase,
+    priority,
+    deps,
+    owns,
+    description,
+    acceptance,
+    test,
+    notes="",
+):
     T.append(
-        dict(
-            id=id,
-            title=title,
-            lane=id[0],
-            phase=phase,
-            priority=priority,
-            depends_on=deps,
-            owns=owns,
-            description=description,
-            acceptance=acceptance,
-            test=test,
-            notes=notes,
-        )
+        {
+            "id": id,
+            "title": title,
+            "lane": id[0],
+            "phase": phase,
+            "priority": priority,
+            "depends_on": deps,
+            "owns": owns,
+            "description": description,
+            "acceptance": acceptance,
+            "test": test,
+            "notes": notes,
+        }
     )
 
 

@@ -253,8 +253,7 @@ def test_every_indexed_entity_kind_is_present(store: Store) -> None:
     """The task's list: tables, columns, measures, values, approved joins, approved examples."""
     build(store)
     kinds = {
-        str(row[0])
-        for row in store.connect().execute(f"SELECT DISTINCT kind FROM {DOC_TABLE}")
+        str(row[0]) for row in store.connect().execute(f"SELECT DISTINCT kind FROM {DOC_TABLE}")
     }
     assert kinds == {kind.value for kind in DocKind}
 

@@ -465,7 +465,7 @@ def test_a_statement_from_another_user_cannot_reach_the_agent() -> None:
     foreign = "SELECT cust_id, credit_limit FROM crm.customers WHERE name = 'dana' AND limit_k > 42"
     try:
         try:
-            raise ValueError(f"replay failed: {foreign}")
+            raise ValueError(f"replay failed: {foreign}")  # noqa: TRY301 - the point
         except ValueError as cause:
             raise RuntimeError(
                 f"wrap {foreign}\nTraceback (most recent call last): File x"
@@ -644,8 +644,10 @@ def test_a_guard_code_outside_the_taxonomy_becomes_internal_error(
     @dataclass(frozen=True)
     class _Renamed:
         ok: bool = False
-        error: ErrorResponse | None = ErrorResponse(
-            code="WRITE_BLOCKED_LEGACY", problem="blocked", fix="do not do that"
+        error: ErrorResponse | None = field(
+            default_factory=lambda: ErrorResponse(
+                code="WRITE_BLOCKED_LEGACY", problem="blocked", fix="do not do that"
+            )
         )
 
     with caplog.at_level(logging.ERROR, logger="mdqm.errors"):

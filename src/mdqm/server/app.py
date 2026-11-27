@@ -216,8 +216,8 @@ def serve(*, host: str, port: int, public_url: str | None = None) -> None:
         # visible at startup instead of on the first agent's question.
         try:
             configure_query_services(query_services(settings, context_source.layer))
-        except WiringError as exc:
-            logger.error("query pipeline not wired: %s", exc)
+        except WiringError:
+            logger.exception("query pipeline not wired")
     server = create_server(
         verifier=verifier,
         public_url=base_url,

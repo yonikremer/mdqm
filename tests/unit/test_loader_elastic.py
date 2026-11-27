@@ -401,9 +401,9 @@ def test_search_view_uses_the_search_account_not_the_admin_one() -> None:
 
     target = EsTarget(
         admin_user="admin",
-        admin_password="admin-secret",
+        admin_password="admin-secret",  # pragma: allowlist secret
         search_user="searcher",
-        search_password="search-secret",
+        search_password="search-secret",  # pragma: allowlist secret
     )
     view = EsSearchView(
         target.base_url, ALIAS, auth=target.search_auth, transport=httpx.MockTransport(handler)

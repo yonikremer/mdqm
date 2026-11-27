@@ -248,7 +248,7 @@ def evaluate(*, target: Any, adapters: Mapping[str, Any], layer: Any, world: Any
             try:
                 spec_actual = run_spec_path(question)
                 spec_result = compare(question, spec_actual)
-            except Exception as exc:  # noqa: BLE001 - one question must not stop the run
+            except Exception as exc:
                 spec_result, detail = "ERROR", f"{type(exc).__name__}: {exc}"
         if question.answer.get("kind") == "error":
             # The oracle answers "what plain SQL would do"; for these questions the product's job is
@@ -259,7 +259,7 @@ def evaluate(*, target: Any, adapters: Mapping[str, Any], layer: Any, world: Any
             try:
                 oracle_actual = run_oracle_path(question, world=world)
                 oracle_result = compare(question, oracle_actual)
-            except Exception as exc:  # noqa: BLE001 - a source may not hold this table
+            except Exception as exc:
                 oracle_result, detail = "ERROR", f"{type(exc).__name__}: {exc}"
         report.verdicts.append(
             Verdict(

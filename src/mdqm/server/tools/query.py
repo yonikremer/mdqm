@@ -788,7 +788,7 @@ def _refused(
         try:
             moment = exec_ts if exec_ts is not None else services.now()
             frozen = rewrite_sql(original_sql, dialect=dialect, exec_ts=moment).sql
-        except Exception:  # noqa: BLE001 - unparseable text has no history payload, only an audit row
+        except Exception:
             frozen = None
     _record_history(
         services,

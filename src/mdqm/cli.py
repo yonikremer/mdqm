@@ -216,9 +216,10 @@ def _resolve(queue: ReviewQueue, proposal: str) -> str:
     """Accept a unique id prefix, so a human can type the 12 characters the digest shows."""
     try:
         queue.get(proposal)
-        return proposal
     except ReviewError:
         pass
+    else:
+        return proposal
     matches = [
         row.id for row in (*queue.pending(), *queue.decided()) if row.id.startswith(proposal)
     ]

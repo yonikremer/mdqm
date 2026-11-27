@@ -474,14 +474,14 @@ def _send(
         if smtp.username and password:
             client.login(smtp.username, password)
         client.send_message(message)
-    except Exception as exc:  # noqa: BLE001 - any failure degrades to the page, never raises
+    except Exception as exc:
         detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
         return _redact(detail, password)
     finally:
         if client is not None:
             try:
                 client.quit()
-            except Exception:  # noqa: BLE001 - a broken QUIT must not undo a sent message
+            except Exception:
                 logger.debug("digest: smtp quit failed", extra={"host": smtp.host})
     return None
 

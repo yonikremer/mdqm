@@ -75,7 +75,7 @@ def catalog_columns(adapters: Mapping[str, SourceAdapter]) -> dict[str, tuple[st
     for name, adapter in adapters.items():
         try:
             snapshot = adapter.extract_catalog()
-        except Exception as exc:  # noqa: BLE001 - a catalog failure must not stop the server
+        except Exception as exc:
             _log.warning(
                 "source %s: no catalog, so its tables cannot be compiled (%s: %s)",
                 name,

@@ -246,6 +246,57 @@ same three-layer read-only rule as Postgres, not a convenience.
 The `pg`, `oracle`, `mssql`, `es` and `api` profiles are unchanged and keep working exactly as
 before. `oss` does not retarget or remove any of them.
 
+## 8a. Pre-commit hooks: security, hidden bugs, quality
+
+`.pre-commit-config.yaml` holds six hooks. Every one is `repo: local`, so **nothing is fetched at hook
+time** and the same config works on the air-gapped target:
+
+| stage | hook | what it stops |
+|---|---|---|
+| commit | `ruff check --fix` | security (`S`, flake8-bandit), hidden bugs (`B`, `BLE`, `TRY`, `RUF`, `A`), timezone mistakes (`DTZ`), quality (`PERF`, `C4`, `PIE`, `RET`, `SIM`, `UP`) |
+| commit | `ruff format` | formatting drift |
+| commit | `check_configs.py` | a `pyproject.toml` or compose file that does not parse |
+| commit | `check_secrets.py` | a private key, cloud token, `Bearer` token or hardcoded password in the diff |
+| push | `mypy` | type errors in `src` (`--strict`) |
+| push | `pytest tests/unit` | a broken unit suite reaching a branch |
+
+Install once per clone, then run it by hand when you want the full gate:
+
+```
+python -m pip install -e ".[dev]"
+python -m pre_commit install --install-hooks
+python -m pre_commit run --all-files
+```
+
+Two details that matter:
+
+* **The hooks use the project interpreter.** `language: system` would run whatever `python` is on
+  `PATH` (on a dev box that is often the global one, and `ruamel` is then missing). Every entry goes
+  through `scripts/precommit_hook.py`, which resolves `.venv/Scripts/python.exe` (or `.venv/bin/python`)
+  and re-executes there.
+* **A secret is never echoed.** `check_secrets.py` reports `path:line` and the *kind* of credential, not
+  the value — the report ends up in CI logs. A fixture that exists to prove redaction carries
+  `# pragma: allowlist secret` on the line or the line above it, visibly, rather than being hidden in an
+  allowlist file.
+
+### What is enforced today, and what is ratcheted
+
+The rule families above are enabled. Five rules are deliberately ignored in `pyproject.toml`, each with
+the count measured when it was added, because fixing them is behaviour-visible work and not a
+one-line change:
+
+| rule | sites | why it is not fixed yet |
+|---|---|---|
+| `PERF401` | 39 | manual list comprehension; the loop is clearer where the body does more |
+| `BLE001` | 15 | blind `except Exception`; each site is deliberate and should be reviewed one by one |
+| `TRY004` | 12 | a type check should raise `TypeError`; changing it is caller-visible |
+| `RUF043` | 7 | `pytest.raises(match=...)` needs a regex, not a literal |
+| `DTZ001` | 56 | naive `datetime()`: 50 are fixed-instant test fixtures, 6 are in `src` |
+
+`TRY003` (490 sites) and `RUF001`-`RUF003` (73 sites) stay off: the first wants an exception class per
+message — a rewrite of every error path for no behavioural gain — and the second flags Hebrew text and
+typographic dashes as "ambiguous unicode". Enabling either would teach people to ignore the run.
+
 ## 8. Troubleshooting
 
 | Symptom | Cause and fix |

@@ -61,7 +61,7 @@ def _source_stages(settings: Settings, *, typer_echo: Callable[[str], None]) -> 
     for source in sources:
         try:
             adapters[source.name] = adapter_registry.create(source)
-        except Exception as exc:  # noqa: BLE001 - one bad source must not hide the others
+        except Exception as exc:
             typer_echo(f"source {source.name}: skipped ({exc})")
     if not adapters:
         return []

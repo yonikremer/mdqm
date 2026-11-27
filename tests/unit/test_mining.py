@@ -331,7 +331,7 @@ def test_join_edges(dialect: str, sql: str, expected: str) -> None:
     if expected == "no-join":
         assert facts.joins == ()
         return
-    kind, tables, columns, conversion = expected.split(":")
+    _kind, tables, columns, conversion = expected.split(":")
     left, right = tables.split(">")
     left_column, right_column = columns.split(">")
     assert [(edge.tables, edge.columns, edge.conversion) for edge in facts.joins] == [
@@ -693,9 +693,7 @@ def open_store(tmp_path: Path) -> Store:
 def stored_counts(store: Store) -> dict[str, tuple[int, int, tuple[str, ...]]]:
     rows = (
         store.connect()
-        .execute(
-            f"SELECT fingerprint, calls, statements, users FROM {MINED_QUERY_TABLE}"
-        )
+        .execute(f"SELECT fingerprint, calls, statements, users FROM {MINED_QUERY_TABLE}")
         .fetchall()
     )
     return {
@@ -808,10 +806,5 @@ def test_ingest_ignores_an_empty_batch(tmp_path: Path) -> None:
     assert report.queries == ()
     assert watermark(store, "crm") is None
     assert (
-        store.connect()
-        .execute(
-            f"SELECT COUNT(*) AS n FROM {WATERMARK_TABLE}"
-        )
-        .fetchone()["n"]
-        == 0
+        store.connect().execute(f"SELECT COUNT(*) AS n FROM {WATERMARK_TABLE}").fetchone()["n"] == 0
     )

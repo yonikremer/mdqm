@@ -179,8 +179,7 @@ def test_planted_orphans_and_hebrew_lookup_survive_the_load(seed: Seed) -> None:
     with connect_owner(seed.target) as conn, conn.cursor() as cur:
         placeholders = ", ".join(f":{i}" for i in range(1, len(orphan_clients) + 1))
         cur.execute(
-            "select count(*) from usage_events where client_no in "
-            f"({placeholders})",
+            f"select count(*) from usage_events where client_no in ({placeholders})",
             sorted(orphan_clients),
         )
         row = cur.fetchone()

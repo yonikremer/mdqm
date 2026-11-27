@@ -301,7 +301,7 @@ def guard(sql: str, dialect: str, policy: GuardPolicy | None = None) -> GuardRes
 
     try:
         parsed = sqlglot.parse(text, read=dialect, error_level=sqlglot.ErrorLevel.RAISE)
-    except Exception as exc:  # noqa: BLE001 - a guard must never raise at its caller
+    except Exception as exc:
         # sqlglot raises ParseError, TokenError, UnsupportedError and ValueError (unknown dialect).
         detail = str(exc).splitlines()[0][:200] if str(exc) else type(exc).__name__
         return _reject(

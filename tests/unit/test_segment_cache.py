@@ -562,9 +562,7 @@ def test_duckdb_memory_limit_and_spill_dir_are_applied(tmp_path: Path) -> None:
     store = SegmentCache(path=tmp_path / "segments.duckdb", memory_limit="64MB", spill_dir=spill)
     try:
         assert spill.is_dir(), "the spill directory is created"
-        configured = store._con.execute(
-            "SELECT current_setting('temp_directory')"
-        ).fetchall()
+        configured = store._con.execute("SELECT current_setting('temp_directory')").fetchall()
         assert Path(configured[0][0]).resolve() == spill.resolve()
         loaded = store._con.execute(
             "SELECT extension_name, install_mode FROM duckdb_extensions() WHERE loaded"

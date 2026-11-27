@@ -517,6 +517,7 @@ def best_conversion(
     return best, tuple(measured)
 
     best = max(measured, key=_conversion_rank)
+    return None
 
 
 def _stems(name: str) -> tuple[str, ...]:

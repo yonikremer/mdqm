@@ -439,7 +439,7 @@ def test_a_missing_secret_is_source_unavailable_naming_the_reference(api: MockAp
 
 def test_an_invalid_key_is_source_unavailable_and_never_leaks_the_value(api: MockApi) -> None:
     wrong = "a06-wrong-key"
-    adapter, bridge = build(
+    adapter, _bridge = build(
         api, secrets=EnvSecretProvider(environ={"MDQM_SECRET_RATES_API_KEY": wrong})
     )
     with pytest.raises(OpenApiUnavailable) as refused:

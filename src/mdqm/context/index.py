@@ -515,7 +515,7 @@ def _value_docs(name: str, value_map: ValueMap) -> Iterator[_Doc]:
             kind=DocKind.VALUE,
             ref=f"{name}={value}",
             title=value,
-            names=tuple([name, *columns, *codes]),
+            names=(name, *columns, *codes),
             labels=_union((value,), value_map.synonyms.get(value, ())),
             body=f"categorical value of {name}",
         )

@@ -14,7 +14,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
-from typing import Final
+from typing import ClassVar, Final
 
 import pyarrow as pa
 import pytest
@@ -125,9 +125,13 @@ class _AdvancingStream:
         self._clock = clock
         self._jump_to = jump_to
         self.cancelled = False
+        self.rows_returned = 0
+        self.bytes_returned = 0
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
         for index, batch in enumerate(self._inner):
+            self.rows_returned += batch.num_rows
+            self.bytes_returned += batch.nbytes
             yield batch
             if index == 0:
                 self._clock.jump(self._jump_to)
@@ -153,7 +157,7 @@ class HarnessSource:
     concurrency being measured is the governor's admission, not DuckDB's connection mutex.
     """
 
-    kind: str = "fake"
+    kind: ClassVar[str] = "fake"
 
     def __init__(
         self,
@@ -298,7 +302,7 @@ def test_fifty_concurrent_queries_never_exceed_per_source_concurrency() -> None:
                     source="fake", user=f"user{index}", fragment=_fragment(), limits=_limits()
                 )
             )
-        except BaseException as exc:  # noqa: BLE001 - a thread's failure must reach the test
+        except BaseException as exc:
             failures.append(exc)
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(50)]
