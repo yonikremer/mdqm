@@ -28,13 +28,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any, Final, Protocol, runtime_checkable
 
 import httpx
 import pyarrow as pa
 import pytest
 
-from mdqm.adapters.base import OPTIONAL_METHODS, NotSupported
+from mdqm.adapters.base import OPTIONAL_METHODS, ArrowStream, NotSupported
 from mdqm.adapters.elastic import (
     ESQL_PATH,
     ElasticAdapter,
@@ -153,6 +153,28 @@ def _month_range(moment: datetime, *, months: int = 1) -> dict[str, Any]:
     return {"range": {"start_time": {"gte": moment.isoformat(), "lt": end.isoformat()}}}
 
 
+@runtime_checkable
+class _EsRows(ArrowStream, Protocol):
+    """What the Elasticsearch rows stream reports beyond the batches.
+
+    ``ArrowStream`` -- the protocol ``execute`` declares -- carries batches and nothing
+    else, but these tests check the pruning and the caps against what the cluster itself
+    said about the request: the indices it touched and the total it matched.
+    """
+
+    index_target: str
+    touched_indices: tuple[str, ...]
+    total_hits: int
+    dropped_rows: int
+    esql: bool
+
+
+def _es_rows(stream: ArrowStream) -> _EsRows:
+    """Narrow one ``execute`` result to the provenance the adapter's stream also reports."""
+    assert isinstance(stream, _EsRows), "the Elasticsearch stream must report its provenance"
+    return stream
+
+
 def _rows(stream: Any) -> int:
     """The row count of one ``execute`` result."""
     return sum(batch.num_rows for batch in stream)
@@ -203,7 +225,7 @@ def test_one_month_filter_touches_exactly_one_index_and_matches_count(cluster: C
     """``_shards`` and the row count prove the pruning; ``_count`` proves the answer."""
     index = _filled(cluster.report)[0]
     expected = cluster.count(index)
-    stream = cluster.adapter.execute(_month_fragment(cluster.adapter, index), LIMITS)
+    stream = _es_rows(cluster.adapter.execute(_month_fragment(cluster.adapter, index), LIMITS))
     rows = _rows(stream)
 
     assert stream.touched_indices == (index,), (
@@ -222,7 +244,7 @@ def test_max_rows_truncates_exactly(cluster: Cluster) -> None:
     assert expected > 37, "pick a fixture month larger than the cap under test"
 
     tight = LIMITS.model_copy(update={"max_rows": 37})
-    stream = cluster.adapter.execute(_month_fragment(cluster.adapter, index), tight)
+    stream = _es_rows(cluster.adapter.execute(_month_fragment(cluster.adapter, index), tight))
 
     assert _rows(stream) == 37
     assert stream.dropped_rows == 0, "the cap is applied by the request size, not by trimming"
@@ -236,7 +258,9 @@ def test_request_against_the_alias_reads_across_monthly_indices(cluster: Cluster
     first, second = filled[0], filled[1]
     expected = cluster.count(first) + cluster.count(second)
 
-    stream = cluster.adapter.execute(_month_fragment(cluster.adapter, first, months=2), LIMITS)
+    stream = _es_rows(
+        cluster.adapter.execute(_month_fragment(cluster.adapter, first, months=2), LIMITS)
+    )
 
     assert stream.touched_indices == (first, second)
     assert _rows(stream) == expected == stream.total_hits
@@ -305,14 +329,14 @@ def test_esql_path_and_dsl_path_answer_the_same_count(cluster: Cluster) -> None:
     fragment = cluster.adapter.fragment(ALIAS, query=_month_range(month), esql=_esql_count(index))
 
     assert cluster.adapter.features().esql is True
-    esql_stream = cluster.adapter.execute(fragment, LIMITS)
+    esql_stream = _es_rows(cluster.adapter.execute(fragment, LIMITS))
     batches = [batch.to_pydict() for batch in esql_stream]
     assert esql_stream.esql is True
     assert batches[0]["n"] == [expected], "ES|QL must count the same documents"
 
     dsl_only = ElasticAdapter(_config(cluster.target), esql_support=False)
     try:
-        dsl_stream = dsl_only.execute(fragment, LIMITS)
+        dsl_stream = _es_rows(dsl_only.execute(fragment, LIMITS))
         assert dsl_stream.esql is False, "a cluster without ES|QL must fall back to the DSL"
         assert _rows(dsl_stream) == expected
     finally:
@@ -443,7 +467,7 @@ def test_the_one_post_the_transport_allows_is_forced_by_the_server(cluster: Clus
 def test_a_stream_is_an_arrow_stream_of_record_batches(cluster: Cluster) -> None:
     """The result is Arrow, with a schema known before the first batch arrives."""
     index = _filled(cluster.report)[0]
-    stream = cluster.adapter.execute(_month_fragment(cluster.adapter, index), LIMITS)
+    stream = _es_rows(cluster.adapter.execute(_month_fragment(cluster.adapter, index), LIMITS))
     assert isinstance(stream.schema, pa.Schema)
     assert stream.schema.names[:2] == ["client_id", "client_no"]
     batches = list(stream)
