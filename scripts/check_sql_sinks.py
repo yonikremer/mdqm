@@ -45,6 +45,14 @@ composition API, which quotes identifiers itself.
 
 FORMAT_METHODS = frozenset({"format", "join", "replace"})
 
+TRUSTED_ASSEMBLERS = frozenset({"mdqm/sql/execution.py"})
+"""The one module allowed to assemble statement text itself.
+
+It exposes `prepare`/`execute_one`/`wrapped`/`set_local`/`create_table_*`, validates every identifier
+and setting value, and is the boundary the rest of the code calls. Exempting it by path is deliberate
+and reviewable; exempting call sites is not, which is why this list has exactly one entry.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class Finding:
@@ -131,6 +139,8 @@ def check_source(path: Path, text: str) -> Iterator[Finding]:
     try:
         tree = ast.parse(text, filename=str(path))
     except SyntaxError:
+        return
+    if str(path).replace("\\", "/").endswith(tuple(TRUSTED_ASSEMBLERS)):
         return
     literals = _literal_strings(tree)
     for node in ast.walk(tree):
