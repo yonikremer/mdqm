@@ -11,6 +11,7 @@ import importlib.metadata
 import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
+from typing import ClassVar
 
 import pyarrow as pa
 import pytest
@@ -79,7 +80,7 @@ class Stream:
 class FakeAdapter:
     """A compliant in-memory adapter: same shape a real plugin must have."""
 
-    kind = "fake"
+    kind: ClassVar[str] = "fake"
 
     def __init__(
         self,
@@ -382,7 +383,7 @@ def test_create_validates_a_factory_function() -> None:
 
 def test_create_rejects_a_kind_mismatch() -> None:
     class WrongKind(FakeAdapter):
-        kind = "other"
+        kind: ClassVar[str] = "other"
 
     registry = AdapterRegistry()
     registry.register("fake", WrongKind)
