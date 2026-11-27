@@ -52,14 +52,14 @@ import re
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 import psycopg
 import psycopg_pool
 import pyarrow as pa
 from psycopg import conninfo, sql
 
-from mdqm.adapters.base import ArrowStream, NotSupported
+from mdqm.adapters.base import OPTIONAL_METHODS, ArrowStream, NotSupported
 from mdqm.config.secrets import SecretProvider
 from mdqm.config.settings import SourceConfig
 from mdqm.models import (
@@ -76,8 +76,11 @@ from mdqm.models import (
     PartitionGranularity,
     Partitioning,
     PartitionStrategy,
+    PlanSummary,
+    RawQuery,
     Table,
     TableKind,
+    TableStats,
 )
 
 __all__ = [
@@ -122,6 +125,47 @@ _NOT_YET_QUERIES: Final = "query-store mining is task A04 (adapters/postgresql_s
 _NOT_YET_STATS: Final = "mutability counters are task A04 (adapters/postgresql_stats.py)"
 
 #: ``options`` keys this adapter understands. Anything else is logged by name, never guessed at.
+#: Postgres keeps per-table change counters for free; that is what S05 classifies mutability from.
+_MUTABILITY_SQL: Final = """
+SELECT schemaname || '.' || relname AS table_name,
+       n_live_tup, n_tup_ins, n_tup_upd, n_tup_del, n_tup_hot_upd,
+       n_mod_since_analyze, last_analyze, last_autovacuum
+FROM pg_stat_user_tables
+ORDER BY 1
+"""
+
+
+def _partition_relation_names(cursor: psycopg.Cursor[Any]) -> list[str]:
+    """Every partition relation name in this database, sorted.
+
+    ``EXPLAIN`` names the partitions it scans, so the plan text is the source of truth; this list
+    is what those names are intersected with (a plan also names indexes, which are not partitions).
+    """
+    rows = cursor.execute(
+        """
+        SELECT c.relname
+        FROM pg_inherits i
+        JOIN pg_class c ON c.oid = i.inhrelid
+        ORDER BY c.relname
+        """
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def _as_int(value: object) -> int | None:
+    """``int`` or ``None``: counters are NULL on some versions and for never-used tables."""
+    if value is None or isinstance(value, bool):
+        return None
+    return int(value) if isinstance(value, int | float | str) else None
+
+
+def _as_float(value: object) -> float | None:
+    """``float`` or ``None``: a plan may omit a cost, and a missing number is not zero."""
+    if value is None or isinstance(value, bool):
+        return None
+    return float(value) if isinstance(value, int | float | str) else None
+
+
 _KNOWN_OPTIONS: Final = frozenset(
     {
         "dsn",
@@ -571,7 +615,7 @@ class PostgresAdapter:
     ``application_name = mdqm:<user>``, which is how a DBA sees whose query is on the primary.
     """
 
-    kind: Final = "postgresql"
+    kind: ClassVar[str] = "postgresql"
 
     def __init__(
         self,
@@ -604,7 +648,7 @@ class PostgresAdapter:
         self._connect_wait_s = float(self._statement_timeout_ms) / 1000.0
         self._clock = clock or (lambda: datetime.now(UTC))
         self._monotonic = monotonic or time.monotonic
-        self._pool: psycopg_pool.ConnectionPool | None = None
+        self._pool: psycopg_pool.ConnectionPool[psycopg.Connection[Any]] | None = None
         self._cursor_seq = 0
 
     def __repr__(self) -> str:
@@ -628,7 +672,7 @@ class PostgresAdapter:
     def pool(self) -> psycopg_pool.ConnectionPool:
         """The connection pool, opened on first access."""
         if self._pool is None:
-            pool = psycopg_pool.ConnectionPool(
+            pool = psycopg_pool.ConnectionPool[psycopg.Connection[Any]](
                 self._conninfo,
                 min_size=0,
                 max_size=self._pool_size,
@@ -798,6 +842,72 @@ class PostgresAdapter:
         return CatalogSnapshot(source=self._source, captured_at=self._clock(), tables=tuple(tables))
 
     # --- SourceAdapter: execute / cancel -------------------------------------------------
+
+    def explain(self, fragment: Fragment) -> PlanSummary:
+        """The engine's own plan for ``fragment``, and how many partitions it would scan.
+
+        ``pruning_proof`` is deliberately left ``UNKNOWN``: whether a scan is *acceptable* depends
+        on the spec's intended window, which the adapter cannot see. The planner (C08) and A03 turn
+        these counts into a verdict; overstating it here would be the adapter claiming a promise
+        that belongs to someone else.
+        """
+        text = fragment.sql
+        if text is None:
+            raise NotSupported(OPTIONAL_METHODS["explain"], "this fragment carries no SQL")
+        with self._connection() as connection, connection.cursor() as cur:
+            cur.execute(sql.SQL("EXPLAIN (FORMAT JSON) " + text))
+            row = cur.fetchone()
+            document = row[0] if row else None
+            plan = document[0]["Plan"] if document else {}
+            raw = json.dumps(document, ensure_ascii=False) if document is not None else None
+            partitions = _partition_relation_names(cur)
+
+        touched = sorted(name for name in partitions if f'"{name}"' in (raw or ""))
+        indexes = tuple(re.findall(r'"Index Name": "([^"]+)"', raw or ""))
+        total = len(partitions)
+        return PlanSummary(
+            partitions_scanned=len(touched) if total else None,
+            partitions_total=total or None,
+            uses_index=bool(indexes),
+            indexes_used=indexes,
+            est_rows=_as_float(plan.get("Plan Rows")),
+            est_cost=_as_float(plan.get("Total Cost")),
+            raw=raw,
+        )
+
+    def mutability_stats(self) -> list[TableStats]:
+        """Change counters per table from ``pg_stat_user_tables``, which Postgres keeps cheaply.
+
+        These are the numbers the bootstrap pipeline needs to classify a table as append-only or
+        ``mutable_critical`` (S05). They are counters, not deltas: two readings give the change.
+        """
+        with self._connection() as connection, connection.cursor() as cur:
+            cur.execute(_MUTABILITY_SQL)
+            rows = cur.fetchall()
+        captured_at = self._clock()
+        stats: list[TableStats] = []
+        for row in rows:
+            stats.append(
+                TableStats(
+                    source=self._source,
+                    table=str(row[0]),
+                    captured_at=captured_at,
+                    row_estimate=_as_int(row[1]),
+                    rows_inserted=_as_int(row[2]),
+                    rows_updated=_as_int(row[3]),
+                    rows_deleted=_as_int(row[4]),
+                    hot_updates=_as_int(row[5]),
+                    rows_modified_since_analyze=_as_int(row[6]),
+                    last_analyze=row[7],
+                    last_autovacuum=row[8],
+                )
+            )
+        return stats
+
+    def mine_queries(self, since: datetime) -> Iterator[RawQuery]:
+        """Not this task: reading ``pg_stat_statements`` is A04's mining source."""
+        capability = OPTIONAL_METHODS["mine_queries"]
+        raise NotSupported(capability, "pg_stat_statements mining is task A04, not built yet")
 
     def execute(self, fragment: Fragment, limits: Limits) -> ArrowStream:
         """Run one compiled fragment on a server-side cursor and stream it as Arrow batches.
