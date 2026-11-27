@@ -311,6 +311,11 @@ services:
       - server-data:/data
       - server-cache:/cache
       - ./docker/server:/run/secrets:ro
+      # A curated semantic layer. Without one the server starts and answers
+      # NOT_SUPPORTED with a
+      # fix (a fresh install has no facts yet); the example layer makes it
+      # usable immediately.
+      - ./examples:/semantic/curated:ro
     healthcheck:
       test:
         - CMD

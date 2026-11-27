@@ -36,7 +36,7 @@ from mdqm.server.context_endpoint import (
     answer_context,
     context_source_from_settings,
 )
-from mdqm.server.tools import register_tools
+from mdqm.server.tools import FindDataServices, configure_find_data, register_tools
 
 __all__ = [
     "DEFAULT_PUBLIC_URL",
@@ -142,6 +142,18 @@ def create_server(
         ),
     )
     register_tools(server)
+    # The tools and the /context route must answer from the SAME semantic layer: an agent whose
+    # hook got a Context Pack and whose `find_data` then says "no dictionary is loaded" has been
+    # told two different things by the same server. Wiring it here makes that impossible.
+    if context_source is not None:
+        configure_find_data(
+            FindDataServices(
+                layer=context_source.layer,
+                index=context_source.index,
+                examples=tuple(context_source.examples),
+                budget_tokens=context_source.budget_tokens,
+            )
+        )
 
     # `custom_route` has no return annotation in the SDK, so mypy cannot type the decorator.
     @server.custom_route("/healthz", methods=["GET"])  # type: ignore[untyped-decorator]
