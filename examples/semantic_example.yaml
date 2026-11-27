@@ -37,6 +37,12 @@ measures:
       erp.customers.limit_k:           { normalize: "{col} * 10" }
     provenance: { detected_by: pipeline/D8, match_rate: 0.998, approved_by: data-team }
 
+  usage_units:                        # the usage measure: units recorded per event
+    canonical: {}                     # no rounding: a unit count is exact, so nothing to declare
+    sources:
+      billing.usage_events.units:     { normalize: "{col}" }
+    provenance: { detected_by: pipeline/D1+D2, evidence: "identity: the catalog declares units" }
+
 tables:
   billing.usage_events:
     key: [event_id]
