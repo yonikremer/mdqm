@@ -147,12 +147,20 @@ def run_oracle_path(question: Question, *, target: Any, database: str) -> Mappin
 
     if not question.oracle_sql:
         return {"kind": "skipped", "problem": "no oracle SQL in the question set"}
+    # E01's oracle SQL is written schema-per-source (`billing.usage_events`), which describes one
+    # database with a schema per source. The D03 layout is one database per source with every table in
+    # `public`, so the qualifier is rewritten for the database this leg connects to. Recorded rather
+    # than hidden: an oracle copied verbatim cannot run here, and pretending otherwise would be a
+    # silent mismatch instead of a visible one.
+    adapted = question.oracle_sql
+    for source_prefix in ("crm", "billing", "erp"):
+        adapted = adapted.replace(f"{source_prefix}.", "public.")
     connection = psycopg.connect(target.dsn(database, read_only=True))
     with connection, connection.cursor() as cur:
         # E01's own constant SQL; psycopg types the parameter as LiteralString, which a value read
         # from the question set can never be. No user input reaches this line.
         cur.execute(
-            question.oracle_sql  # pyright: ignore[reportArgumentType, reportCallIssue]
+            adapted  # pyright: ignore[reportArgumentType, reportCallIssue]
         )
         names = [column.name for column in cur.description or ()]
         rows = [dict(zip(names, row, strict=False)) for row in cur.fetchall()]

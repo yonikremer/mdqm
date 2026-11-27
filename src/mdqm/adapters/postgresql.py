@@ -852,8 +852,12 @@ class PostgresAdapter:
         with self._connection() as connection, connection.cursor() as cur:
             # `text` is a fragment the compiler built through the AST and the guard inspected;
             # it is SQL, not a value, so it cannot be a bind parameter. Marked, not hidden.
+            # The fragment's bound values must travel with its text: explaining a parameterised
+            # statement without them fails with "query has N placeholders but 0 parameters", which is
+            # how a cross-source query used to end in INTERNAL_ERROR before it ever ran.
             cur.execute(  # pyright: ignore[reportArgumentType] - SQL, not a value: we authored it
-                sql.SQL("EXPLAIN (FORMAT JSON) " + text)  # nosemgrep: python-sql-injection  # pyright: ignore[reportArgumentType]
+                sql.SQL("EXPLAIN (FORMAT JSON) " + text),  # nosemgrep: python-sql-injection
+                fragment.params or None,
             )
             row = cur.fetchone()
             document = row[0] if row else None
