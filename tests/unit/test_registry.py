@@ -7,6 +7,7 @@ the broken ones prove the conformance kit actually fails instead of rubber-stamp
 
 from __future__ import annotations
 
+import importlib.metadata
 import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
@@ -249,8 +250,12 @@ def registry_of(
 
 def test_discovery_uses_the_mdq_adapters_entry_point_group() -> None:
     assert ADAPTER_ENTRY_POINT_GROUP == "mdqm.adapters"
-    # No adapter distribution is installed for mdqm itself, so real discovery is empty but works.
-    assert AdapterRegistry().discover() == ()
+    # mdqm itself now declares its adapters in that group (pyproject ``[project.entry-points]``), so
+    # real discovery is no longer empty: it must find exactly that group's entry points, no others.
+    declared = {
+        entry.name for entry in importlib.metadata.entry_points(group=ADAPTER_ENTRY_POINT_GROUP)
+    }
+    assert set(AdapterRegistry().discover()) == declared
 
 
 def test_discover_registers_entry_points() -> None:
