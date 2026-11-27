@@ -23,3 +23,5 @@ wheelhouse/*
 docker/server/*
 !docker/server/tokens.example.json
 /bench/
+/.q.json
+/.h.txt
