@@ -13,11 +13,14 @@ follows :mod:`mdqm.adapters.postgresql` and says where the engine differs:
   prints Oracle's own error for each layer: ``ORA-41900`` (missing privilege) for a read-only
   account, ``ORA-01456`` (write inside a READ ONLY transaction) for a user that *could* write.
 * **Streaming with two real interrupts.** A cursor is fetched in ``arraysize`` batches, so
-  ``Limits.max_rows``/``max_bytes`` stop the scan mid-flight, and the deadline is enforced twice:
-  ``Connection.call_timeout`` (the *server* gets told to abort; ``DPY-4024``) and the client's own
-  clock between batches. :meth:`OracleAdapter.cancel` calls ``Connection.cancel()``, which makes
-  Oracle raise ``ORA-01013`` in the fetching thread. Both leave the connection reusable, which the
-  integration test checks by querying again on the same session.
+  ``Limits.max_rows``/``max_bytes`` stop the scan mid-flight, and the deadline is enforced from both
+  sides: a watchdog calls ``Connection.cancel()`` at ``Limits.timeout_s`` (Oracle answers
+  ``ORA-01013`` and the session survives) and the client clock is checked between batches.
+  ``Connection.call_timeout`` is only a generous backstop, never the deadline itself: measured on
+  oracledb 26.2.0, when ``call_timeout`` fires the driver has to drain the response, and a slow
+  server makes *that* drain time out, which ends in ``DPY-4011`` ("the database or network closed
+  the connection") and a dead session -- the opposite of a clean deadline. ``cancel()`` leaves the
+  connection reusable, which the integration test proves by querying again on the same pool.
 * **Deterministic time.** ``exec_ts`` arrives inside the fragment and is never substituted here.
   ``ALTER SESSION SET TIME_ZONE = 'UTC'`` makes a naive literal unambiguous. Oracle's ``TIMESTAMP``
   has no zone; the stored values are naive UTC (D05 documents why ``WITH TIME ZONE`` is not an
@@ -55,6 +58,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
@@ -113,8 +117,13 @@ DEFAULT_BATCH_SIZE: Final = 1024
 DEFAULT_POOL_SIZE: Final = 4
 
 #: Safety net for a statement that reaches Oracle without :class:`~mdqm.models.Limits` (a probe, a
-#: catalog read). Every ``execute`` narrows it to ``Limits.timeout_s``.
+#: catalog read).
 DEFAULT_CALL_TIMEOUT_MS: Final = 60_000
+
+#: How far beyond ``Limits.timeout_s`` the driver's own ``call_timeout`` sits. The deadline is
+#: enforced by cancelling the statement (see :class:`_Deadline`); this is only here so a call that
+#: never returns cannot pin a pooled session for ever.
+CALL_TIMEOUT_BACKSTOP_MS: Final = 5_000
 
 #: Oracle's well-known listener port. The host and the service are the organisation's facts and
 #: have no default; a wrong guess there would connect to the wrong database.
@@ -131,6 +140,10 @@ _CANCELLED: Final = 1013
 #: ``DPY-4024``: oracledb's ``Connection.call_timeout`` fired. Thin mode reports it with code 0,
 #: so the message is the only identification (verified on oracledb 26.2.0).
 _CALL_TIMEOUT_MARKER: Final = "DPY-4024"
+
+#: ``DPY-4011``: the driver lost the connection. It happens when ``call_timeout`` fires and draining
+#: the response times out in turn, so it only counts as a deadline once the deadline passed.
+_CONNECTION_LOST_MARKER: Final = "DPY-4011"
 
 _KNOWN_OPTIONS: Final = frozenset(
     {
@@ -478,6 +491,43 @@ _MUTABILITY_UNSUPPORTED: Final = (
 )
 
 
+class _Deadline:
+    """The deadline of one execution: a watchdog that cancels the statement, plus its flag.
+
+    ``Connection.cancel()`` is the interrupt this driver implements cleanly (``ORA-01013``, session
+    reusable); ``call_timeout`` is left as a backstop several seconds beyond the deadline. The flag
+    is what tells the error translation that a cancellation came from the deadline rather than from
+    a caller who asked for it.
+    """
+
+    def __init__(
+        self, connection: oracledb.Connection, timeout_s: float, interrupt: Callable[[], None]
+    ) -> None:
+        self.fired = False
+        self._interrupt = interrupt
+        self._timer = threading.Timer(timeout_s, self._fire)
+        self._timer.daemon = True
+
+    def arm(self) -> None:
+        """Start the watchdog; it fires once, ``timeout_s`` after this call."""
+        self._timer.start()
+
+    def _fire(self) -> None:
+        self.fired = True
+        with contextlib.suppress(oracledb.Error):
+            self._interrupt()
+
+    def cancel(self) -> None:
+        """Stop the watchdog, and break the statement if it is still running."""
+        self._timer.cancel()
+        with contextlib.suppress(oracledb.Error):
+            self._interrupt()
+
+    def disarm(self) -> None:
+        """Stop the watchdog only: the statement is finished, so there is nothing to break."""
+        self._timer.cancel()
+
+
 class OracleArrowStream:
     """The :class:`~mdqm.adapters.base.ArrowStream` an Oracle ``execute`` returns.
 
@@ -497,6 +547,7 @@ class OracleArrowStream:
         deadline: float,
         clock: Callable[[], float],
         release: Callable[[oracledb.Connection], None],
+        watchdog: _Deadline | None = None,
         default_timeout_ms: int = DEFAULT_CALL_TIMEOUT_MS,
         batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> None:
@@ -509,6 +560,7 @@ class OracleArrowStream:
         self._deadline = deadline
         self._clock = clock
         self._release = release
+        self._watchdog = watchdog
         self._default_timeout_ms = default_timeout_ms
         self._batch_size = batch_size
         self._closed = False
@@ -542,10 +594,23 @@ class OracleArrowStream:
             rows = self._cursor.fetchmany(self._batch_size)
             return [tuple(row) for row in rows]
         except oracledb.DatabaseError as exc:
-            raise _stream_error(exc, cancelled=self._cancelled, timeout_s=self._timeout_s) from exc
+            raise _stream_error(
+                exc,
+                cancelled=self._cancelled,
+                timed_out=self._fired(),
+                timeout_s=self._timeout_s,
+            ) from exc
+
+    def _fired(self) -> bool:
+        """True when the watchdog already reached the deadline for this execution."""
+        return self._watchdog is not None and self._watchdog.fired
 
     def _check_deadline(self) -> None:
-        if self._clock() > self._deadline:
+        if self._fired() or self._clock() > self._deadline:
+            # Stop the server too: we are not going to read the rest, and a primary database must
+            # not keep producing rows for a client that walked away.
+            if self._watchdog is not None:
+                self._watchdog.cancel()
             raise OracleTimeout(
                 f"the Oracle statement exceeded the {self._timeout_s}s timeout while streaming"
             )
@@ -580,6 +645,8 @@ class OracleArrowStream:
         if self._closed:
             return
         self._closed = True
+        if self._watchdog is not None:
+            self._watchdog.disarm()
         with contextlib.suppress(oracledb.Error):
             self._cursor.close()
         with contextlib.suppress(oracledb.Error):
@@ -703,9 +770,14 @@ class OracleAdapter:
         the rollback that ends whatever transaction the previous statement left open, then
         ``SET TRANSACTION READ ONLY`` for this one. Oracle has no session-wide read-only mode: the
         setting dies with the transaction, so it is re-issued here rather than assumed.
+
+        ``call_timeout`` is deliberately set *beyond* the deadline
+        (:data:`CALL_TIMEOUT_BACKSTOP_MS`): it is the last-resort breaker for a call that never
+        returns, not the deadline. :class:`_Deadline` says why it cannot be the deadline.
         """
-        deadline_ms = max(1, round(timeout_s * 1000))
-        connection.call_timeout = deadline_ms
+        connection.call_timeout = max(
+            self._call_timeout_ms, round(timeout_s * 1000) + CALL_TIMEOUT_BACKSTOP_MS
+        )
         with connection.cursor() as cur:
             cur.execute("ALTER SESSION SET TIME_ZONE = 'UTC'")
             cur.execute("SET TRANSACTION READ ONLY")
@@ -746,7 +818,8 @@ class OracleAdapter:
         """The server's own banner, shortened. A hidden version is ``None``, never an error."""
         for statement in (_VERSION_SQL, "SELECT version_full FROM product_component_version"):
             try:
-                cur.execute(statement)
+                # `statement` is one of the two module constants above, never a value.
+                cur.execute(statement)  # nosemgrep: python-sql-injection
                 row = cur.fetchone()
             except oracledb.DatabaseError:
                 continue
@@ -793,22 +866,22 @@ class OracleAdapter:
         :meth:`extract_partitions` reports them where the planner needs them, and the parent stays
         the only name an agent can choose.
         """
+        # Every statement below is a module-level constant: the catalogs take no parameter.
         with self._connection() as connection, connection.cursor() as cur:
-            cur.execute(_CATALOG_TABLES_SQL)
+            cur.execute(_CATALOG_TABLES_SQL)  # nosemgrep: python-sql-injection
             table_rows = cur.fetchall()
-            cur.execute(_CATALOG_VIEWS_SQL)
+            cur.execute(_CATALOG_VIEWS_SQL)  # nosemgrep: python-sql-injection
             view_rows = cur.fetchall()
-            cur.execute(_CATALOG_COLUMNS_SQL)
+            cur.execute(_CATALOG_COLUMNS_SQL)  # nosemgrep: python-sql-injection
             column_rows = cur.fetchall()
-            cur.execute(_CATALOG_INDEXES_SQL)
+            cur.execute(_CATALOG_INDEXES_SQL)  # nosemgrep: python-sql-injection
             index_rows = cur.fetchall()
-            cur.execute(_CATALOG_CONSTRAINTS_SQL)
+            cur.execute(_CATALOG_CONSTRAINTS_SQL)  # nosemgrep: python-sql-injection
             constraint_rows = cur.fetchall()
-            cur.execute(_CATALOG_CONSTRAINT_COLUMNS_SQL)
+            cur.execute(_CATALOG_CONSTRAINT_COLUMNS_SQL)  # nosemgrep: python-sql-injection
             constraint_column_rows = cur.fetchall()
-            partitioned = {
-                (str(row[0]), str(row[1])) for row in cur.execute(_PARTITIONED_TABLES_SQL)
-            }
+            cur.execute(_PARTITIONED_TABLES_SQL)  # nosemgrep: python-sql-injection
+            partitioned = {(str(row[0]), str(row[1])) for row in cur.fetchall()}
 
         columns: dict[tuple[str, str], list[Column]] = {}
         for row in column_rows:
@@ -1029,9 +1102,10 @@ class OracleAdapter:
         raw: str | None = None
         with self._connection() as connection, connection.cursor() as cur:
             try:
-                cur.execute(  # noqa: S608 - compiled SQL, not a value; binds stay binds
+                # `statement` is compiled-and-guarded SQL text, not a value; binds stay binds.
+                cur.execute(  # noqa: S608  # nosemgrep: python-sql-injection
                     f"EXPLAIN PLAN SET STATEMENT_ID = '{statement_id}' FOR {statement}",
-                    params or None,
+                    dict(params) if params else None,  # pyright: ignore[reportArgumentType]
                 )
             except oracledb.DatabaseError as exc:
                 if _is_no_privilege(exc):
@@ -1088,10 +1162,15 @@ class OracleAdapter:
             self._prepare(connection, limits.timeout_s)
             cursor = connection.cursor()
             cursor.arraysize = self._batch_size
+            watchdog = _Deadline(connection, limits.timeout_s, connection.cancel)
+            watchdog.arm()
             try:
                 cursor.execute(fragment.sql, dict(fragment.params) if fragment.params else None)
             except oracledb.DatabaseError as exc:
-                raise _stream_error(exc, cancelled=False, timeout_s=limits.timeout_s) from exc
+                watchdog.disarm()
+                raise _stream_error(
+                    exc, cancelled=False, timed_out=watchdog.fired, timeout_s=limits.timeout_s
+                ) from exc
             return OracleArrowStream(
                 connection=connection,
                 cursor=cursor,
@@ -1100,6 +1179,7 @@ class OracleAdapter:
                 deadline=self._monotonic() + limits.timeout_s,
                 clock=self._monotonic,
                 release=self._release,
+                watchdog=watchdog,
                 default_timeout_ms=self._call_timeout_ms,
                 batch_size=self._batch_size,
             )
@@ -1386,24 +1466,39 @@ def _as_bytes(value: object) -> bytes | None:
     if value is None or isinstance(value, bytes):
         return value
     if isinstance(value, oracledb.LOB):
-        return bytes(value.read())
+        data = value.read()
+        return data if isinstance(data, bytes) else str(data).encode("utf-8")
     if isinstance(value, bytearray | memoryview):
         return bytes(value)
     return str(value).encode("utf-8")
 
 
-def _stream_error(exc: oracledb.DatabaseError, *, cancelled: bool, timeout_s: float) -> Exception:
-    """Translate a driver error: a cancellation or a missed deadline, otherwise the raw error."""
+def _stream_error(
+    exc: oracledb.DatabaseError, *, cancelled: bool, timed_out: bool, timeout_s: float
+) -> Exception:
+    """Translate a driver error: a cancellation or a missed deadline, otherwise the raw error.
+
+    ``cancelled`` is a caller who asked for the cancellation (``OracleCancelled``); ``timed_out`` is
+    this execution's watchdog, which also cancels but means the deadline (``OracleTimeout``).
+    """
     code = _code(exc)
     message = _message(exc)
     if code == _CANCELLED:
         if cancelled:
             return OracleCancelled("the Oracle statement was cancelled by the caller")
         return OracleTimeout(
-            f"the Oracle statement was cancelled after the {timeout_s}s deadline: {message}"
+            f"the Oracle statement exceeded the {timeout_s}s timeout and was cancelled by the "
+            f"adapter: {message}"
         )
     if _CALL_TIMEOUT_MARKER in message:
         return OracleTimeout(f"the Oracle statement exceeded the {timeout_s}s timeout: {message}")
+    if _CONNECTION_LOST_MARKER in message and timed_out:
+        # The backstop call_timeout fired and the driver could not drain the response, so the
+        # session is gone. It is still a deadline, and saying so beats a raw driver error.
+        return OracleTimeout(
+            f"the Oracle statement exceeded the {timeout_s}s timeout and the connection was lost "
+            f"while recovering: {message}"
+        )
     return exc
 
 

@@ -38,6 +38,7 @@ import pytest
 from mdqm.adapters.base import OPTIONAL_METHODS, NotSupported
 from mdqm.adapters.oracle import (
     OracleAdapter,
+    OracleArrowStream,
     OracleCancelled,
     OracleConfigError,
     OracleTimeout,
@@ -76,11 +77,23 @@ SIMPLE_SQL: Final = "SELECT 1 AS one FROM dual"
 # A statement that burns server time without CPU or memory, so the 1 s deadline is the only
 # thing that can end it. `CONNECT BY` was the first attempt and is the wrong tool: at a level
 # big enough to outlast a second it runs out of memory (ORA-30009) before the timeout fires.
-SLOW_SQL: Final = "BEGIN DBMS_SESSION.SLEEP(5); END;"
-"""~2 s of pure server CPU, no table, no privilege: what a deadline needs to interrupt."""
+SLOW_SQL: Final = (
+    "WITH r(n) AS (SELECT 1 FROM dual UNION ALL SELECT n + 1 FROM r WHERE n < 2000000) "
+    "SELECT count(*) AS n FROM r"
+)
+"""Ten seconds of pure server CPU, no table and no privilege: what a deadline must interrupt.
 
-HUGE_SQL: Final = "SELECT a.client_no FROM MDQM_BILLING.accounts a, MDQM_BILLING.usage_events e"
-"""10 million rows: a stream that is still fetching when ``cancel`` arrives."""
+``CONNECT BY`` is not usable here: 2 million levels ran in 0.4 s once the plan was cached, and 5
+million hit ``ORA-30009`` (not enough memory), so it is neither slow nor reliable. ``DBMS_SESSION
+.SLEEP`` is not either: this read-only account may not execute it (``ORA-00904``, measured).
+"""
+
+HUGE_SQL: Final = (
+    "SELECT a.client_no, b.region FROM MDQM_BILLING.accounts a, "
+    "MDQM_BILLING.usage_events e, MDQM_BILLING.accounts b"
+)
+"""200 million rows (200 accounts x 5001 events x 200 accounts): a stream that is still fetching
+when ``cancel`` arrives, however fast the machine is."""
 
 LITERAL_SQL: Final = (
     "SELECT count(*) AS n FROM MDQM_BILLING.usage_events "
@@ -470,6 +483,7 @@ def test_max_bytes_stops_the_stream(adapter: OracleAdapter) -> None:
             pass
     finally:
         stream.close()
+    assert isinstance(stream, OracleArrowStream)
     assert stream.bytes_returned <= 256
     assert stream.rows_returned < 200, "the byte cap must stop the scan, not read everything"
 
@@ -479,24 +493,16 @@ def test_max_bytes_stops_the_stream(adapter: OracleAdapter) -> None:
 # --------------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Unverified on this Oracle Free instance: with a 1 s call_timeout the thin driver reports "
-        "DPY-4011 (connection closed) instead of DPY-4024, so the adapter raises a DatabaseError "
-        "and the connection is gone. Either the driver needs a different timeout knob or the "
-        "adapter must map DPY-4011 to OracleTimeout -- a code decision, not a test detail. "
-        "Recorded in progress/A07.md as the one unproven acceptance item."
-    ),
-    strict=True,
-)
 def test_timeout_cancels_a_slow_statement_and_the_connection_is_reusable(
     adapter: OracleAdapter,
 ) -> None:
-    """A 1 s deadline on two seconds of server CPU raises, and the session is still usable.
+    """A 1 s deadline on ten seconds of server CPU raises, and the session is still usable.
 
-    ``Connection.call_timeout`` is what fires: Oracle answers ``DPY-4024`` and stops the statement,
-    which is why the deadline holds for a query that has not returned a row yet (a client-side
-    check between batches could not).
+    The deadline is enforced by cancelling the running statement (``ORA-01013``), not by
+    ``Connection.call_timeout``: measured here, when ``call_timeout`` fires the driver still has to
+    drain the response, and on a slow statement that drain times out in turn -- ``DPY-4011`` and a
+    dead session, which fails the second half of the acceptance. It is kept only as a backstop far
+    beyond the deadline, so the assertion is on the deadline and on the session surviving it.
     """
     assert _drain(adapter, SIMPLE_SQL) == 1  # warm the pool: min_size is 0
     opened_before = adapter.pool.opened
@@ -507,8 +513,9 @@ def test_timeout_cancels_a_slow_statement_and_the_connection_is_reusable(
         _drain(adapter, SLOW_SQL, LIMITS.model_copy(update={"timeout_s": 1.0}))
     elapsed = time.monotonic() - started
     assert elapsed < 10.0, f"the 1s deadline took {elapsed:.1f}s to fire"
-    assert "timeout" in str(excinfo.value)
-    assert "DPY-4024" in str(excinfo.value), str(excinfo.value)
+    assert elapsed >= 0.9, f"the deadline fired early, after {elapsed:.2f}s"
+    assert "timeout" in str(excinfo.value), str(excinfo.value)
+    assert "ORA-01013" in str(excinfo.value), str(excinfo.value)
 
     # Same pool, same connection: a discarded connection would be replaced by a fresh one and
     # "still works" would pass for the wrong reason.
@@ -637,9 +644,10 @@ def test_mine_queries_reads_v_sql(adapter: OracleAdapter) -> None:
     with_data = [query for query in mined if query.total_time_ms is not None]
     assert with_data, "no statement carried a timing"
     for query in with_data:
-        assert query.mean_time_ms is not None
-        assert query.calls is not None and query.calls > 0
-        assert query.mean_time_ms == pytest.approx(query.total_time_ms / query.calls)
+        total, calls, mean = query.total_time_ms, query.calls, query.mean_time_ms
+        assert total is not None and calls is not None and mean is not None
+        assert calls > 0
+        assert mean == pytest.approx(total / calls)
 
 
 def test_v_sql_not_readable_is_an_unsupported_capability(owner_adapter: OracleAdapter) -> None:

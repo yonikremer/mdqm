@@ -359,6 +359,7 @@ def test_a_cancelled_statement_is_a_cancellation() -> None:
     translated = _stream_error(
         _db_error(1013, "ORA-01013: User requested cancel of current operation."),
         cancelled=True,
+        timed_out=False,
         timeout_s=5.0,
     )
     assert isinstance(translated, OracleCancelled)
@@ -367,7 +368,10 @@ def test_a_cancelled_statement_is_a_cancellation() -> None:
 def test_ora_01013_without_a_cancel_is_a_deadline() -> None:
     """The same error without our ``cancel`` means something else stopped the statement."""
     translated = _stream_error(
-        _db_error(1013, "ORA-01013: User requested cancel"), cancelled=False, timeout_s=5.0
+        _db_error(1013, "ORA-01013: User requested cancel"),
+        cancelled=False,
+        timed_out=True,
+        timeout_s=5.0,
     )
     assert isinstance(translated, OracleTimeout)
     assert "5.0s" in str(translated)
@@ -376,7 +380,10 @@ def test_ora_01013_without_a_cancel_is_a_deadline() -> None:
 def test_a_call_timeout_is_a_deadline() -> None:
     """``DPY-4024`` is ``Connection.call_timeout`` firing: the server was told to abort."""
     translated = _stream_error(
-        _db_error(0, "DPY-4024: call timeout of 1000 ms exceeded"), cancelled=False, timeout_s=1.0
+        _db_error(0, "DPY-4024: call timeout of 1000 ms exceeded"),
+        cancelled=False,
+        timed_out=False,
+        timeout_s=1.0,
     )
     assert isinstance(translated, OracleTimeout)
 
@@ -384,8 +391,21 @@ def test_a_call_timeout_is_a_deadline() -> None:
 def test_any_other_error_is_left_alone() -> None:
     """A refusal is a refusal: the driver's error keeps its code and its message."""
     original = _db_error(41900, 'ORA-41900: missing INSERT privilege on "T"."C"')
-    translated = _stream_error(original, cancelled=False, timeout_s=1.0)
+    translated = _stream_error(original, cancelled=False, timed_out=False, timeout_s=1.0)
     assert translated is original
+
+
+def test_a_lost_connection_is_a_deadline_only_when_the_deadline_passed() -> None:
+    """``DPY-4011`` after the deadline is the backstop ``call_timeout`` losing the session.
+
+    It is still a deadline for the caller (``OracleTimeout``); without the deadline having passed it
+    is a real connection problem and must keep the driver's error.
+    """
+    lost = _db_error(0, "DPY-4011: the database or network closed the connection")
+    assert isinstance(
+        _stream_error(lost, cancelled=False, timed_out=True, timeout_s=1.0), OracleTimeout
+    )
+    assert _stream_error(lost, cancelled=False, timed_out=False, timeout_s=1.0) is lost
 
 
 # --- configuration ---------------------------------------------------------------------------
