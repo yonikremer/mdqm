@@ -22,6 +22,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from mdqm import __version__
+from mdqm.config.settings import Settings
 from mdqm.server.auth import (
     READ_SCOPE,
     AuthConfigError,
@@ -36,7 +37,13 @@ from mdqm.server.context_endpoint import (
     answer_context,
     context_source_from_settings,
 )
-from mdqm.server.tools import FindDataServices, configure_find_data, register_tools
+from mdqm.server.tools import (
+    FindDataServices,
+    configure_find_data,
+    configure_query_services,
+    register_tools,
+)
+from mdqm.server.wiring import WiringError, query_services
 
 __all__ = [
     "DEFAULT_PUBLIC_URL",
@@ -187,7 +194,8 @@ def serve(*, host: str, port: int, public_url: str | None = None) -> None:
         base_url,
         len(verifier.users),
     )
-    context_source = context_source_from_settings()
+    settings = Settings.load()
+    context_source = context_source_from_settings(settings)
     if context_source is not None:
         # The tools and /context must answer from the SAME layer: otherwise an agent whose hook got
         # a Context Pack finds `find_data` claiming no dictionary is loaded, on the same server.
@@ -201,6 +209,14 @@ def serve(*, host: str, port: int, public_url: str | None = None) -> None:
                 budget_tokens=context_source.budget_tokens,
             )
         )
+    if context_source is not None:
+        # The `query` tool refuses with "no pipeline is configured" until this exists. Wiring it
+        # here -- rather than in `create_server` -- keeps the constructor pure and makes a failure
+        # visible at startup instead of on the first agent's question.
+        try:
+            configure_query_services(query_services(settings, context_source.layer))
+        except WiringError as exc:
+            logger.error("query pipeline not wired: %s", exc)
     server = create_server(
         verifier=verifier,
         public_url=base_url,

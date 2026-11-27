@@ -291,15 +291,21 @@ services:
     environment:
       MDQM_SERVER__HOST: 0.0.0.0
       MDQM_SERVER__PORT: "8765"
-      # One real source: the Postgres beside it. Connection details live under
-      # `options`
-      # (SourceConfig has no host/port fields of its own); the password is the
-      # mounted secret
-      # file, never a value in this file. This is the only source A02's adapter
-      # can serve today.
+      # Three sources, one database each: the deployment the product is
+      # documented for. The
+      # password is the mounted secret file, never a value here. Connection
+      # details live under
+      # `options`; SourceConfig has no host/port fields of its own.
       MDQM_SOURCES: >-
-        [{"name":"crm","adapter":"postgresql","secret":"pg_ro_password",
-        "options":{"host":"pg","port":5432,"dbname":"crm","user":"mdqm_ro"}}]
+        [{"name":"crm","adapter":"postgresql",
+        "secret":"pg_ro_password","options":{"host":"pg",
+        "port":5432,"dbname":"crm","user":"mdqm_ro"}},
+        {"name":"billing","adapter":"postgresql",
+        "secret":"pg_ro_password","options":{"host":"pg",
+        "port":5432,"dbname":"billing","user":"mdqm_ro"}},
+        {"name":"erp","adapter":"postgresql",
+        "secret":"pg_ro_password","options":{"host":"pg",
+        "port":5432,"dbname":"erp","user":"mdqm_ro"}}]
       MDQM_PATHS__METADATA_DB: /data/metadata.sqlite
       MDQM_PATHS__SEMANTIC_DIR: /semantic
       MDQM_PATHS__CACHE_DIR: /cache
