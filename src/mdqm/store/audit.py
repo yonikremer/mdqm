@@ -362,6 +362,8 @@ class AuditLog:
         Falls back to the checkpoint when a purge emptied the table, so the chain continues across
         a legal prefix deletion instead of restarting at the genesis hash.
         """
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, values bound.
         row = conn.execute(
             # S608: constant table name.
             f"SELECT id, hash FROM {AUDIT_LOG_TABLE} ORDER BY id DESC LIMIT 1"  # noqa: S608
@@ -399,21 +401,23 @@ class AuditLog:
             params.append(since_id)
         if limit is not None:
             params.append(limit)
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Literal fragments over a module-constant table name; both values are bound.
         return tuple(_to_record(row) for row in self._store.connect().execute(sql, params))
 
     def count(self) -> int:
         """How many audit rows the log holds."""
-        row = (
-            self._store.connect()
-            .execute(
-                f"SELECT COUNT(*) FROM {AUDIT_LOG_TABLE}"  # noqa: S608 - constant table name
-            )
-            .fetchone()
-        )
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, no values.
+        row = self._store.connect().execute(
+            f"SELECT COUNT(*) FROM {AUDIT_LOG_TABLE}"  # noqa: S608 - constant table name
+        ).fetchone()
         return int(row[0])
 
     def _checkpoint(self, conn: sqlite3.Connection) -> tuple[int, str] | None:
         """``(last_purged_id, last_purged_hash)``, or ``None`` when nothing was ever purged."""
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, no values.
         row = conn.execute(
             # S608: constant table name.
             f"SELECT last_purged_id, last_purged_hash FROM {AUDIT_CHECKPOINT_TABLE} WHERE id = 1"  # noqa: S608
@@ -438,6 +442,8 @@ class AuditLog:
             expected_prev, expected_id = GENESIS_HASH, 1
         else:
             expected_prev, expected_id = checkpoint[1], checkpoint[0] + 1
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, no values.
         rows = conn.execute(
             f"SELECT * FROM {AUDIT_LOG_TABLE} ORDER BY id"  # noqa: S608 - constant table name
         ).fetchall()
@@ -526,6 +532,8 @@ class AuditLog:
             days=self.retention_days
         )
         with self._store.writing() as conn:
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+            # Module-constant SQL, no values.
             stale = conn.execute(
                 # S608: constant table name.
                 f"SELECT id, ts, hash FROM {AUDIT_LOG_TABLE} ORDER BY id"  # noqa: S608
@@ -541,6 +549,8 @@ class AuditLog:
                 return self._no_op(conn)
             trigger = self._drop_delete_trigger(conn)
             try:
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+                # Module-constant SQL; the only value is the integer id, bound.
                 conn.execute(
                     # S608: constant table name; the bound value is an integer id.
                     f"DELETE FROM {AUDIT_LOG_TABLE} WHERE id <= ?",  # noqa: S608
@@ -590,6 +600,8 @@ class AuditLog:
 
     @staticmethod
     def _count(conn: sqlite3.Connection) -> int:
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, no values.
         row = conn.execute(
             f"SELECT COUNT(*) FROM {AUDIT_LOG_TABLE}"  # noqa: S608 - constant table name
         ).fetchone()
@@ -627,21 +639,24 @@ def _parse_ts(text: str) -> datetime:
 
 
 def _to_record(row: sqlite3.Row) -> AuditRecord:
-    """Map one SQLite row onto the model, decoding the JSON ``sources`` list."""
-    raw_sources = row["sources"]
-    sources = tuple(json.loads(str(raw_sources))) if raw_sources else ()
-    error_code = row["error_code"]
-    return AuditRecord(
-        id=int(row["id"]),
-        ts=_parse_ts(str(row["ts"])),
-        user_id=str(row["user_id"]),
-        tool=str(row["tool"]),
-        outcome=AuditOutcome(str(row["outcome"])),
-        version_hash=None if row["version_hash"] is None else str(row["version_hash"]),
-        sources=sources,
-        row_count=int(row["row_count"]),
-        blocked_attempts=int(row["blocked_attempts"]),
-        error_code=None if error_code is None else ErrorCode(str(error_code)),
-        prev_hash=str(row["prev_hash"]),
-        hash=str(row["hash"]),
-    )
+    """Map one SQLite row onto the model; a row that no longer parses is an error, not a default."""
+    try:
+        raw_sources = row["sources"]
+        sources = tuple(json.loads(str(raw_sources))) if raw_sources else ()
+        error_code = row["error_code"]
+        return AuditRecord(
+            id=int(row["id"]),
+            ts=_parse_ts(str(row["ts"])),
+            user_id=str(row["user_id"]),
+            tool=str(row["tool"]),
+            outcome=AuditOutcome(str(row["outcome"])),
+            version_hash=None if row["version_hash"] is None else str(row["version_hash"]),
+            sources=sources,
+            row_count=int(row["row_count"]),
+            blocked_attempts=int(row["blocked_attempts"]),
+            error_code=None if error_code is None else ErrorCode(str(error_code)),
+            prev_hash=str(row["prev_hash"]),
+            hash=str(row["hash"]),
+        )
+    except (ValueError, TypeError, KeyError, IndexError) as exc:
+        raise AuditError(f"audit row {row['id']} is corrupt: {exc}") from exc

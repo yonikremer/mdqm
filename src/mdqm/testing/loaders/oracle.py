@@ -308,12 +308,16 @@ def ensure_owner(target: OracleTarget, admin: oracledb.Connection) -> None:
     identifier = target.owner_user.upper()
     password = _quote_password(target.owner_password)
     try:
+        # Oracle cannot bind an identifier or a password in DDL; both are escaped above.
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(f"create user {identifier} identified by {password} quota unlimited on users")
     except oracledb.DatabaseError as exc:
         # ORA-01920: the user already exists - the loader is re-run on the same container.
         if "ORA-01920" not in str(exc):
             raise
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(f"alter user {identifier} identified by {password} quota unlimited on users")
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
     cur.execute(f"grant create session, create table to {identifier}")
     admin.commit()
 
@@ -333,7 +337,10 @@ def ensure_read_only_user(target: OracleTarget, admin: oracledb.Connection) -> N
     cur = admin.cursor()
     identifier = target.ro_user.upper()
     try:
-        cur.execute(f"create user {identifier} identified by {_quote_password(target.ro_password)}")
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        cur.execute(
+            f"create user {identifier} identified by {_quote_password(target.ro_password)}"
+        )
     except oracledb.DatabaseError as exc:
         # ORA-01920: the image already created it.
         if "ORA-01920" not in str(exc):
@@ -343,7 +350,10 @@ def ensure_read_only_user(target: OracleTarget, admin: oracledb.Connection) -> N
         role = str(row[0]).upper()
         if not ROLE_NAME.match(role):
             raise LoaderError(f"refusing to revoke a role with an unexpected name: {role!r}")
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(f"revoke {role} from {identifier}")
+    # Oracle cannot bind an identifier in DDL; this one is a schema name the loader owns.
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
     cur.execute(f"grant create session to {identifier}")
     admin.commit()
 
@@ -352,6 +362,7 @@ def drop_tables(cur: oracledb.Cursor) -> None:
     """Drop what a previous run left. ``PURGE`` keeps the recycle bin from filling up."""
     for table in ALL_TABLES:
         try:
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
             cur.execute(f"drop table {table} purge")
         except oracledb.DatabaseError as exc:
             # ORA-00942: first run, nothing to drop yet.
@@ -378,6 +389,8 @@ def create_accounts(cur: oracledb.Cursor) -> None:
 
 def create_usage_tables(cur: oracledb.Cursor) -> None:
     """Both usage tables: interval monthly partitions, event time indexed, ingestion time not."""
+    # The DDL is fixed text; Oracle cannot bind an identifier and none is interpolated here.
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
     cur.execute(
         f"""
         create table usage_events (
@@ -542,6 +555,7 @@ def load_billing(
     # Statistics are not cosmetic here: without them the optimizer has no reason to prune, and
     # EXPLAIN PLAN would not expose PSTART/PSTOP (the D05 acceptance criterion).
     for table in ALL_TABLES:
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(f"begin dbms_stats.gather_table_stats(user, '{table.upper()}'); end;")
 
     return counts, before, partitions_of(cur, "usage_events")
@@ -557,7 +571,9 @@ def grant_read_only(admin: oracledb.Connection, target: OracleTarget) -> None:
     cur = admin.cursor()
     owner = target.owner_user.upper()
     for table in ALL_TABLES:
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(f"grant select on {owner}.{table.upper()} to {target.ro_user.upper()}")
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
     cur.execute(f"grant select on v_$sql to {target.ro_user.upper()}")
     admin.commit()
 

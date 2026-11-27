@@ -218,23 +218,26 @@ class Question(MDQMModel):
 
 
 def _row_to_proposal(row: sqlite3.Row) -> Proposal:
-    """Rebuild the model from a stored row, so callers never see raw SQLite values."""
-    return Proposal(
-        id=row["id"],
-        kind=ProposalKind(row["kind"]),
-        section=row["section"],
-        key=row["key"],
-        field=row["field"],
-        collection=bool(row["collection"]),
-        patch=json.loads(row["patch"]),
-        evidence=tuple(json.loads(row["evidence"])),
-        confidence=row["confidence"],
-        status=ProposalStatus(row["status"]),
-        proposed_by=row["proposed_by"],
-        proposed_at=row["proposed_at"],
-        decided_by=row["decided_by"],
-        decided_at=row["decided_at"],
-    )
+    """Rebuild the model from a stored row; a row that no longer parses is an error."""
+    try:
+        return Proposal(
+            id=row["id"],
+            kind=ProposalKind(row["kind"]),
+            section=row["section"],
+            key=row["key"],
+            field=row["field"],
+            collection=bool(row["collection"]),
+            patch=json.loads(row["patch"]),
+            evidence=tuple(json.loads(row["evidence"])),
+            confidence=row["confidence"],
+            status=ProposalStatus(row["status"]),
+            proposed_by=row["proposed_by"],
+            proposed_at=row["proposed_at"],
+            decided_by=row["decided_by"],
+            decided_at=row["decided_at"],
+        )
+    except (ValueError, TypeError, KeyError, IndexError) as exc:  # ValidationError is a ValueError
+        raise ReviewError(f"proposal row {row['id']} is corrupt: {exc}") from exc
 
 
 class ReviewQueue:
@@ -263,14 +266,11 @@ class ReviewQueue:
 
     def get(self, proposal: str) -> Proposal:
         """The proposal with this id, or :class:`ReviewError` if no such row exists."""
-        row = (
-            self._store.connect()
-            .execute(
-                f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?",
-                (proposal,),  # noqa: S608 - constant
-            )
-            .fetchone()
-        )
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, values bound.
+        row = self._store.connect().execute(
+            f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?", (proposal,)  # noqa: S608 - constant
+        ).fetchone()
         if row is None:
             raise ReviewError(f"no proposal with id {proposal!r}")
         return _row_to_proposal(row)
@@ -466,14 +466,11 @@ class ReviewQueue:
         return now.astimezone(UTC)
 
     def _find(self, proposal: str) -> Proposal | None:
-        row = (
-            self._store.connect()
-            .execute(
-                f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?",
-                (proposal,),  # noqa: S608
-            )
-            .fetchone()
-        )
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, values bound.
+        row = self._store.connect().execute(
+            f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?", (proposal,)  # noqa: S608
+        ).fetchone()
         return None if row is None else _row_to_proposal(row)
 
     def _insert(self, proposal: Proposal) -> None:

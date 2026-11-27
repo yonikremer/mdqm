@@ -151,11 +151,15 @@ class FeedbackStore:
             params.append(user_id)
         sql += " ORDER BY id DESC LIMIT ?"
         params.append(_bounded(limit))
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, values bound.
         rows = self._store.connect().execute(sql, params).fetchall()
         return tuple(_to_record(row) for row in rows)
 
     def count(self) -> int:
         """How many ratings the queue holds."""
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, no values.
         row = (
             self._store.connect()
             .execute(f"SELECT COUNT(*) FROM {FEEDBACK_TABLE}")  # noqa: S608 - module constant

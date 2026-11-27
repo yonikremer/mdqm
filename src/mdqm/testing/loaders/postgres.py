@@ -240,16 +240,20 @@ _USAGE_EVENT_COLUMNS: Final = """
 
 
 def _drop(cur: psycopg.Cursor[Any], tables: Sequence[str]) -> None:
+    # psycopg's sql.Identifier quotes the name; libpq cannot bind an identifier as a parameter.
     for table in tables:
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(sql.SQL("DROP TABLE IF EXISTS public.{} CASCADE").format(sql.Identifier(table)))
 
 
 def _drop_views(cur: psycopg.Cursor[Any], views: Sequence[str]) -> None:
     for view in views:
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(sql.SQL("DROP VIEW IF EXISTS public.{} CASCADE").format(sql.Identifier(view)))
 
 
 def _create_partition(cur: psycopg.Cursor[Any], parent: str, partition: Partition) -> None:
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
     cur.execute(
         sql.SQL(
             "CREATE TABLE public.{} PARTITION OF public.{} FOR VALUES FROM ({}) TO ({})"
@@ -322,6 +326,7 @@ def create_billing(
         """
     )
     for remainder in range(HASH_PARTITIONS):
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(
             sql.SQL(
                 "CREATE TABLE public.{} PARTITION OF public.accounts_hash "
@@ -334,6 +339,8 @@ def create_billing(
         )
 
     cur.execute(
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant column list; PostgreSQL cannot bind an identifier in DDL.
         f"""
         CREATE TABLE public.usage_events (
             {_USAGE_EVENT_COLUMNS},
@@ -342,6 +349,8 @@ def create_billing(
         """
     )
     cur.execute(
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant column list; PostgreSQL cannot bind an identifier in DDL.
         f"""
         CREATE TABLE public.usage_by_load (
             {_USAGE_EVENT_COLUMNS},

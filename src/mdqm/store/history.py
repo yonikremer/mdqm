@@ -349,6 +349,8 @@ class HistoryStore:
             )
             run_id = int(cursor.lastrowid or 0)
             if indexed:
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+                # Module-constant SQL, values bound.
                 conn.execute(
                     f"INSERT INTO {HISTORY_FTS_TABLE} (rowid, search_text) VALUES (?, ?)",  # noqa: S608
                     (run_id, search_text),
@@ -386,6 +388,8 @@ class HistoryStore:
         Raises:
             HistoryError: no such run, or the row no longer parses as a history record.
         """
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, values bound.
         row = (
             self._store.connect()
             .execute(
@@ -407,6 +411,8 @@ class HistoryStore:
             params.append(user_id)
         sql += " ORDER BY id DESC LIMIT ?"
         params.append(_limit(limit))
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Literal fragments over a module-constant table name; every value is bound.
         return tuple(_to_record(row) for row in self._store.connect().execute(sql, params))
 
     def search(
@@ -427,6 +433,8 @@ class HistoryStore:
                 self._ensure_fts(writer)
         conn = self._store.connect()
         if self._fts:
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+            # Module-constant SQL and literal fragments; every value is bound.
             rows = conn.execute(
                 f"SELECT * FROM {HISTORY_TABLE} WHERE id IN (SELECT rowid FROM "  # noqa: S608
                 f"{HISTORY_FTS_TABLE} WHERE {HISTORY_FTS_TABLE} MATCH ?)"
@@ -436,6 +444,8 @@ class HistoryStore:
             ).fetchall()
         else:
             clause = " AND ".join("search_text LIKE ? ESCAPE '\\'" for _ in terms)
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+            # Module-constant SQL and literal clauses; every term is bound.
             rows = conn.execute(
                 f"SELECT * FROM {HISTORY_TABLE} WHERE "  # noqa: S608 - module constant
                 + clause
@@ -451,6 +461,8 @@ class HistoryStore:
 
     def count(self) -> int:
         """How many runs the history holds."""
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, no values.
         row = (
             self._store.connect()
             .execute(
@@ -521,12 +533,16 @@ class HistoryStore:
             expired = [
                 int(row["id"])
                 for row in conn.execute(
+                    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+                    # Module-constant SQL, no values.
                     f"SELECT id, created_at FROM {HISTORY_TABLE}"  # noqa: S608 - module constant
                 ).fetchall()
                 if _parse_ts(str(row["created_at"])) < cutoff
             ]
             for chunk in _chunks(expired):
                 marks = ",".join("?" * len(chunk))
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+                # The placeholders are generated per chunk; every id is bound.
                 conn.execute(
                     f"DELETE FROM {HISTORY_TABLE} WHERE id IN ({marks})",  # noqa: S608 - ints
                     chunk,
@@ -785,6 +801,8 @@ def _parse_ts(text: str) -> datetime:
 
 
 def _count(conn: sqlite3.Connection) -> int:
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+    # Module-constant SQL, no values.
     row = conn.execute(
         f"SELECT COUNT(*) FROM {HISTORY_TABLE}"  # noqa: S608 - module constant
     ).fetchone()

@@ -74,6 +74,9 @@ FTS5_PROBE_TABLE: Final[str] = "mdqm_fts5_probe"
 #: Busy timeout for cross-process writers; the in-process writer lock queues our own threads.
 _BUSY_TIMEOUT_MS: Final[int] = 5000
 
+#: A PRAGMA cannot bind a value, so its one substitution happens here, at import time.
+_PRAGMA_BUSY_TIMEOUT: Final[str] = f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}"
+
 _MIGRATION_FILE: Final[re.Pattern[str]] = re.compile(
     r"^(?P<version>\d{4})_(?P<name>[a-z0-9_]+)\.sql$"
 )
@@ -84,6 +87,15 @@ _CREATE_MIGRATION_TABLE: Final[str] = (
     " name TEXT NOT NULL,"
     " applied_at TEXT NOT NULL)"
 )
+
+#: One row per applied migration, keyed by version; values are bound by the caller.
+# S608: the only substitution is the module constant above, never caller input.
+_INSERT_MIGRATION: Final[str] = (
+    f"INSERT INTO {MIGRATION_TABLE} (version, name, applied_at) VALUES (?, ?, ?)"  # noqa: S608
+)
+
+# S608: same reason.
+_SELECT_MIGRATION_VERSIONS: Final[str] = f"SELECT version FROM {MIGRATION_TABLE} ORDER BY version"  # noqa: S608
 
 
 # FTS5 probe statements. The only substitution anywhere in this module is the probe table's own
@@ -126,7 +138,9 @@ def _new_connection(target: str) -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode=WAL")  # WAL on a file DB; ":memory:" stays "memory"
         conn.execute("PRAGMA synchronous=NORMAL")  # the pairing recommended for WAL
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # A PRAGMA cannot bind a value; the substituted value is a module constant.
+        conn.execute(_PRAGMA_BUSY_TIMEOUT)
     except sqlite3.Error:
         conn.close()
         raise
@@ -358,11 +372,11 @@ class Store:
         try:
             with self._transaction() as tx:
                 for statement in migration.statements:
+                    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+                    # The statements come from this package's own migration files, not a caller.
                     tx.execute(statement)
                 tx.execute(
-                    # S608: MIGRATION_TABLE is a module constant, not caller input.
-                    f"INSERT INTO {MIGRATION_TABLE} "  # noqa: S608
-                    "(version, name, applied_at) VALUES (?, ?, ?)",
+                    _INSERT_MIGRATION,
                     (migration.version, migration.name, datetime.now(UTC).isoformat()),
                 )
         except sqlite3.Error as exc:
@@ -376,9 +390,9 @@ class Store:
         conn = self.connect()
         if not self._has_migration_table(conn):
             return ()
-        rows = conn.execute(
-            f"SELECT version FROM {MIGRATION_TABLE} ORDER BY version"  # noqa: S608
-        ).fetchall()
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+        # Module-constant SQL, values bound.
+        rows = conn.execute(_SELECT_MIGRATION_VERSIONS).fetchall()
         return tuple(int(row["version"]) for row in rows)
 
     def schema_version(self) -> int:

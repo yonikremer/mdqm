@@ -307,9 +307,14 @@ def drop_schema(cur: Any) -> None:
     A partition function cannot be dropped while a scheme uses it, and a scheme cannot be
     dropped while a table is built on it, so the order is load-bearing, not cosmetic.
     """
+    # Every identifier below is a module constant or the loader's own target config, and SQL Server
+    # cannot bind an identifier; no value is interpolated.
     for table in TABLES:
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(f"IF OBJECT_ID('dbo.{table}', 'U') IS NOT NULL DROP TABLE dbo.{table}")
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
     cur.execute(_DROP_SCHEME_SQL, (PARTITION_SCHEME,))
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
     cur.execute(_DROP_FUNCTION_SQL, (PARTITION_FUNCTION,))
 
 
@@ -340,6 +345,8 @@ def create_tables(cur: Any) -> None:
     )
     # The clustered index must contain the partitioning column, and putting it on the scheme is
     # what makes the index partitioned rather than a single heap over every month.
+    # The only interpolations are module constants; SQL Server cannot bind an identifier.
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
     cur.execute(
         f"""
         CREATE TABLE dbo.usage_events (
@@ -438,8 +445,10 @@ def ensure_database(target: MssqlTarget) -> None:
         cur.execute("SELECT DB_ID(?)", (target.database,))
         row = cur.fetchone()
         if row is None or row[0] is None:
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
             cur.execute(f"CREATE DATABASE [{target.database}]")
         # READ_WRITE, not READ_ONLY: A08 reads plans, and a read-only store never fills with them.
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(
             f"""
             ALTER DATABASE [{target.database}] SET QUERY_STORE = ON (
@@ -480,6 +489,7 @@ def ensure_read_only_login(target: MssqlTarget) -> None:
             f"IF IS_SRVROLEMEMBER('sysadmin', '{target.ro_user}') = 1 "
             f"ALTER SERVER ROLE [sysadmin] DROP MEMBER [{target.ro_user}]"
         )
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(f"ALTER LOGIN [{target.ro_user}] WITH DEFAULT_DATABASE = [{target.database}]")
 
 
@@ -496,8 +506,11 @@ def grant_read_only(target: MssqlTarget) -> None:
             (target.ro_user,),
         )
         if cur.fetchone() is None:
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
             cur.execute(f"CREATE USER [{target.ro_user}] FOR LOGIN [{target.ro_user}]")
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(f"ALTER ROLE [db_datareader] ADD MEMBER [{target.ro_user}]")
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(f"GRANT VIEW DATABASE STATE TO [{target.ro_user}]")
         conn.commit()
 
@@ -574,6 +587,7 @@ def load(
         # Statistics are not cosmetic: without them the optimizer has no cardinality to prune on
         # and A08's plan assertions would compare against a guess.
         for table in TABLES:
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
             cur.execute(f"UPDATE STATISTICS dbo.{table} WITH FULLSCAN")
         conn.commit()
 

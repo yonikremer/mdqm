@@ -273,9 +273,13 @@ class FakeAdapter:
         # A source session is UTC: comparing a naive TIMESTAMP literal to a TIMESTAMPTZ column reads
         # the literal in the session zone, so the host's own zone would shift every window.
         self._con.execute("SET TimeZone='UTC'").fetchall()
+        # A DuckDB SET cannot bind a value; this one is the configured memory limit.
+        # nosemgrep
         self._con.execute(f"SET memory_limit='{memory_limit}'")
         if spill_dir is not None:
             spill_dir.mkdir(parents=True, exist_ok=True)
+            # A DuckDB SET cannot bind a value; this one is the configured spill directory.
+            # nosemgrep
             self._con.execute(f"SET temp_directory='{spill_dir.as_posix()}'")
         self._tables: dict[str, pa.Table] = {}
         source_tables = dict(tables) if tables is not None else _default_tables()
@@ -314,6 +318,7 @@ class FakeAdapter:
         try:
             # table_name is checked to be [A-Za-z0-9_] above, so the only interpolation into this
             # DDL is that validated identifier; DuckDB cannot bind an identifier as a parameter.
+            # nosemgrep
             self._con.execute(
                 f'CREATE OR REPLACE TABLE main."{table_name}" AS SELECT * FROM _mdqm_load'  # noqa: S608
             )
