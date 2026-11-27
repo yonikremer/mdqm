@@ -1,0 +1,13 @@
+{
+  "rules": {
+    "no-ellipsis-body": {
+      "disable": true
+    },
+    "unchecked-numeric-parse-python": {
+      "disable": true
+    },
+    "line-length": {
+      "disable": true
+    }
+  }
+}

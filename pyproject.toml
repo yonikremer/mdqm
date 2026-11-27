@@ -86,6 +86,10 @@ ignore = [
     # every error path for no behavioural gain); `RUF001/2/3` flags "ambiguous" unicode, which here is
     # Hebrew text and typographic dashes in prose. Enabling them would only teach people to ignore the
     # whole run.
+    # Line length: `ruff format` already wraps code at 100, so a separate E501 failure is the same
+    # question asked twice -- and the answer disagreed with the markdown rule's 80. The formatter
+    # keeps lines short; the linter no longer fails a build over one.
+    "E501",
     "TRY003",
     "RUF001", "RUF002", "RUF003",
     # ---- the ratchet -----------------------------------------------------------------------------
