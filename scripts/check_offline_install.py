@@ -523,7 +523,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     for requirement in requirements:
         print(f"  {requirement}", flush=True)
-    print(f"target platform: {options.target_platform} (cp{TARGET_PYTHON_VERSION})", flush=True)
+    abi = f"{TARGET_IMPLEMENTATION}{TARGET_PYTHON_VERSION.replace('.', '')}"
+    print(f"target platform: {options.target_platform} ({abi})", flush=True)
 
     dockerfile_problems = check_dockerfile(DOCKERFILE.read_text(encoding="utf-8"))
     problems.extend(dockerfile_problems)
@@ -535,9 +536,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     wheelhouse = (
         options.wheelhouse if options.wheelhouse.is_absolute() else REPO_ROOT / options.wheelhouse
     )
-    staged = stage_wheelhouse(
-        wheelhouse, download=not options.no_download, target_platform=options.target_platform
-    )
+    # A pip failure is this script's failure: report it as a problem, not as a traceback. The case
+    # that matters is `--no-download` against an incomplete wheelhouse (a Windows-staged one, or a
+    # missing build backend): it must fail here, loudly, and never print "check passed".
+    try:
+        staged = stage_wheelhouse(
+            wheelhouse, download=not options.no_download, target_platform=options.target_platform
+        )
+    except subprocess.CalledProcessError as exc:
+        print("\nFAILED:", flush=True)
+        print(f"  - {' '.join(str(part) for part in exc.cmd)} exited {exc.returncode}", flush=True)
+        return 1
     missing = staged.missing(requirements)
     if missing:
         problems.append(f"no wheel staged for: {', '.join(missing)}")

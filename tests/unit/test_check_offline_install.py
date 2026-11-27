@@ -8,6 +8,7 @@ fresh venv) are the script's job, run by hand or in the deployment pipeline.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -248,6 +249,29 @@ def test_dockerignore_keeps_transcripts_and_secrets_out_of_the_context(
 def test_the_wheelhouse_directory_ships_a_placeholder(offline: ModuleType) -> None:
     """`COPY wheelhouse/` fails the build outright when the directory is absent."""
     assert (REPO_ROOT / "wheelhouse" / ".gitkeep").is_file()
+
+
+def test_a_pip_failure_is_reported_as_a_problem_not_a_traceback(
+    offline: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: object
+) -> None:
+    """`--no-download` on an incomplete wheelhouse must fail loudly and say which command failed.
+
+    Reviewer's bug: it printed "offline install check passed" instead. A CalledProcessError out of
+    pip is the normal shape of that failure, so it is what this simulates -- no pip is run here.
+    """
+
+    def refuse(command: list[str], cwd: Path | None = None) -> None:
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(offline, "_run", refuse)
+
+    code = offline.main(["--no-download", "--wheelhouse", str(tmp_path)])
+    printed = capsys.readouterr().out  # type: ignore[attr-defined]
+
+    assert code == 1
+    assert "offline install check passed" not in printed
+    assert "FAILED" in printed
+    assert "--no-index" in printed, "the message must name the command that failed"
 
 
 class TestWheelhouse:
