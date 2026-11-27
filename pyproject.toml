@@ -45,6 +45,7 @@ postgresql = "mdqm.adapters.postgresql:PostgresAdapter"
 openapi = "mdqm.adapters.openapi:OpenApiAdapter"
 elastic = "mdqm.adapters.elastic:ElasticAdapter"
 oracle = "mdqm.adapters.oracle:OracleAdapter"
+sqlserver = "mdqm.adapters.sqlserver:SqlServerAdapter"
 
 [project.scripts]
 mdqm = "mdqm.cli:app"
