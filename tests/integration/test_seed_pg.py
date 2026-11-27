@@ -26,6 +26,7 @@ import psycopg
 import pytest
 from psycopg import sql
 
+from mdqm.sql.text import as_query
 from mdqm.testing.loaders.postgres import (
     HASH_PARTITIONS,
     LoadReport,
@@ -40,10 +41,12 @@ WINDOW_START: datetime = ANCHOR - timedelta(days=30)
 """First instant of the world window's last 30 days."""
 
 READ_ONLY_SQLSTATES: frozenset[str] = frozenset(
-    {
+    state
+    for state in (
         psycopg.errors.ReadOnlySqlTransaction.sqlstate,
         psycopg.errors.InsufficientPrivilege.sqlstate,
-    }
+    )
+    if state is not None
 )
 """25006 (read-only transaction) and 42501 (missing privilege): the two read-only layers."""
 
@@ -218,7 +221,7 @@ def test_read_only_role_cannot_write(seed: Seed, label: str, statement: str) -> 
                 cur.execute("SET default_transaction_read_only = off")
                 conn.commit()  # the setting applies to the *next* transaction
             with pytest.raises(psycopg.errors.Error) as excinfo:
-                cur.execute(statement)
+                cur.execute(as_query(statement))
             conn.rollback()
         error = excinfo.value
         message = str(error).strip()

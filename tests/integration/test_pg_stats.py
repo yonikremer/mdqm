@@ -35,6 +35,7 @@ from mdqm.adapters.postgresql_stats import MASKED_QUERY
 from mdqm.config.settings import SourceConfig
 from mdqm.models import Fragment, Limits, RawQuery, TableStats
 from mdqm.sql.fingerprint import analyze, fingerprint
+from mdqm.sql.text import as_query
 from mdqm.testing.loaders.postgres import PgTarget, target_from_environ
 
 LIMITS = Limits(timeout_s=10.0, max_rows=100, max_bytes=1_000_000, max_partitions=8)
@@ -179,7 +180,10 @@ def extensionless_database(target: PgTarget) -> Iterator[str]:
     with psycopg.connect(admin, autocommit=True) as conn, conn.cursor() as cur:
         cur.execute(f"DROP DATABASE IF EXISTS {EXTENSIONLESS_DATABASE} WITH (FORCE)")
         cur.execute(f"CREATE DATABASE {EXTENSIONLESS_DATABASE} OWNER postgres")
-        cur.execute(f"GRANT CONNECT ON DATABASE {EXTENSIONLESS_DATABASE} TO {target.ro_user}")
+        # `as_query` marks test-owned SQL as code, not data (see mdqm.sql.text).
+        cur.execute(
+            as_query(f"GRANT CONNECT ON DATABASE {EXTENSIONLESS_DATABASE} TO {target.ro_user}")
+        )
     try:
         yield EXTENSIONLESS_DATABASE
     finally:
@@ -401,11 +405,17 @@ def test_mutability_counters_move_when_rows_change(
 
     with psycopg.connect(target.dsn("billing")) as conn, conn.cursor() as cur:
         cur.execute(
-            f"INSERT INTO public.{mutable_table} (id, note) "
-            "VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')"
+            as_query(
+                f"INSERT INTO public.{mutable_table} (id, note) "
+                "VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')"
+            )
         )
-        cur.execute(f"UPDATE public.{mutable_table} SET note = 'x' WHERE id <= {UPDATED_ROWS}")
-        cur.execute(f"DELETE FROM public.{mutable_table} WHERE id = 4")
+        cur.execute(
+            as_query(
+                f"UPDATE public.{mutable_table} SET note = 'x' WHERE id <= {UPDATED_ROWS}"
+            )
+        )
+        cur.execute(as_query(f"DELETE FROM public.{mutable_table} WHERE id = 4"))
         conn.commit()
 
     after = _await_counter(billing_adapter, table, "rows_inserted", 4, before)
