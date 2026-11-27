@@ -48,7 +48,9 @@ from mdqm.models import (
     PartitionStrategy,
     TableKind,
 )
+from mdqm.sql.execution import StatementRefused
 from mdqm.sql.guard import WRITE_BLOCKED, guard
+from mdqm.sql.text import as_query
 from mdqm.testing.conformance import run_conformance
 from mdqm.testing.loaders.postgres import PgTarget, target_from_environ
 
@@ -398,7 +400,7 @@ def test_timeout_cancels_a_slow_query_and_the_connection_is_reusable(
         with pytest.raises(PostgresTimeout) as excinfo:
             _drain(
                 adapter,
-                "SELECT pg_sleep(30) AS slept",
+                "SELECT count(*) AS n FROM generate_series(1, 300000000)",
                 LIMITS.model_copy(update={"timeout_s": 1.0}),
             )
         elapsed = time.monotonic() - started
@@ -455,17 +457,17 @@ def test_guard_refuses_writes_before_they_are_sent() -> None:
         assert result.error.fix
 
 
-def test_server_refuses_a_write_even_with_the_guard_bypassed(
-    billing_adapter: PostgresAdapter,
+def test_a_write_never_reaches_the_server_and_the_server_would_refuse_it(
+    billing_adapter: PostgresAdapter, target: PgTarget
 ) -> None:
-    """Send DML straight to ``execute``: psycopg/the server refuses it, not our code.
+    """Two layers, both proved: the chokepoint refuses the write, and the server would too.
 
-    A server-side cursor cannot carry DML at all, so PostgreSQL answers with its own parser error
-    (``42601``) instead of running it. That is the server refusing, which is what the acceptance
-    asks for; the read-only-transaction layer is proved separately below, by a statement a cursor
-    *can* carry.
+    Before the guarded chokepoint existed this test pushed DML straight into ``execute`` to reach the
+    server's own parser. That path is closed now — which is the point — so the server layer is proved
+    through a **raw** cursor, the way an injected statement would actually arrive if our guard were
+    absent.
     """
-    with pytest.raises(psycopg.Error) as excinfo:
+    with pytest.raises(StatementRefused) as refused:
         stream = billing_adapter.execute(
             _fragment("billing", "DELETE FROM public.accounts WHERE false"), LIMITS
         )
@@ -474,15 +476,24 @@ def test_server_refuses_a_write_even_with_the_guard_bypassed(
                 pass
         finally:
             stream.close()
-    message = str(excinfo.value).strip()
-    assert excinfo.value.sqlstate == "42601", f"unexpected refusal: {message}"
-    assert "DELETE" in message
-    # The adapter itself is still healthy after the refusal.
+    assert refused.value.result.error is not None
+    assert refused.value.result.error.code == "WRITE_BLOCKED"
+
+    # Layer 2: the same DML on a raw connection is refused by the server, not by us.
+    with (
+        psycopg.connect(target.dsn("billing", read_only=True)) as conn,
+        conn.cursor() as cur,
+        pytest.raises(psycopg.Error) as server,
+    ):
+        cur.execute(as_query("DELETE FROM public.accounts WHERE false"))
+    assert server.value.sqlstate in {"25006", "42501"}, server.value
+
+    # The adapter itself is still healthy after both refusals.
     assert _drain(billing_adapter, "SELECT 1 AS one") == 1
 
 
 def test_read_only_session_refuses_a_write_that_a_cursor_can_carry(
-    billing_adapter: PostgresAdapter, write_probe: str
+    billing_adapter: PostgresAdapter, write_probe: str, target: PgTarget
 ) -> None:
     """``SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`` is the layer the guard bypasses.
 
@@ -492,13 +503,21 @@ def test_read_only_session_refuses_a_write_that_a_cursor_can_carry(
     """
     statement = f"SELECT nextval('public.{write_probe}') AS n"
     assert guard(statement, "postgres").ok is False, "the guard must also refuse a sequence advance"
-    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction) as excinfo:
+    with pytest.raises(StatementRefused):
         stream = billing_adapter.execute(_fragment("billing", statement), LIMITS)
         try:
             for _ in stream:
                 pass
         finally:
             stream.close()
+
+    # The transaction layer itself: a cursor that can carry the statement, refused by the session.
+    with (
+        psycopg.connect(target.dsn("billing", read_only=True)) as conn,
+        conn.cursor() as cur,
+        pytest.raises(psycopg.errors.ReadOnlySqlTransaction) as excinfo,
+    ):
+        cur.execute(as_query(statement))
     error = excinfo.value
     assert error.sqlstate == "25006"
     assert "read-only transaction" in str(error)

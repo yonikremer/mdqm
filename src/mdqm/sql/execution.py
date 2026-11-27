@@ -47,7 +47,7 @@ class PreparedStatement:
     """
 
     text: str
-    params: Sequence[Any]
+    params: Mapping[str, Any] | Sequence[Any] | None
     dialect: str
 
 
@@ -55,7 +55,7 @@ def prepare(
     text: str,
     *,
     dialect: str,
-    params: Sequence[Any] = (),
+    params: Mapping[str, Any] | Sequence[Any] | None = None,
     policy: GuardPolicy | None = None,
 ) -> PreparedStatement:
     """Guard ``text`` and return it ready to execute.

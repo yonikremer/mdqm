@@ -93,7 +93,7 @@ from mdqm.models import (
     TableKind,
     TableStats,
 )
-from mdqm.sql.text import as_query
+from mdqm.sql.execution import PreparedStatement, prepare, run
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
@@ -876,7 +876,13 @@ class PostgresAdapter:
             # `text` is a fragment the compiler built through the AST and the guard inspected, so it
             # is code, not data: `as_query` marks that (see mdqm.sql.text). Its bound values travel
             # with it -- explaining a parameterised statement without them fails outright.
-            cur.execute(as_query("EXPLAIN (FORMAT JSON) " + text), fragment.params or None)
+            # The inner statement is what can carry an injection; it is guarded before it is wrapped.
+            inner = prepare(text, dialect=self.dialect(), params=fragment.params or ())
+            run(cur, PreparedStatement(
+                text="EXPLAIN (FORMAT JSON) " + inner.text,
+                params=inner.params,
+                dialect=inner.dialect,
+            ))
             row = cur.fetchone()
             document = row[0] if row else None
             children = _partition_children(cur)
@@ -953,9 +959,13 @@ class PostgresAdapter:
                 )
             self._cursor_seq += 1
             cursor = connection.cursor(name=f"mdqm_{self._cursor_seq}")
-            # `fragment.sql` is compiled-and-guarded SQL text; `as_query` marks it as code (see
-            # mdqm.sql.text). Values stay bound, so nothing here can be injected.
-            cursor.execute(as_query(fragment.sql), fragment.params or None)
+            # Defence in depth: the fragment was guarded when it was compiled, and it is guarded
+            # again here, at the moment it reaches the driver. A fragment that somehow skipped the
+            # compiler still cannot execute, and the values stay bound.
+            statement = prepare(
+                fragment.sql, dialect=self.dialect(), params=fragment.params or ()
+            )
+            run(cursor, statement)
             return PgArrowStream(
                 connection=connection,
                 cursor=cursor,
