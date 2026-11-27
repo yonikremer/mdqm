@@ -57,6 +57,7 @@ import zipfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -155,8 +156,13 @@ def requirement_name(requirement: str) -> str:
     return match.group(1)
 
 
-def _pyproject(pyproject: Path) -> dict[str, object]:
-    data: dict[str, object] = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+def _pyproject(pyproject: Path) -> dict[str, Any]:
+    """The parsed `pyproject.toml`.
+
+    Typed as a mapping of ``Any``: ``tomllib`` returns nested tables, so ``object`` would be a lie
+    that pushes a ``.get`` on ``object`` into every caller (which is exactly what pyright flagged).
+    """
+    data: dict[str, Any] = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     return data
 
 
@@ -726,7 +732,9 @@ def smoke(interpreter: Path | None) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the checks. Returns the exit code; 0 means the offline install is sound."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description=(__doc__ or "check the offline install").splitlines()[0]
+    )
     parser.add_argument(
         "--wheelhouse",
         type=Path,

@@ -28,7 +28,14 @@ DEFAULT_TOKENS = Path("docker/server/tokens.json")
 
 def read_token(path: Path) -> str:
     """First token in the JSON token file the server reads. Never printed."""
-    document = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(f"{path}: {exc.strerror or exc}") from None
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path}: not valid JSON at line {exc.lineno}: {exc.msg}") from None
     tokens = document.get("tokens") or []
     if not tokens:
         raise SystemExit(f"{path}: no tokens in the file")
@@ -70,7 +77,12 @@ async def run(url: str, token: str, action: str, name: str | None, raw: str | No
                         )
                 return 0
 
-            arguments: dict[str, Any] = json.loads(raw or "{}")
+            try:
+                arguments: dict[str, Any] = json.loads(raw or "{}")
+            except json.JSONDecodeError as exc:
+                raise SystemExit(
+                    f"the tool arguments are not JSON ({exc.msg} at column {exc.colno})"
+                ) from None
             result = await session.call_tool(name or "", arguments)
             payload: dict[str, Any] = {
                 "is_error": getattr(result, "isError", None),

@@ -42,7 +42,12 @@ def load_tasks() -> dict[str, dict]:
     path = REPO_FILES_ROOT / "tasks.json"
     if not path.exists():
         path = main_root() / "tasks.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise SystemExit(f"{path}: {exc.strerror or exc}") from None
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path}: not valid JSON at line {exc.lineno}: {exc.msg}") from None
     return {t["id"]: t for t in data["tasks"]}
 
 

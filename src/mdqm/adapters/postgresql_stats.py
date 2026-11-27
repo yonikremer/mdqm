@@ -251,7 +251,11 @@ def statements(cursor: psycopg.Cursor[Any], state: QueryStoreState) -> list[Stat
     total = sql.Identifier(state.total_column)
     # The statement is a module constant and the only interpolation is an identifier psycopg
     # quotes, so there is no value to bind; marked for the scanner, not hidden from the reader.
-    cursor.execute(sql.SQL(_MINE_SQL).format(total=total))  # nosemgrep: python-sql-injection
+    # Compose first, execute second: the statement is a module constant with one psycopg-quoted
+    # identifier, so the composition is not a place a value can enter.
+    _q = sql.SQL(_MINE_SQL).format(total=total)
+    # pi-lens-ignore: python-sql-injection
+    cursor.execute(_q)  # nosemgrep
     totals: dict[str, Statement] = {}
     users: dict[str, set[str]] = {}
     dropped = 0

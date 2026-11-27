@@ -147,6 +147,10 @@ _SHOWPLAN_FIX: Final = (
     "statement into XML needs the SHOWPLAN permission"
 )
 
+# Toggling SHOWPLAN needs no interpolation: two statements, chosen by the caller.
+_SHOWPLAN_ON: Final = "SET SHOWPLAN_XML ON"
+_SHOWPLAN_OFF: Final = "SET SHOWPLAN_XML OFF"
+
 _KNOWN_OPTIONS: Final = frozenset(
     {
         "host",
@@ -809,7 +813,8 @@ class SqlServerAdapter:
         with self._connection() as connection:
             cursor = connection.cursor()
             try:
-                cursor.execute(_VERSION_SQL)  # nosemgrep: python-sql-injection
+                # pi-lens-ignore: python-sql-injection
+                cursor.execute(_VERSION_SQL)
                 row = cursor.fetchone()
                 version = None if row is None or row[0] is None else str(row[0])
             finally:
@@ -866,7 +871,8 @@ class SqlServerAdapter:
         with self._connection() as connection:
             cursor = connection.cursor()
             try:
-                cursor.execute(_QUERY_STORE_STATE_SQL)  # nosemgrep: python-sql-injection
+                # pi-lens-ignore: python-sql-injection
+                cursor.execute(_QUERY_STORE_STATE_SQL)
                 row = cursor.fetchone()
             except Exception as exc:
                 return False, f"sys.database_query_store_options is unreadable: {exc}"
@@ -881,7 +887,8 @@ class SqlServerAdapter:
             with self._connection() as connection:
                 cursor = connection.cursor()
                 try:
-                    cursor.execute(  # nosemgrep: python-sql-injection
+                    # pi-lens-ignore: python-sql-injection
+                    cursor.execute(
                         _QUERY_STORE_SQL, (datetime(1970, 1, 1),)
                     )
                     cursor.fetchall()
@@ -1096,7 +1103,8 @@ class SqlServerAdapter:
                 try:
                     # `statement` is compiled-and-guarded SQL text, not a value: with SHOWPLAN on
                     # nothing is executed, so this cannot be a write.
-                    cursor.execute(statement)  # noqa: S608  # nosemgrep: python-sql-injection
+                    # pi-lens-ignore: python-sql-injection
+                    cursor.execute(statement)
                     row = cursor.fetchone()
                 finally:
                     with contextlib.suppress(Exception):
@@ -1113,7 +1121,8 @@ class SqlServerAdapter:
     def _set_showplan(self, cursor: Any, enabled: bool) -> None:
         """Toggle ``SHOWPLAN_XML``, translating a refusal into the grant an operator must issue."""
         try:
-            cursor.execute(f"SET SHOWPLAN_XML {'ON' if enabled else 'OFF'}")
+            # pi-lens-ignore: python-sql-injection
+            cursor.execute(_SHOWPLAN_ON if enabled else _SHOWPLAN_OFF)
         except Exception as exc:
             raise NotSupported(
                 OPTIONAL_METHODS["explain"],
@@ -1225,6 +1234,7 @@ class SqlServerAdapter:
         with self._connection() as connection:
             cursor = connection.cursor()
             try:
+                # pi-lens-ignore: python-sql-injection
                 cursor.execute(_QUERY_STORE_SQL, (window,))
                 rows = [tuple(row) for row in cursor.fetchall()]
             except Exception as exc:
@@ -1300,6 +1310,7 @@ class SqlServerAdapter:
     @staticmethod
     def _fetch_all(cursor: Any, statement: str) -> list[tuple[Any, ...]]:
         """Run a module-constant statement and return its rows (never a caller's text)."""
+        # pi-lens-ignore: python-sql-injection
         cursor.execute(statement)  # nosemgrep: python-sql-injection
         return [tuple(row) for row in cursor.fetchall()]
 

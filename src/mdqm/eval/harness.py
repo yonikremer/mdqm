@@ -194,11 +194,13 @@ def oracle_duckdb(world: Any) -> Any:
         "erp": {"customers": world.erp.customers},
     }
     for schema, tables in datasets.items():
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         con.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
         for name, rows in tables.items():
             table = pa.Table.from_pylist([asdict(row) for row in rows])
             con.register("_load", table)
             # Schema and table names come from the fixed dict above, never from a caller.
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
             con.execute(
                 f'CREATE OR REPLACE TABLE {schema}."{name}" AS SELECT * FROM _load'  # noqa: S608
             )

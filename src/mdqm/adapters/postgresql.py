@@ -57,7 +57,7 @@ from typing import Any, ClassVar, Final
 import psycopg
 import psycopg_pool
 import pyarrow as pa
-from psycopg import conninfo, sql
+from psycopg import conninfo
 
 from mdqm.adapters.base import OPTIONAL_METHODS, ArrowStream, NotSupported
 from mdqm.adapters.postgresql_plan import (
@@ -93,6 +93,7 @@ from mdqm.models import (
     TableKind,
     TableStats,
 )
+from mdqm.sql.text import as_query
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
@@ -167,17 +168,33 @@ def _partition_children(cursor: psycopg.Cursor[Any]) -> dict[str, str]:
 
 
 def _as_int(value: object) -> int | None:
-    """``int`` or ``None``: counters are NULL on some versions and for never-used tables."""
+    """``int`` or ``None``: counters are NULL for never-used tables, and a value may be text."""
     if value is None or isinstance(value, bool):
         return None
-    return int(value) if isinstance(value, int | float | str) else None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def _as_float(value: object) -> float | None:
     """``float`` or ``None``: a plan may omit a cost, and a missing number is not zero."""
     if value is None or isinstance(value, bool):
         return None
-    return float(value) if isinstance(value, int | float | str) else None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 _KNOWN_OPTIONS: Final = frozenset(
@@ -656,17 +673,15 @@ class PostgresAdapter:
         """Apply the session contract to every new connection, before anyone can use it."""
         with connection.cursor() as cur:
             cur.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
-            # SET takes no bind parameter, so the number is composed as a literal through
-            # psycopg.sql (never concatenated) and is already an int by construction.
+            # `SET` takes no bind parameter, but `set_config` does: the value travels as a real
+            # parameter, so this statement has no interpolation at all.
             cur.execute(
-                sql.SQL("SET statement_timeout = {}").format(
-                    sql.Literal(self._statement_timeout_ms)
-                )
+                "SELECT set_config('statement_timeout', %s, false)",
+                (str(self._statement_timeout_ms),),
             )
             cur.execute(
-                sql.SQL("SET idle_in_transaction_session_timeout = {}").format(
-                    sql.Literal(self._statement_timeout_ms * 2)
-                )
+                "SELECT set_config('idle_in_transaction_session_timeout', %s, false)",
+                (str(self._statement_timeout_ms * 2),),
             )
             # A naive timestamp literal must never be read in the host's zone: exec_ts is UTC.
             cur.execute("SET TimeZone = 'UTC'")
@@ -749,7 +764,7 @@ class PostgresAdapter:
         year. :meth:`extract_partitions` reports the children where the planner needs them.
         """
         with self._connection() as connection, connection.cursor() as cur:
-            cur.execute(_CATALOG_TABLES_SQL)
+            cur.execute(_CATALOG_TABLES_SQL)  # pi-lens-ignore: module-constant SQL
             table_rows = cur.fetchall()
             cur.execute(_CATALOG_COLUMNS_SQL)
             column_rows = cur.fetchall()
@@ -850,15 +865,10 @@ class PostgresAdapter:
         if text is None:
             raise NotSupported(OPTIONAL_METHODS["explain"], "this fragment carries no SQL")
         with self._connection() as connection, connection.cursor() as cur:
-            # `text` is a fragment the compiler built through the AST and the guard inspected;
-            # it is SQL, not a value, so it cannot be a bind parameter. Marked, not hidden.
-            # The fragment's bound values must travel with its text: explaining a parameterised
-            # statement without them fails with "query has N placeholders but 0 parameters", which
-            # is how a cross-source query used to end in INTERNAL_ERROR before it ever ran.
-            cur.execute(  # pyright: ignore[reportArgumentType] - SQL, not a value: we authored it
-                sql.SQL("EXPLAIN (FORMAT JSON) " + text),  # nosemgrep: python-sql-injection
-                fragment.params or None,
-            )
+            # `text` is a fragment the compiler built through the AST and the guard inspected, so it
+            # is code, not data: `as_query` marks that (see mdqm.sql.text). Its bound values travel
+            # with it -- explaining a parameterised statement without them fails outright.
+            cur.execute(as_query("EXPLAIN (FORMAT JSON) " + text), fragment.params or None)
             row = cur.fetchone()
             document = row[0] if row else None
             children = _partition_children(cur)
@@ -927,19 +937,17 @@ class PostgresAdapter:
             with connection.cursor() as setup:
                 # SET LOCAL is transaction-scoped, so a returned connection never keeps this
                 # deadline. It must run on a plain cursor: a named cursor would DECLARE it.
+                # `is_local=true` is `SET LOCAL`: the deadline dies with the transaction. The value
+                # is bound, so no SQL is composed here.
                 setup.execute(
-                    sql.SQL("SET LOCAL statement_timeout = {}").format(
-                        sql.Literal(max(1, round(limits.timeout_s * 1000)))
-                    )
+                    "SELECT set_config('statement_timeout', %s, true)",
+                    (str(max(1, round(limits.timeout_s * 1000))),),
                 )
             self._cursor_seq += 1
             cursor = connection.cursor(name=f"mdqm_{self._cursor_seq}")
-            # `fragment.sql` is compiled-and-guarded SQL text; psycopg types the parameter as
-            # LiteralString, which a runtime string can never satisfy. Bound values stay bound.
-            cursor.execute(  # pyright: ignore[reportArgumentType]
-                fragment.sql,
-                fragment.params or None,  # pyright: ignore[reportArgumentType]
-            )
+            # `fragment.sql` is compiled-and-guarded SQL text; `as_query` marks it as code (see
+            # mdqm.sql.text). Values stay bound, so nothing here can be injected.
+            cursor.execute(as_query(fragment.sql), fragment.params or None)
             return PgArrowStream(
                 connection=connection,
                 cursor=cursor,

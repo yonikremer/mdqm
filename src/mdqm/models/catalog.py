@@ -6,6 +6,7 @@ small normalised vocabulary (portable joins, conversions, drift comparison).
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from enum import StrEnum
@@ -130,8 +131,12 @@ def _canonical(item: dict[str, Any]) -> str:
 
 
 def _sorted(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Order by canonical content, so input order can never change the hash."""
-    return [json.loads(text) for text in sorted(_canonical(item) for item in items)]
+    """Order by canonical content, so input order can never change the hash.
+
+    Sorts the items themselves rather than re-parsing their JSON: the round-trip used to be the only
+    thing that could throw here, and a copy is what the callers actually want.
+    """
+    return [copy.deepcopy(item) for item in sorted(items, key=_canonical)]
 
 
 def _table_content(table: Table) -> dict[str, Any]:
