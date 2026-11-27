@@ -91,7 +91,7 @@ from mdqm.models import (
     TableKind,
     TableStats,
 )
-from mdqm.sql.execution import prepare, run
+from mdqm.sql.execution import execute_one, prepare, wrapped
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
@@ -820,7 +820,7 @@ class OracleAdapter:
         for statement in (_VERSION_SQL, "SELECT version_full FROM product_component_version"):
             try:
                 # `statement` is one of the two module constants above, never a value.
-                run(cur, prepare(statement, dialect=self.dialect()))
+                execute_one(cur, prepare(statement, dialect=self.dialect()))
                 row = cur.fetchone()
             except oracledb.DatabaseError:
                 continue
@@ -871,19 +871,19 @@ class OracleAdapter:
         # one goes through the chokepoint, so the guard sees it immediately before it runs.
         dialect = self.dialect()
         with self._connection() as connection, connection.cursor() as cur:
-            run(cur, prepare(_CATALOG_TABLES_SQL, dialect=dialect))
+            execute_one(cur, prepare(_CATALOG_TABLES_SQL, dialect=dialect))
             table_rows = cur.fetchall()
-            run(cur, prepare(_CATALOG_VIEWS_SQL, dialect=dialect))
+            execute_one(cur, prepare(_CATALOG_VIEWS_SQL, dialect=dialect))
             view_rows = cur.fetchall()
-            run(cur, prepare(_CATALOG_COLUMNS_SQL, dialect=dialect))
+            execute_one(cur, prepare(_CATALOG_COLUMNS_SQL, dialect=dialect))
             column_rows = cur.fetchall()
-            run(cur, prepare(_CATALOG_INDEXES_SQL, dialect=dialect))
+            execute_one(cur, prepare(_CATALOG_INDEXES_SQL, dialect=dialect))
             index_rows = cur.fetchall()
-            run(cur, prepare(_CATALOG_CONSTRAINTS_SQL, dialect=dialect))
+            execute_one(cur, prepare(_CATALOG_CONSTRAINTS_SQL, dialect=dialect))
             constraint_rows = cur.fetchall()
-            run(cur, prepare(_CATALOG_CONSTRAINT_COLUMNS_SQL, dialect=dialect))
+            execute_one(cur, prepare(_CATALOG_CONSTRAINT_COLUMNS_SQL, dialect=dialect))
             constraint_column_rows = cur.fetchall()
-            run(cur, prepare(_PARTITIONED_TABLES_SQL, dialect=dialect))
+            execute_one(cur, prepare(_PARTITIONED_TABLES_SQL, dialect=dialect))
             partitioned = {(str(row[0]), str(row[1])) for row in cur.fetchall()}
 
         columns: dict[tuple[str, str], list[Column]] = {}
@@ -1035,11 +1035,11 @@ class OracleAdapter:
         """
         dialect = self.dialect()
         with self._connection() as connection, connection.cursor() as cur:
-            run(cur, prepare(_PARTITIONED_TABLES_SQL, dialect=dialect))
+            execute_one(cur, prepare(_PARTITIONED_TABLES_SQL, dialect=dialect))
             table_rows = cur.fetchall()
-            run(cur, prepare(_PARTITION_KEYS_SQL, dialect=dialect))
+            execute_one(cur, prepare(_PARTITION_KEYS_SQL, dialect=dialect))
             key_rows = cur.fetchall()
-            run(cur, prepare(_PARTITIONS_SQL, dialect=dialect))
+            execute_one(cur, prepare(_PARTITIONS_SQL, dialect=dialect))
             partition_rows = cur.fetchall()
 
         keys: dict[tuple[str, str], list[str]] = {}
@@ -1104,18 +1104,21 @@ class OracleAdapter:
         self._statement_seq += 1
         statement_id = f"mdqm_plan_{self._statement_seq}"
         raw: str | None = None
-        # `EXPLAIN PLAN` is a server command the guard refuses, so the statement it inspects is the
-        # fragment -- the query the optimizer is asked about -- and the prefix is our own constant.
-        # The statement id is this adapter's own counter, never anything a caller supplied.
-        explained = prepare(
-            statement,
-            dialect=self.dialect(),
-            params=dict(params) if params else None,
-            prefix=f"EXPLAIN PLAN SET STATEMENT_ID = '{statement_id}' FOR ",
+        # `EXPLAIN PLAN` is a server command the guard refuses, so the statement the guard inspects is
+        # the fragment -- the query the optimizer is asked about -- and `wrapped` adds the command
+        # around it. The statement id is this adapter's own counter, never anything a caller supplied.
+        explained = wrapped(
+            prepare(
+                statement,
+                dialect=self.dialect(),
+                params=dict(params) if params else None,
+            ),
+            template="EXPLAIN PLAN SET STATEMENT_ID = '{sid}' FOR {sql}",
+            sid=statement_id,
         )
         with self._connection() as connection, connection.cursor() as cur:
             try:
-                run(cur, explained)
+                execute_one(cur, explained)
             except oracledb.DatabaseError as exc:
                 if _is_no_privilege(exc):
                     raise NotSupported(
@@ -1125,7 +1128,7 @@ class OracleAdapter:
                     ) from exc
                 raise
             try:
-                run(cur, prepare(_PLAN_SQL, dialect="oracle", params={"sid": statement_id}))
+                execute_one(cur, prepare(_PLAN_SQL, dialect="oracle", params={"sid": statement_id}))
                 rows = [tuple(row) for row in cur.fetchall()]
                 with contextlib.suppress(oracledb.DatabaseError):
                     # `DBMS_XPLAN` is on the guard's denylist (a `DBMS_*` package), so this one
@@ -1191,7 +1194,7 @@ class OracleAdapter:
             watchdog = _Deadline(connection, limits.timeout_s, connection.cancel)
             watchdog.arm()
             try:
-                run(cursor, prepared)
+                execute_one(cursor, prepared)
             except oracledb.DatabaseError as exc:
                 watchdog.disarm()
                 raise _stream_error(
@@ -1249,7 +1252,7 @@ class OracleAdapter:
         window = since.astimezone(UTC).replace(tzinfo=None)
         with self._connection() as connection, connection.cursor() as cur:
             try:
-                run(
+                execute_one(
                     cur,
                     prepare(_QUERY_STORE_SQL, dialect="oracle", params={"since": window}),
                 )

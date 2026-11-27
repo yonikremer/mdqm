@@ -39,7 +39,7 @@ import psycopg
 
 from mdqm.adapters.base import OPTIONAL_METHODS, NotSupported
 from mdqm.models import RawQuery, TableStats
-from mdqm.sql.execution import prepare, run
+from mdqm.sql.execution import execute_one, prepare
 
 __all__ = [
     "MASKED_QUERY",
@@ -258,7 +258,7 @@ def statements(cursor: psycopg.Cursor[Any], state: QueryStoreState) -> list[Stat
     # `state.total_column` is detected from `_TOTAL_COLUMNS` and nothing else, so this is a lookup
     # in a closed set rather than a composition: the statement text is a constant of this file, and
     # the guard sees the final statement immediately before it runs.
-    run(cursor, prepare(_MINE_SQL_BY_COLUMN[state.total_column], dialect="postgres"))
+    execute_one(cursor, prepare(_MINE_SQL_BY_COLUMN[state.total_column], dialect="postgres"))
     totals: dict[str, Statement] = {}
     users: dict[str, set[str]] = {}
     dropped = 0

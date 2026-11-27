@@ -21,14 +21,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from mdqm.sql.execution import (
-    PreparedStatement,
-    StatementRefused,
-    local,
-    prepare,
-    run,
-    run_local,
-)
+from mdqm.sql.execution import PreparedStatement, StatementRefused, prepare, run, run_local
 from mdqm.sql.guard import guard
 
 POSTGRES = "postgres"
@@ -132,7 +125,7 @@ def test_a_hostile_value_comes_back_as_data(local_db: sqlite3.Connection, hostil
     cur = local_db.cursor()
     before = local_db.execute("SELECT count(*) FROM victim").fetchone()[0]
 
-    result = run_local(cur, local("SELECT ? AS echoed", (hostile,)))
+    result = run_local(cur, "SELECT ? AS echoed", (hostile,))
     echoed = result.fetchone()[0]
 
     after = local_db.execute("SELECT count(*) FROM victim").fetchone()[0]

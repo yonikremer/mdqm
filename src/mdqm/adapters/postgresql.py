@@ -961,9 +961,7 @@ class PostgresAdapter:
             # Defence in depth: the fragment was guarded when it was compiled, and it is guarded
             # again here, at the moment it reaches the driver. A fragment that somehow skipped the
             # compiler still cannot execute, and the values stay bound.
-            statement = prepare(
-                fragment.sql, dialect=self.dialect(), params=fragment.params or ()
-            )
+            statement = prepare(fragment.sql, dialect=self.dialect(), params=fragment.params or ())
             execute_one(cursor, statement)
             return PgArrowStream(
                 connection=connection,

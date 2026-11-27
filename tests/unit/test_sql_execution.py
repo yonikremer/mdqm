@@ -3,7 +3,7 @@
 ``tests/unit/test_sql_injection_protection.py`` proves the guard refuses the injection payloads.
 This file proves the other half: that the refusal happens at the chokepoint -- after a statement was
 built, immediately before it would be sent -- and that nothing at all is handed to the driver when it
-does. The spy cursor counts every ``execute`` call, so a refusal that still executed would fail here
+does. The spy cursor records every ``execute`` call, so a refusal that still executed would fail here
 even though the exception was raised.
 """
 
@@ -13,19 +13,11 @@ from typing import Any
 
 import pytest
 
-from mdqm.sql.execution import (
-    LocalStatement,
-    PreparedStatement,
-    StatementRefused,
-    local,
-    prepare,
-    run,
-    run_local,
-)
+from mdqm.sql.execution import PreparedStatement, StatementRefused, execute_one, prepare, wrapped
 from mdqm.sql.guard import MULTI_STATEMENT, WRITE_BLOCKED
 
-#: The three shapes a statement injection takes, each reaching the driver as a *compiled fragment*
-#: would: a write, a second statement behind a `;`, and a denylisted server function.
+#: The three shapes a statement injection takes, each arriving the way a compiled fragment does: a
+#: write, a second statement behind a `;`, and a denylisted server function.
 REFUSED_CASES: tuple[tuple[str, str, str], ...] = (
     ("write", "DELETE FROM customers WHERE cust_id = 1", WRITE_BLOCKED),
     ("stacked", "SELECT 1 FROM dual; DELETE FROM customers WHERE 1 = 1", MULTI_STATEMENT),
@@ -54,12 +46,12 @@ def test_a_refused_statement_raises_before_anything_is_sent(
     cursor = SpyCursor()
 
     with pytest.raises(StatementRefused) as caught:
-        run(cursor, prepare(statement, dialect="postgres"))
+        execute_one(cursor, prepare(statement, dialect="postgres"))
 
     refused = caught.value
-    assert refused.code == code, case_id
     assert refused.result.ok is False
     assert refused.result.error is not None
+    assert refused.result.error.code == code, case_id
     assert refused.result.error.fix
     assert cursor.calls == [], f"{case_id} reached the driver"
 
@@ -68,7 +60,7 @@ def test_a_read_reaches_the_driver_once_through_the_chokepoint() -> None:
     """The happy path: one statement, values bound, nothing interpolated."""
     cursor = SpyCursor()
 
-    returned = run(
+    returned = execute_one(
         cursor,
         prepare(
             "SELECT cust_id FROM customers WHERE status = %(status)s",
@@ -91,42 +83,28 @@ def test_an_unbound_read_gets_one_argument() -> None:
     """
     cursor = SpyCursor()
 
-    run(cursor, prepare("SELECT 1", dialect="postgres"))
+    execute_one(cursor, prepare("SELECT 1", dialect="postgres"))
 
     assert cursor.calls == [("SELECT 1",)]
 
 
-def test_a_prefix_cannot_launder_a_write() -> None:
-    """``prefix`` exists for EXPLAIN; a write behind a command word is still refused."""
+def test_a_template_cannot_launder_a_write() -> None:
+    """``wrapped`` only ever wraps an already-guarded statement, so a write cannot get behind it."""
     with pytest.raises(StatementRefused) as caught:
-        prepare("DELETE FROM customers", dialect="postgres", prefix="EXPLAIN (FORMAT JSON) ")
+        wrapped(
+            prepare("DELETE FROM customers", dialect="postgres"),
+            template="EXPLAIN (FORMAT JSON) {sql}",
+        )
 
-    assert caught.value.code == WRITE_BLOCKED
+    assert caught.value.result.error is not None
+    assert caught.value.result.error.code == WRITE_BLOCKED
 
 
-def test_the_prefix_is_added_after_the_guard_inspected_the_statement() -> None:
-    """The guarded text is the fragment; the prefix is the server command around it."""
-    prepared = prepare("SELECT 1", dialect="postgres", prefix="EXPLAIN (FORMAT JSON) ")
+def test_the_template_joins_the_command_and_the_guarded_statement() -> None:
+    """``EXPLAIN {sql}``: the command word is a literal here, the statement was inspected above."""
+    prepared = wrapped(
+        prepare("SELECT 1", dialect="postgres"), template="EXPLAIN (FORMAT JSON) {sql}"
+    )
 
     assert prepared.text == "EXPLAIN (FORMAT JSON) SELECT 1"
-    assert prepared.dialect == "postgres"
-
-
-def test_local_sql_writes_and_is_not_guarded() -> None:
-    """Our own metadata SQL writes on purpose: the guard would rightly refuse it."""
-    statement = local("DELETE FROM query_history WHERE id = ?", ("q1",))
-
-    assert isinstance(statement, LocalStatement)
-    assert statement.text == "DELETE FROM query_history WHERE id = ?"
-    assert statement.params == ("q1",)
-
-
-def test_the_two_doors_stay_apart() -> None:
-    """A source statement cannot be passed to ``run_local``, or a local one to ``run``."""
-    assert not isinstance(prepare("SELECT 1", dialect="postgres"), LocalStatement)
-    assert isinstance(prepare("SELECT 1", dialect="postgres"), PreparedStatement)
-
-    cursor = SpyCursor()
-    run_local(cursor, local("INSERT INTO query_history (id) VALUES (?)", ("q1",)))
-
-    assert cursor.calls == [("INSERT INTO query_history (id) VALUES (?)", ("q1",))]
+    assert isinstance(prepared, PreparedStatement)

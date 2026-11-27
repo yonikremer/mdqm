@@ -105,7 +105,7 @@ from mdqm.models import (
     TableKind,
     TableStats,
 )
-from mdqm.sql.execution import prepare, run
+from mdqm.sql.execution import execute_one, prepare
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
@@ -812,7 +812,7 @@ class SqlServerAdapter:
         with self._connection() as connection:
             cursor = connection.cursor()
             try:
-                run(cursor, prepare(_VERSION_SQL, dialect="tsql"))
+                execute_one(cursor, prepare(_VERSION_SQL, dialect="tsql"))
                 row = cursor.fetchone()
                 version = None if row is None or row[0] is None else str(row[0])
             finally:
@@ -869,7 +869,7 @@ class SqlServerAdapter:
         with self._connection() as connection:
             cursor = connection.cursor()
             try:
-                run(cursor, prepare(_QUERY_STORE_STATE_SQL, dialect="tsql"))
+                execute_one(cursor, prepare(_QUERY_STORE_STATE_SQL, dialect="tsql"))
                 row = cursor.fetchone()
             except Exception as exc:
                 return False, f"sys.database_query_store_options is unreadable: {exc}"
@@ -887,7 +887,7 @@ class SqlServerAdapter:
                     window = prepare(
                         _QUERY_STORE_SQL, dialect="tsql", params=(datetime(1970, 1, 1),)
                     )
-                    run(cursor, window)
+                    execute_one(cursor, window)
                     cursor.fetchall()
                 finally:
                     cursor.close()
@@ -1106,7 +1106,7 @@ class SqlServerAdapter:
                 try:
                     # With SHOWPLAN on nothing is executed, so the guard runs on the fragment --
                     # the statement whose plan was asked for -- before it is sent.
-                    run(cursor, prepare(statement, dialect="tsql"))
+                    execute_one(cursor, prepare(statement, dialect="tsql"))
                     row = cursor.fetchone()
                 finally:
                     with contextlib.suppress(Exception):
@@ -1192,7 +1192,7 @@ class SqlServerAdapter:
             watchdog = _Deadline(cursor, limits.timeout_s, cursor.cancel)
             watchdog.arm()
             try:
-                run(cursor, prepared)
+                execute_one(cursor, prepared)
             except Exception as exc:
                 watchdog.disarm()
                 with contextlib.suppress(Exception):
@@ -1243,7 +1243,7 @@ class SqlServerAdapter:
         with self._connection() as connection:
             cursor = connection.cursor()
             try:
-                run(
+                execute_one(
                     cursor,
                     prepare(_QUERY_STORE_SQL, dialect="tsql", params=(window,)),
                 )
@@ -1330,7 +1330,7 @@ class SqlServerAdapter:
         Every caller passes a constant of this file (the catalogs take no parameter), so the guard
         sees the statement immediately before it runs and this is the only door it uses.
         """
-        run(cursor, prepare(statement, dialect="tsql"))
+        execute_one(cursor, prepare(statement, dialect="tsql"))
         return [tuple(row) for row in cursor.fetchall()]
 
 
