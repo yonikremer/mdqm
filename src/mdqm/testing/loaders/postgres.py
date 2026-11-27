@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import psycopg
-from psycopg import sql
+from psycopg import conninfo, sql
 
 from mdqm.testing.world import ANCHOR, World, WorldConfig, build_world
 
@@ -108,7 +108,7 @@ class PgTarget:
 
     def dsn(self, database: str, *, read_only: bool = False) -> str:
         """Connection string for ``database``, as the owner or as the read-only role."""
-        return psycopg.conninfo.make_conninfo(
+        return conninfo.make_conninfo(
             host=self.host,
             port=self.port,
             dbname=database,

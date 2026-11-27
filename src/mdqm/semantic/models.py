@@ -158,10 +158,10 @@ def check_sql_template(
     except ParseError as exc:
         first = str(exc).splitlines()[0]
         raise ValueError(f"{what} is not valid SQL: {first}") from None
-    if len([statement for statement in statements if statement is not None]) != 1:
-        raise ValueError(
-            f"{what} must be a single SQL expression, got {len(statements)} statements"
-        )
+    # Drop the statement separators sqlglot leaves as ``None`` so the count matches the message.
+    parsed = [statement for statement in statements if statement is not None]
+    if len(parsed) != 1:
+        raise ValueError(f"{what} must be a single SQL expression, got {len(parsed)} statements")
     return template
 
 
