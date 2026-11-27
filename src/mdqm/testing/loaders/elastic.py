@@ -538,7 +538,15 @@ class EsAdmin:
         """``_count`` for one index or for the alias/pattern."""
         target = index if index is not None else ALIAS
         payload: dict[str, Any] = self._request("GET", f"/{target}/_count").json()
-        return int(payload["count"])
+        raw = payload.get("count")
+        # The body comes from a remote service: a proxy error page or a changed mapping must not
+        # surface as `ValueError: invalid literal for int()` three frames deep.
+        try:
+            return int(raw) if raw is not None else 0
+        except (TypeError, ValueError):
+            raise LoaderError(
+                f"_count for {target!r} returned a non-numeric count {raw!r}"
+            ) from None
 
     def search(self, body: dict[str, Any], index: str | None = None) -> dict[str, Any]:
         """One ``_search`` on the alias (or an explicit index/pattern)."""
