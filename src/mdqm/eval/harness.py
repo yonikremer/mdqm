@@ -141,30 +141,54 @@ def run_spec_path(
     return {"kind": "rows", "rows": rows}
 
 
-def run_oracle_path(question: Question, *, target: Any, database: str) -> Mapping[str, Any]:
-    """Run E01's hand-written SQL through the same read-only connection the adapter uses."""
-    import psycopg
+def oracle_duckdb(world: Any) -> Any:
+    """A DuckDB holding the world as E01's oracle SQL expects it: one schema per source.
 
+    This is the layout the oracle was written for -- ``billing.usage_events``, ``crm.customers`` --
+    and its dialect is DuckDB's (integer division with ``//``). Running it against PostgreSQL, where
+    each source is a separate database and every table is in ``public``, was never going to work:
+    the harness reported that as an `ERROR` leg until this existed.
+    """
+    from dataclasses import asdict
+
+    import duckdb
+    import pyarrow as pa
+
+    con = duckdb.connect(":memory:")
+    datasets: dict[str, dict[str, Any]] = {
+        "crm": {"customers": world.crm.customers},
+        "billing": {
+            "accounts": world.billing.accounts,
+            "usage_events": world.billing.usage_events,
+            "accounts_hist": world.billing.accounts_hist,
+        },
+        "erp": {"customers": world.erp.customers},
+    }
+    for schema, tables in datasets.items():
+        con.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+        for name, rows in tables.items():
+            table = pa.Table.from_pylist([asdict(row) for row in rows])
+            con.register("_load", table)
+            # Schema and table names come from the fixed dict above, never from a caller.
+            con.execute(
+                f'CREATE OR REPLACE TABLE {schema}."{name}" AS SELECT * FROM _load'  # noqa: S608
+            )
+            con.unregister("_load")
+    return con
+
+
+def run_oracle_path(question: Question, *, world: Any) -> Mapping[str, Any]:
+    """Run E01's hand-written SQL in DuckDB, over the same world the database was loaded from."""
     if not question.oracle_sql:
         return {"kind": "skipped", "problem": "no oracle SQL in the question set"}
-    # E01's oracle SQL is written schema-per-source (`billing.usage_events`), which describes one
-    # database with a schema per source. The D03 layout is one database per source with every table in
-    # `public`, so the qualifier is rewritten for the database this leg connects to. Recorded rather
-    # than hidden: an oracle copied verbatim cannot run here, and pretending otherwise would be a
-    # silent mismatch instead of a visible one.
-    adapted = question.oracle_sql
-    for source_prefix in ("crm", "billing", "erp"):
-        adapted = adapted.replace(f"{source_prefix}.", "public.")
-    connection = psycopg.connect(target.dsn(database, read_only=True))
-    with connection, connection.cursor() as cur:
-        # E01's own constant SQL; psycopg types the parameter as LiteralString, which a value read
-        # from the question set can never be. No user input reaches this line.
-        cur.execute(
-            adapted  # pyright: ignore[reportArgumentType, reportCallIssue]
-        )
-        names = [column.name for column in cur.description or ()]
-        rows = [dict(zip(names, row, strict=False)) for row in cur.fetchall()]
+    con = oracle_duckdb(world)
+    try:
+        cursor = con.execute(question.oracle_sql)
+        names = [description[0] for description in cursor.description or ()]
+        rows = [dict(zip(names, row, strict=False)) for row in cursor.fetchall()]
         return {"kind": "rows", "rows": rows}
+    finally:
+        con.close()
 
 
 def compare(question: Question, actual: Mapping[str, Any], *, tolerance: float = 1e-9) -> str:
@@ -182,13 +206,12 @@ def compare(question: Question, actual: Mapping[str, Any], *, tolerance: float =
     return "PASS" if problem is None else "FAIL"
 
 
-def evaluate(*, target: Any, adapters: Mapping[str, Any], layer: Any) -> Report:
+def evaluate(*, target: Any, adapters: Mapping[str, Any], layer: Any, world: Any) -> Report:
     """Answer every question twice and report both legs against the ground truth."""
     report = Report()
     for question in load_questions():
         source = str(question.spec["from"]).split(".", 1)[0] if question.spec else ""
         adapter = adapters.get(source)
-        database = source
         spec_result, oracle_result, detail = "SKIP", "SKIP", ""
         if adapter is not None:
             try:
@@ -197,7 +220,7 @@ def evaluate(*, target: Any, adapters: Mapping[str, Any], layer: Any) -> Report:
             except Exception as exc:  # noqa: BLE001 - one question must not stop the run
                 spec_result, detail = "ERROR", f"{type(exc).__name__}: {exc}"
         try:
-            oracle_actual = run_oracle_path(question, target=target, database=database)
+            oracle_actual = run_oracle_path(question, world=world)
             oracle_result = compare(question, oracle_actual)
         except Exception as exc:  # noqa: BLE001 - a source may not hold this question's table
             oracle_result, detail = "ERROR", f"{type(exc).__name__}: {exc}"
@@ -224,10 +247,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     settings = Settings.load()
+    from mdqm.testing.world import WorldConfig, build_world
+
     report = evaluate(
         target=target_from_environ(),
         adapters=build_adapters(settings),
         layer=load_layer(LAYER),
+        world=build_world(WorldConfig()),
     )
     if args.json:
         print(json.dumps(report.as_dict(), indent=2, default=str))
