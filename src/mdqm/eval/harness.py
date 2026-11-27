@@ -180,6 +180,10 @@ def oracle_duckdb(world: Any) -> Any:
     import pyarrow as pa
 
     con = duckdb.connect(":memory:")
+    # The world's timestamps are tz-aware UTC; E01's oracle SQL compares them against a *naive*
+    # TIMESTAMP. Without this, DuckDB compares in the session time zone, which showed up as 3952
+    # extra units in a SUM (and one extra row in a COUNT) -- a fixture bug, not a product one.
+    con.execute("SET TimeZone='UTC'")
     datasets: dict[str, dict[str, Any]] = {
         "crm": {"customers": world.crm.customers},
         "billing": {
@@ -244,11 +248,17 @@ def evaluate(*, target: Any, adapters: Mapping[str, Any], layer: Any, world: Any
                 spec_result = compare(question, spec_actual)
             except Exception as exc:  # noqa: BLE001 - one question must not stop the run
                 spec_result, detail = "ERROR", f"{type(exc).__name__}: {exc}"
-        try:
-            oracle_actual = run_oracle_path(question, world=world)
-            oracle_result = compare(question, oracle_actual)
-        except Exception as exc:  # noqa: BLE001 - a source may not hold this question's table
-            oracle_result, detail = "ERROR", f"{type(exc).__name__}: {exc}"
+        if question.answer.get("kind") == "error":
+            # The oracle answers "what plain SQL would do"; for these questions the product's job is
+            # to *refuse* that SQL, so an oracle run is not a comparison -- running it would report
+            # FAIL for the one thing the product is supposed to do.
+            oracle_result = "N/A"
+        else:
+            try:
+                oracle_actual = run_oracle_path(question, world=world)
+                oracle_result = compare(question, oracle_actual)
+            except Exception as exc:  # noqa: BLE001 - a source may not hold this table
+                oracle_result, detail = "ERROR", f"{type(exc).__name__}: {exc}"
         report.verdicts.append(
             Verdict(
                 id=question.id,

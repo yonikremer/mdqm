@@ -309,6 +309,13 @@ services:
       MDQM_PATHS__METADATA_DB: /data/metadata.sqlite
       MDQM_PATHS__SEMANTIC_DIR: /semantic
       MDQM_PATHS__CACHE_DIR: /cache
+      # The deployment's own protection dial: a federated step may not pull more
+      # rows than this out
+      # of a source. 1000 is the shipped default and is too tight for a grouped
+      # join over a month of
+      # usage (a legitimate question needed 1001), so this deployment raises it
+      # deliberately.
+      MDQM_LIMITS__MAX_ROWS: "50000"
       MDQM_SECRETS__DIR: /run/secrets
       MDQM_TOKENS_FILE: /run/secrets/tokens.json
     ports:
