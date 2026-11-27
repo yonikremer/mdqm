@@ -406,7 +406,7 @@ def create_erp(cur: psycopg.Cursor[Any]) -> None:
         CREATE TABLE public.customers (
             cust_no     INTEGER     NOT NULL,
             name        TEXT        NOT NULL,
-            status      SMALLINT    NOT NULL CHECK (status IN (1, 2, 3)),
+            status_code SMALLINT    NOT NULL CHECK (status_code IN (1, 2, 3)),
             limit_k     NUMERIC     NOT NULL
         )
         """
@@ -524,7 +524,7 @@ def load_erp(cur: psycopg.Cursor[Any], world: World) -> dict[str, int]:
     rows = _copy(
         cur,
         "customers",
-        ("cust_no", "name", "status", "limit_k"),
+        ("cust_no", "name", "status_code", "limit_k"),
         ((c.cust_no, c.name, c.status_code, c.limit_k) for c in world.erp.customers),
     )
     return {"erp.customers": rows}

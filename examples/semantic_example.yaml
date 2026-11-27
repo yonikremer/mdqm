@@ -53,6 +53,14 @@ tables:
       insertion_time: { role: ingestion_time, derives_bound_on: start_time,
                         lag: { min: 0s, max: 6h, verify: nightly } }
     mutability: { class: append_rarely, status: approved }
+  # The keys make aggregates on these tables count each entity once. erp.customers really does hold
+  # identical duplicate rows, which is why E01's oracle dedupes on the key before averaging.
+  crm.customers:
+    key: [cust_id]
+  billing.accounts:
+    key: [client_no]
+  erp.customers:
+    key: [cust_no]
   billing.accounts_hist:
     mutability: { class: mutable_critical, status: approved }
     cache: { mode: none }

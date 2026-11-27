@@ -686,16 +686,17 @@ def test_e01_refusal_question_calls_no_source(
     assert '"time":' in result.error.fix
 
 
-def test_erp_duplicate_customer_records_are_a_documented_spec_gap(
+def test_erp_duplicate_records_are_deduped_on_the_declared_key(
     questions: Mapping[str, Any], world: World, layer: SemanticLayer
 ) -> None:
-    """E01 dedupes ``erp.customers`` on its key; a query spec cannot say that, so they disagree.
+    """E01 dedupes ``erp.customers`` on its key before averaging; so must the compiler.
 
-    The world plants six customer records that repeat a ``cust_no`` with a different name, so
-    averaging the raw table weights those customers twice. Task E01's oracle dedupes on
-    ``(cust_no, status_code, limit_k)``; the spec language has no "distinct entity" concept, so the
-    compiler cannot express it. The gap is asserted here so it cannot disappear quietly, and it is
-    recorded in ``progress/C09.md`` for the task that adds an entity/dedupe rule.
+    The world plants customer records that repeat a ``cust_no``, so averaging the raw table weights
+    those customers twice. E01's oracle dedupes on ``(cust_no, status_code, limit_k)``; the compiler
+    now does the same for an aggregate over a table whose layer entry declares a key.
+
+    FAILS IF: the compiled SQL does not dedupe, or the answer drifts from E01's truth. That is
+    what happened before the fix: the tool answered 29719.63 where E01 says 29748.72.
     """
     adapter = _adapter("erp", {"customers": table_from_rows(world.erp.customers)})
     try:
@@ -710,15 +711,21 @@ def test_erp_duplicate_customer_records_are_a_documented_spec_gap(
                 columns=_catalog(adapter),
             ),
         )
-        columns, rows = _execute(adapter, fragment_of(result))
+        fragment = fragment_of(result)
+        columns, rows = _execute(adapter, fragment)
     finally:
         adapter.close()
+
+    assert "DISTINCT" in fragment.sql.upper(), fragment.sql
     assert columns == ["customer_status", "credit_limit_r5000_avg"]
-    answer = cast(Sequence[Sequence[Any]], e01_answer(questions, "avg_limit_by_status_erp")["rows"])
-    raw = {row[0]: float(row[1]) for row in rows}
-    assert raw["active"] != answer[0][1]
-    keys = {(row.cust_no, row.status_code, row.limit_k) for row in world.erp.customers}
-    assert len(keys) < len(world.erp.customers)
+    expected_rows = cast(
+        Sequence[Sequence[Any]], e01_answer(questions, "avg_limit_by_status_erp")["rows"]
+    )
+    answer = {str(row[0]): float(row[1]) for row in expected_rows}
+    produced = {row[0]: float(row[1]) for row in rows}
+    assert set(produced) == set(answer)
+    for status, expected in answer.items():
+        assert produced[status] == pytest.approx(expected, rel=1e-9), status
 
 
 def _dataset(world: World, key: str) -> Sequence[Any]:

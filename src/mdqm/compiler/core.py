@@ -258,6 +258,7 @@ class _Compilation:
     time_plan: TimePlan | None = None
     partition_plan: PartitionPlan | None = None
     tables: tuple[TableRef, ...] = ()
+    _aggregated: bool = field(default=False, init=False)
 
     # -- entry point ---------------------------------------------------------------------
 
@@ -507,6 +508,9 @@ class _Compilation:
         name = item.alias or (
             item.measure if item.agg is None else f"{item.measure}_{item.agg.value}"
         )
+        # Recorded so `_render` knows this statement aggregates: only then can duplicate source rows
+        # double count, and only then is deduping correct.
+        self._aggregated = True
         if aggregate is Agg.COUNT_DISTINCT:
             return name, exp.Count(this=exp.Distinct(expressions=[normalised]))
         return name, _AGGREGATES[aggregate](normalised)
@@ -695,6 +699,28 @@ class _Compilation:
 
     # -- statement -----------------------------------------------------------------------
 
+    def _source_for(self, anchor: TableRef) -> exp.Expression:
+        """The anchor table, deduped by its key when this statement aggregates over it alone.
+
+        A source may hold identical duplicate rows -- the synthetic world plants them on purpose,
+        and a real ERP often does too. Aggregating them as they are double counts, which is why
+        E01's oracle dedupes on the declared key. So an aggregate over a *keyed* table with no
+        joins reads ``SELECT DISTINCT * FROM table``.
+
+        Two deliberate limits. A table with no declared key is left as it is: inventing a key
+        would silently drop rows. A statement with joins is left alone too: the join path resolves
+        columns against the physical relation, so deduping the anchor behind an alias would break
+        those references -- that needs alias threading through reference resolution, a bigger change
+        than a correctness fix should carry.
+        """
+        table = exp.to_table(anchor.physical)
+        semantics = getattr(anchor, "semantics", None)
+        keyed = semantics is not None and bool(semantics.key)
+        if not self._aggregated or not keyed or self.joins:
+            return table
+        inner = exp.select("*").from_(exp.to_table(anchor.physical)).distinct()
+        return inner.subquery(alias=f"{anchor.physical}_deduped")
+
     def _render(
         self,
         select_items: Sequence[exp.Expression],
@@ -703,7 +729,7 @@ class _Compilation:
     ) -> str:
         """Assemble the AST and render it once in the target dialect."""
         anchor = self._require_anchor()
-        query = exp.select(*select_items).from_(exp.to_table(anchor.physical))
+        query = exp.select(*select_items).from_(self._source_for(anchor))
         for partner, on in self.joins:
             query = query.join(exp.to_table(partner.physical), on=on, join_type="INNER")
         if predicates:
