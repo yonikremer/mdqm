@@ -126,6 +126,37 @@ Notes that cost time if missed:
   `--read-only` if the platform prefers it.
 - **Backup** = the `/data` volume plus the semantic YAML repository in git. `/cache` is disposable.
 
+## 4a. Verified locally (Docker Desktop 29.9.3, Compose v5.7.1, Windows host)
+
+These commands were executed, not reasoned about. The outputs are what the operator should see.
+
+```bash
+python scripts/dev.py env                          # writes .env and docker/server/tokens.json
+docker compose --profile pg --profile server up -d --build
+docker ps --filter name=mdqm-server-1              # Up (healthy)
+docker exec mdqm-server-1 id                       # uid=10001(mdqm) gid=0(root)
+curl -s localhost:58765/healthz                     # {"status":"ok","name":"mdqm",...}
+docker exec mdqm-server-1 mdqm probe                # crm: 1 supported, 0 unsupported, 3 unknown
+```
+
+Three findings from that run, each fixed and pinned by a test:
+
+1. **`MDQM_PATHS__DATA_DIR` is not a setting.** The writable paths are `paths.metadata_db`,
+   `paths.semantic_dir`, `paths.cache_dir`; a source's host/port/database belong under
+   `sources[].options`, not at the top of the entry. `extra="forbid"` rejects both mistakes loudly,
+   which is how they were found.
+2. **The container must run with GID 0.** The image makes `/data`, `/cache` and `/semantic`
+   group-writable instead of chowning them to one UID, so an arbitrary UID with GID 0 can write --
+   the same assumption OpenShift makes. Compose therefore sets `user: "10001:0"`; without it the
+   server dies with `unable to open database file`.
+3. **First boot has no semantic layer and must not crash.** An empty semantic directory is a normal
+   state, not corruption: the server starts, logs a warning and `/context` answers `NOT_SUPPORTED`
+   with a fix. A directory whose files fail to load still refuses to start.
+
+The image must be rebuilt after any change to `pyproject.toml` entry points: a stale image
+advertised only the `openapi` adapter until `--build` was rerun, which the probe exposed with
+`AdapterNotRegistered`.
+
 ## 5. Verification status (read this before trusting the image)
 
 Runs anywhere, no container needed:

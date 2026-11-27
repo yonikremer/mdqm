@@ -291,15 +291,15 @@ services:
     environment:
       MDQM_SERVER__HOST: 0.0.0.0
       MDQM_SERVER__PORT: "8765"
-      # No sources yet: the PostgreSQL adapter (A02) is what makes one usable.
-      # Keeping this list
-      # empty is honest -- the server starts, serves /healthz and /mcp, and
-      # answers "no source"
-      # rather than pretending to have one. Fill it in with the shape
-      # SourceConfig declares:
-      #   [{"name":"crm","adapter":"postgresql","secret":"pg_ro_password",
-      #     "options":{"host":"pg","port":5432,"dbname":"crm"}}]
-      MDQM_SOURCES: "[]"
+      # One real source: the Postgres beside it. Connection details live under
+      # `options`
+      # (SourceConfig has no host/port fields of its own); the password is the
+      # mounted secret
+      # file, never a value in this file. This is the only source A02's adapter
+      # can serve today.
+      MDQM_SOURCES: >-
+        [{"name":"crm","adapter":"postgresql","secret":"pg_ro_password",
+        "options":{"host":"pg","port":5432,"dbname":"crm","user":"mdqm_ro"}}]
       MDQM_PATHS__METADATA_DB: /data/metadata.sqlite
       MDQM_PATHS__SEMANTIC_DIR: /semantic
       MDQM_PATHS__CACHE_DIR: /cache
