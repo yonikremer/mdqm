@@ -1117,7 +1117,7 @@ def blocked_references(store: Store, *, source: str | None = None) -> tuple[str,
     labels: set[str] = set()
     # The prefix is matched in Python on the key column: the statement is a constant with no
     # parameter at all, and mdqm_meta holds a handful of rows (identifiers and hashes, never data).
-    rows = run_local(store.connect(), _SELECT_ALL_META).fetchall()
+    rows = run_local(store.connect(), _SELECT_ALL_META, ()).fetchall()
     for row in rows:
         if not any(str(row["key"]).startswith(prefix) for prefix in wanted):
             continue

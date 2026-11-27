@@ -13,7 +13,14 @@ from typing import Any
 
 import pytest
 
-from mdqm.sql.execution import PreparedStatement, StatementRefused, execute_one, prepare, wrapped
+from mdqm.sql.execution import (
+    PreparedStatement,
+    StatementRefused,
+    execute_one,
+    prepare,
+    set_local,
+    wrapped,
+)
 from mdqm.sql.guard import MULTI_STATEMENT, WRITE_BLOCKED
 
 #: The three shapes a statement injection takes, each arriving the way a compiled fragment does: a
@@ -108,3 +115,76 @@ def test_the_template_joins_the_command_and_the_guarded_statement() -> None:
 
     assert prepared.text == "EXPLAIN (FORMAT JSON) SELECT 1"
     assert isinstance(prepared, PreparedStatement)
+
+
+# --- local engine settings ---------------------------------------------------------------------
+
+
+class RecordingEngine:
+    """A local engine stand-in: records the statement, answers the `fetchall` `set_local` asks for."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, statement: str) -> RecordingEngine:
+        self.statements.append(statement)
+        return self
+
+    def fetchall(self) -> list[object]:
+        return []
+
+
+def test_a_setting_reaches_a_local_engine_with_its_value_quoted() -> None:
+    engine = RecordingEngine()
+
+    set_local(engine, "memory_limit", "512MB")
+
+    assert engine.statements == ["SET memory_limit = '512MB'"]
+
+
+@pytest.mark.parametrize(
+    ("value", "refused"),
+    [
+        ("512MB; DROP TABLE x", True),
+        ("512 MB", True),
+        ("1GB'", True),
+    ],
+    ids=["statement", "a space", "an unterminated quote"],
+)
+def test_a_value_the_setting_cannot_hold_is_refused_by_name(value: str, refused: bool) -> None:
+    """The refusal names the setting and its rule, so an operator can fix it."""
+    engine = RecordingEngine()
+
+    with pytest.raises(ValueError, match="memory_limit"):
+        set_local(engine, "memory_limit", value)
+
+    assert refused, "every case here must be refused"
+    assert engine.statements == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["cache/spill", "/var/spill", "C:/spill", "./spill"],
+    ids=["relative", "posix", "drive letter", "dot relative"],
+)
+def test_a_spill_path_may_be_relative(path: str) -> None:
+    """A dev run spills under the working directory; only a quote or a control char is a risk."""
+    engine = RecordingEngine()
+
+    set_local(engine, "temp_directory", path)
+
+    assert engine.statements == [f"SET temp_directory = '{path}'"]
+
+
+def test_a_spill_path_cannot_end_the_quoted_literal() -> None:
+    engine = RecordingEngine()
+
+    with pytest.raises(ValueError, match="cannot be quoted"):
+        set_local(engine, "temp_directory", "spill'; DROP TABLE x; --")
+
+    assert engine.statements == []
+
+
+def test_an_unknown_setting_lists_the_ones_that_exist() -> None:
+    with pytest.raises(ValueError, match="temp_directory"):
+        set_local(RecordingEngine(), "threads", "4")

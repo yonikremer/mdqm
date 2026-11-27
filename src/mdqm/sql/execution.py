@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from mdqm.sql.guard import GuardPolicy, GuardResult, guard
 
@@ -146,11 +146,26 @@ def local_idents(names: Sequence[str]) -> str:
 
 
 #: Settings this repository is willing to change on a local engine, with the shape their value may take.
+#: ``temp_directory`` is the one that needs a rule rather than a pattern: a path may be relative (a
+#: dev run spills under the working directory) and the only characters that can break out of the quoted
+#: literal are the quote, the backslash and a control character. A path is not an injection surface by
+#: itself; an unterminated literal is.
 _LOCAL_SETTINGS: dict[str, re.Pattern[str]] = {
     "memory_limit": re.compile(r"^[0-9]{1,6}(KB|MB|GB|TB)$"),
-    "temp_directory": re.compile(r"^[A-Za-z]:[\/][^'\"]*$|^/[^'\"]*$"),
     "TimeZone": re.compile(r"^[A-Za-z][A-Za-z0-9_+/-]{0,63}$"),
 }
+
+#: Characters a ``temp_directory`` must not contain: each one could end or escape the literal.
+_UNSAFE_PATH: Final[tuple[str, ...]] = ("'", '"', "\\", "\n", "\r", "\x00")
+
+
+def _check_temp_directory(value: str) -> None:
+    """Refuse a spill path that could end or escape the quoted ``SET`` literal."""
+    if not value or len(value) > 512:
+        raise ValueError(f"temp_directory must be 1-512 characters, got {len(value)}")
+    blocked = [character for character in _UNSAFE_PATH if character in value]
+    if blocked or any(ord(character) < 0x20 for character in value):
+        raise ValueError(f"temp_directory {value!r} contains a character that cannot be quoted")
 
 
 def set_local(engine: Any, name: str, value: str) -> None:
@@ -162,10 +177,13 @@ def set_local(engine: Any, name: str, value: str) -> None:
     configuration.
     """
     pattern = _LOCAL_SETTINGS.get(name)
-    if pattern is None:
-        raise StatementRefused(
-            guard("SELECT 1", "duckdb")  # reuse the refusal type with the guard's shape
+    if pattern is None and name != "temp_directory":
+        raise ValueError(
+            f"{name!r} is not a local setting this repository changes; the ones it does are: "
+            f"{', '.join(sorted((*_LOCAL_SETTINGS, 'temp_directory')))}"
         )
-    if not pattern.fullmatch(value):
-        raise StatementRefused(guard("SELECT 1", "duckdb"))
+    if pattern is None:
+        _check_temp_directory(value)
+    elif not pattern.fullmatch(value):
+        raise ValueError(f"{name!r} does not accept {value!r}: it must match {pattern.pattern}")
     engine.execute("SET " + name + " = '" + value + "'").fetchall()
