@@ -39,6 +39,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Literal
 
 import pyarrow as pa
@@ -50,6 +51,8 @@ from mdqm.compiler import CompileContext, compile_spec
 from mdqm.compiler.resolve import TableRef, known_tables, resolve_table
 from mdqm.errors import from_exception, invalid_spec
 from mdqm.executor.cache import FragmentCache, fragment_key
+from mdqm.executor.federate import FederatedExecutor
+from mdqm.executor.models import QualityReport
 from mdqm.governor import Clock, Governor, GovernorRefusal, SystemClock
 from mdqm.linter import LintContext, lint_spec, lint_sql
 from mdqm.models import ErrorResponse, Fragment, JsonObject, Limits, PlanSummary, PruningProof
@@ -107,6 +110,10 @@ class QueryServices:
         cache: the fragment cache, or ``None`` when this server has no local DuckDB to hold it.
         clock: the injected clock, so ``exec_ts`` and every TTL are testable.
         limits: the caps one fragment runs under.
+        executor: the federated executor (M04's cross-source path), or ``None``. It holds its own
+            DuckDB and its own fragment cache, so a shared one is what makes a repeated
+            cross-source query free; without it each such query builds one, and its cache is cold.
+        spill_dir: where that self-built executor spills. ``None`` means the configured default.
     """
 
     layer: SemanticLayer
@@ -118,6 +125,8 @@ class QueryServices:
     cache: FragmentCache | None = None
     clock: Clock | None = None
     limits: Limits = _DEFAULT_LIMITS
+    executor: FederatedExecutor | None = None
+    spill_dir: Path | None = None
 
     def now(self) -> datetime:
         """The one instant of this execution (C02), normalised to UTC."""
@@ -226,6 +235,13 @@ class QueryAnswer(MDQMModel):
     rows_total: int = Field(default=0, ge=0)
     cache_hit: bool = Field(default=False, description="True when no source call was made.")
     freshness: tuple[SegmentFreshness, ...] = ()
+    quality: QualityReport | None = Field(
+        default=None,
+        description=(
+            "A cross-source answer's receipt: rows per source with their own `fetched_at`, and "
+            "what each join matched, dropped and multiplied. `complete: false` means no answer."
+        ),
+    )
     plan: PlanInfo | None = None
     applied_fixes: tuple[str, ...] = Field(
         default=(), description="Every change the server made to your request, in order."
@@ -310,6 +326,30 @@ def _run_spec(services: QueryServices, user: str, spec: QuerySpec) -> QueryAnswe
     if lint.error is not None:
         return _refused(services, user, error=lint.error, spec=parsed, exec_ts=exec_ts)
     repaired = lint.spec if lint.spec is not None else parsed
+    # A spec whose approved joins reach another source is not one statement: it becomes a
+    # federated plan (M04). A single-source spec gets ``None`` here and compiles below, unchanged.
+    from mdqm.server.tools.query_federated import federated_plan, run_federated
+
+    federated = federated_plan(services, repaired, exec_ts)
+    if isinstance(federated, ErrorResponse):
+        return _refused(
+            services,
+            user,
+            error=federated,
+            spec=repaired,
+            exec_ts=exec_ts,
+            sources=(target.source,),
+            applied_fixes=lint.applied_fixes,
+        )
+    if federated is not None:
+        return run_federated(
+            services,
+            user,
+            federated=federated,
+            spec=repaired,
+            exec_ts=exec_ts,
+            applied_fixes=lint.applied_fixes,
+        )
     compiled = compile_spec(
         repaired,
         CompileContext(

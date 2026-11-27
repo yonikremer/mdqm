@@ -2614,6 +2614,118 @@
             "title": "ErrorResponse",
             "type": "object"
           },
+          "JoinReport": {
+            "additionalProperties": false,
+            "description": "What one join did to the row count, in counts rather than in adjectives.\n\n``dropped`` is the number of left rows a partner did not match; those rows are gone from an\n``inner`` or ``semi`` answer and kept by a ``left`` one. ``multiplied`` is the number of extra\nrows a many-side partner added, so a duplicated key that would inflate a sum or an average\ncannot pass unnoticed either.",
+            "properties": {
+              "dropped": {
+                "description": "Left rows that found none.",
+                "minimum": 0,
+                "title": "Dropped",
+                "type": "integer"
+              },
+              "dropped_keys": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "title": "Dropped Keys",
+                "type": "array"
+              },
+              "how": {
+                "enum": [
+                  "inner",
+                  "left",
+                  "semi"
+                ],
+                "title": "How",
+                "type": "string"
+              },
+              "join": {
+                "title": "Join",
+                "type": "string"
+              },
+              "left": {
+                "title": "Left",
+                "type": "string"
+              },
+              "matched": {
+                "description": "Left rows that found at least one partner.",
+                "minimum": 0,
+                "title": "Matched",
+                "type": "integer"
+              },
+              "multiplied": {
+                "description": "Extra rows this join emitted for matched keys.",
+                "minimum": 0,
+                "title": "Multiplied",
+                "type": "integer"
+              },
+              "on": {
+                "description": "The rendered ON clause, key conversion included.",
+                "title": "On",
+                "type": "string"
+              },
+              "reason": {
+                "default": "",
+                "title": "Reason",
+                "type": "string"
+              },
+              "right": {
+                "title": "Right",
+                "type": "string"
+              },
+              "rows_left": {
+                "minimum": 0,
+                "title": "Rows Left",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "join",
+              "left",
+              "right",
+              "how",
+              "on",
+              "rows_left",
+              "matched",
+              "dropped",
+              "multiplied"
+            ],
+            "title": "JoinReport",
+            "type": "object"
+          },
+          "NullGroup": {
+            "additionalProperties": false,
+            "description": "A grouping column whose value is NULL for some rows of a step's source result.\n\nAfter a value map, a NULL means the source held a code the map does not cover (the compiler's\nCASE falls through to NULL on purpose, so the row is visible rather than misfiled); a genuine\nNULL in a non-categorical column lands here too, which is why the reason says both. ``rows``\ncounts source rows, so the number says how much of the data is affected rather than how many\ngroups the answer happened to produce.",
+            "properties": {
+              "column": {
+                "title": "Column",
+                "type": "string"
+              },
+              "reason": {
+                "default": "the group value is NULL: either a source value the value map does not cover, or a genuinely missing value",
+                "title": "Reason",
+                "type": "string"
+              },
+              "rows": {
+                "minimum": 0,
+                "title": "Rows",
+                "type": "integer"
+              },
+              "step": {
+                "title": "Step",
+                "type": "string"
+              }
+            },
+            "required": [
+              "column",
+              "step",
+              "rows"
+            ],
+            "title": "NullGroup",
+            "type": "object"
+          },
           "PlanInfo": {
             "additionalProperties": false,
             "description": "What the plan says the query reads: the static estimate, plus the source's own plan.\n\n``pruning_proof`` is A03's verdict, not a promise: ``proven`` means the source's plan showed the\npruning, ``unproven`` means it did not, and ``unknown`` means no plan was obtained (no\n``EXPLAIN`` capability, a raw statement, or a cache hit).",
@@ -2707,6 +2819,67 @@
             ],
             "title": "PruningProof",
             "type": "string"
+          },
+          "QualityReport": {
+            "additionalProperties": false,
+            "description": "The receipt of a federated answer: what it cost, what it lost, and what it could not know.\n\n``complete`` is the one field to read first: when a source failed, the report says so and there\nis no answer at all, because half a join returned as a whole one is the failure this executor\nexists to prevent.",
+            "properties": {
+              "complete": {
+                "title": "Complete",
+                "type": "boolean"
+              },
+              "exec_ts": {
+                "format": "date-time",
+                "title": "Exec Ts",
+                "type": "string"
+              },
+              "joins": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/JoinReport"
+                },
+                "title": "Joins",
+                "type": "array"
+              },
+              "notes": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "title": "Notes",
+                "type": "array"
+              },
+              "null_groups": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/NullGroup"
+                },
+                "title": "Null Groups",
+                "type": "array"
+              },
+              "sanity": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/SanityViolation"
+                },
+                "title": "Sanity",
+                "type": "array"
+              },
+              "steps": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/StepReport"
+                },
+                "title": "Steps",
+                "type": "array"
+              }
+            },
+            "required": [
+              "exec_ts",
+              "complete"
+            ],
+            "title": "QualityReport",
+            "type": "object"
           },
           "ResultSummary": {
             "additionalProperties": false,
@@ -2819,6 +2992,51 @@
             "title": "ResultSummary",
             "type": "object"
           },
+          "SanityViolation": {
+            "additionalProperties": false,
+            "description": "Rows of one step whose normalised measure is not a multiple of its rounding step.",
+            "properties": {
+              "column": {
+                "title": "Column",
+                "type": "string"
+              },
+              "examples": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "title": "Examples",
+                "type": "array"
+              },
+              "multiple_of": {
+                "exclusiveMinimum": 1,
+                "title": "Multiple Of",
+                "type": "integer"
+              },
+              "offending": {
+                "minimum": 0,
+                "title": "Offending",
+                "type": "integer"
+              },
+              "reason": {
+                "default": "a normalisation that does not land on the measure's rounding step is a bug",
+                "title": "Reason",
+                "type": "string"
+              },
+              "step": {
+                "title": "Step",
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "column",
+              "multiple_of",
+              "offending"
+            ],
+            "title": "SanityViolation",
+            "type": "object"
+          },
           "SegmentFreshness": {
             "additionalProperties": false,
             "description": "Where one source's rows came from: a fresh cache hit, a refetch, or no cache at all.\n\n``fetched_at`` is when the server learned these rows, never \"now\": a cache hit that reported\n\"now\" would be indistinguishable from a fresh read, which is the confusion this field prevents.",
@@ -2879,6 +3097,116 @@
               "table"
             ],
             "title": "SegmentFreshness",
+            "type": "object"
+          },
+          "StepReport": {
+            "additionalProperties": false,
+            "description": "What one fragment cost and where its rows came from.\n\n``sql`` is the exact statement the source ran, so the audit trail (DESIGN section 13) and a\nhuman reading a wrong answer both have the text. A cache hit reports ``fetched=False`` and the\n``fetched_at`` of the rows it reused, never the time of this call.",
+            "properties": {
+              "age_s": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Age of the reused rows.",
+                "title": "Age S"
+              },
+              "byte_cap_hit": {
+                "default": false,
+                "title": "Byte Cap Hit",
+                "type": "boolean"
+              },
+              "cache_status": {
+                "default": "uncached",
+                "enum": [
+                  "hit",
+                  "stale",
+                  "miss",
+                  "uncached"
+                ],
+                "title": "Cache Status",
+                "type": "string"
+              },
+              "deduplicated": {
+                "default": 0,
+                "description": "Duplicate rows dropped by the step's ``dedupe_on`` key.",
+                "minimum": 0,
+                "title": "Deduplicated",
+                "type": "integer"
+              },
+              "fetched": {
+                "default": true,
+                "description": "False when the rows came from the cache.",
+                "title": "Fetched",
+                "type": "boolean"
+              },
+              "fetched_at": {
+                "format": "date-time",
+                "title": "Fetched At",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "nbytes": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Nbytes",
+                "type": "integer"
+              },
+              "row_cap_hit": {
+                "default": false,
+                "title": "Row Cap Hit",
+                "type": "boolean"
+              },
+              "rows": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Rows",
+                "type": "integer"
+              },
+              "source": {
+                "title": "Source",
+                "type": "string"
+              },
+              "sql": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Sql"
+              },
+              "table": {
+                "title": "Table",
+                "type": "string"
+              },
+              "waited_s": {
+                "default": 0.0,
+                "description": "Time spent queueing for a slot.",
+                "minimum": 0,
+                "title": "Waited S",
+                "type": "number"
+              }
+            },
+            "required": [
+              "name",
+              "source",
+              "table",
+              "fetched_at"
+            ],
+            "title": "StepReport",
             "type": "object"
           }
         },
@@ -2956,6 +3284,18 @@
             "default": null,
             "description": "What is missing (not_implemented).",
             "title": "Problem"
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QualityReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A cross-source answer's receipt: rows per source with their own `fetched_at`, and what each join matched, dropped and multiplied. `complete: false` means no answer."
           },
           "result_handle": {
             "anyOf": [
