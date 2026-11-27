@@ -27,6 +27,7 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict
@@ -84,6 +85,8 @@ _POLL_SLICE_S: Final = 0.005
 class FakeAdapterTimeout(TimeoutError):
     """The simulated deadline passed. A ``TimeoutError``, never a ``NotSupported``."""
 
+    _closed: bool
+
 
 def table_from_rows(rows: Sequence[Any]) -> pa.Table:
     """Build an Arrow table from frozen dataclass rows (the ``World`` datasets' row types).
@@ -129,6 +132,8 @@ class FakeStream:
     live reader to interrupt.
     """
 
+    _closed: bool
+
     def __init__(
         self,
         reader: pa.RecordBatchReader,
@@ -146,7 +151,7 @@ class FakeStream:
         self._latency_s = latency_s
         self._clock = clock
         self._timeout_s = limits.timeout_s
-        self._closed = False
+        self._closed: bool = False
         self.cancelled = False
         self.rows_returned = 0
         self.bytes_returned = 0
@@ -317,11 +322,16 @@ class FakeAdapter:
         self._tables[table_name] = arrow_table
 
     def close(self) -> None:
-        """Close the DuckDB database. Idempotent."""
-        con = getattr(self, "_con", None)
-        if con is not None:
-            con.close()
-            self._con = None  # type: ignore[assignment]
+        """Close the DuckDB database. Idempotent.
+
+        The connection object is kept -- DuckDB's ``close`` tolerates a second call -- instead of
+        being set to ``None``: nulling it forced an ``Optional`` annotation on every use, so each
+        later call had to re-prove what the constructor already guarantees.
+        """
+        # No `_closed` flag: DuckDB's ``close`` is idempotent, and a boolean only the closer reads
+        # was another piece of state for a type checker to argue about.
+        with contextlib.suppress(Exception):
+            self._con.close()
 
     # --- SourceAdapter: identity ---------------------------------------------------------
 

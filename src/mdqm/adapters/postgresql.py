@@ -852,7 +852,9 @@ class PostgresAdapter:
         with self._connection() as connection, connection.cursor() as cur:
             # `text` is a fragment the compiler built through the AST and the guard inspected;
             # it is SQL, not a value, so it cannot be a bind parameter. Marked, not hidden.
-            cur.execute(sql.SQL("EXPLAIN (FORMAT JSON) " + text))  # nosemgrep: python-sql-injection
+            cur.execute(  # pyright: ignore[reportArgumentType] - SQL, not a value: we authored it
+                sql.SQL("EXPLAIN (FORMAT JSON) " + text)  # nosemgrep: python-sql-injection  # pyright: ignore[reportArgumentType]
+            )
             row = cur.fetchone()
             document = row[0] if row else None
             children = _partition_children(cur)
@@ -928,7 +930,11 @@ class PostgresAdapter:
                 )
             self._cursor_seq += 1
             cursor = connection.cursor(name=f"mdqm_{self._cursor_seq}")
-            cursor.execute(fragment.sql, fragment.params or None)
+            # `fragment.sql` is compiled-and-guarded SQL text; psycopg types the parameter as
+            # LiteralString, which a runtime string can never satisfy. Bound values stay bound.
+            cursor.execute(  # pyright: ignore[reportArgumentType]
+                fragment.sql, fragment.params or None  # pyright: ignore[reportArgumentType]
+            )
             return PgArrowStream(
                 connection=connection,
                 cursor=cursor,

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from datetime import datetime
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from mdqm.config.secrets import SecretProvider
 from mdqm.config.settings import SourceConfig
@@ -94,7 +94,10 @@ class SourceAdapter(Protocol):
     """One source, in the vocabulary of ``docs/DESIGN.md`` "Adapter interface"."""
 
     #: Adapter kind, also the entry-point name and ``SourceConfig.adapter`` (``"postgresql"``).
-    kind: str
+    #: A ``ClassVar``: the kind is a property of the implementation, not something a caller may
+    #: assign per instance. Declaring it mutable here made every adapter that (correctly) defined a
+    #: ``ClassVar`` fail the protocol check.
+    kind: ClassVar[str]
 
     def dialect(self) -> str:
         """sqlglot dialect name for this source, or ``"dsl"`` for Elasticsearch and APIs."""

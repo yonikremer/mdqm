@@ -86,8 +86,30 @@ def target(request: pytest.FixtureRequest) -> PgTarget:
     return found
 
 
+@pytest.fixture(scope="module")
+def workload(target: PgTarget) -> PgTarget:
+    """Create the work the counters are supposed to show.
+
+    A freshly loaded database has only INSERTs: ``accounts_hist`` looks append-only because nothing
+    has ever updated it. The stage measures real counters, so the test has to make something happen
+    -- otherwise it would assert a classification of a workload that never existed. Only UPDATEs are
+    issued, so row counts stay identical and D03's idempotency assertions are unaffected.
+    """
+    with psycopg.connect(target.dsn("billing")) as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE accounts_hist SET credit_limit = credit_limit + 1 "
+            "WHERE hist_id IN (SELECT hist_id FROM accounts_hist ORDER BY hist_id LIMIT 5)"
+        )
+        cur.execute(
+            "UPDATE accounts SET credit_limit = credit_limit "
+            "WHERE client_no IN (SELECT client_no FROM accounts ORDER BY client_no LIMIT 5)"
+        )
+        conn.commit()
+    return target
+
+
 @pytest.fixture
-def billing(target: PgTarget) -> Iterator[PostgresAdapter]:
+def billing(target: PgTarget, workload: PgTarget) -> Iterator[PostgresAdapter]:
     adapter = PostgresAdapter(
         _config("billing-s05", "billing", target), _StaticSecrets(target.ro_password)
     )

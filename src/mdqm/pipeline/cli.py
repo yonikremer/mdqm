@@ -11,9 +11,10 @@ when heavy work was **deferred** to the next quiet window (nothing is wrong, the
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -41,6 +42,32 @@ def context_for(
     )
 
 
+def _source_stages(settings: Settings, *, typer_echo: Callable[[str], None]) -> list[Any]:
+    """The stages that read a source, built with adapters from the configured sources.
+
+    A stage that reads a catalog cannot be registered with no arguments, so the CLI -- the one place
+    that has settings and a secret provider -- builds it here. With no sources configured the list
+    is empty and the run says so instead of doing nothing silently.
+    """
+    sources = list(settings.sources)
+    if not sources:
+        typer_echo("no sources configured; skipping the stages that read a source (D1+D2)")
+        return []
+    from mdqm.adapters.registry import AdapterRegistry
+    from mdqm.pipeline.stages.catalog import CatalogStage
+
+    adapter_registry = AdapterRegistry(secrets=settings.secret_provider())
+    adapters: dict[str, Any] = {}
+    for source in sources:
+        try:
+            adapters[source.name] = adapter_registry.create(source)
+        except Exception as exc:  # noqa: BLE001 - one bad source must not hide the others
+            typer_echo(f"source {source.name}: skipped ({exc})")
+    if not adapters:
+        return []
+    return [CatalogStage(adapters)]
+
+
 @bootstrap_app.command("run")
 def run(
     stage: Annotated[
@@ -66,7 +93,7 @@ def run(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    registry = available_stages()
+    registry = list(available_stages()) + _source_stages(settings, typer_echo=typer.echo)
     if not registry:
         typer.echo(
             "no bootstrap stage is registered in this build; nothing to run "

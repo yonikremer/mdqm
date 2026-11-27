@@ -145,16 +145,6 @@ def create_server(
     # The tools and the /context route must answer from the SAME semantic layer: an agent whose
     # hook got a Context Pack and whose `find_data` then says "no dictionary is loaded" has been
     # told two different things by the same server. Wiring it here makes that impossible.
-    if context_source is not None:
-        configure_find_data(
-            FindDataServices(
-                layer=context_source.layer,
-                index=context_source.index,
-                examples=tuple(context_source.examples),
-                budget_tokens=context_source.budget_tokens,
-            )
-        )
-
     # `custom_route` has no return annotation in the SDK, so mypy cannot type the decorator.
     @server.custom_route("/healthz", methods=["GET"])  # type: ignore[untyped-decorator]
     async def healthz(request: Request) -> Response:  # noqa: ARG001 - the SDK's handler signature
@@ -197,10 +187,24 @@ def serve(*, host: str, port: int, public_url: str | None = None) -> None:
         base_url,
         len(verifier.users),
     )
+    context_source = context_source_from_settings()
+    if context_source is not None:
+        # The tools and /context must answer from the SAME layer: otherwise an agent whose hook got
+        # a Context Pack finds `find_data` claiming no dictionary is loaded, on the same server.
+        # Wired here, where the layer is built -- `create_server` stays a pure constructor with no
+        # process-global side effect, which is what keeps the tests honest.
+        configure_find_data(
+            FindDataServices(
+                layer=context_source.layer,
+                index=context_source.index,
+                examples=tuple(context_source.examples),
+                budget_tokens=context_source.budget_tokens,
+            )
+        )
     server = create_server(
         verifier=verifier,
         public_url=base_url,
-        context_source=context_source_from_settings(),
+        context_source=context_source,
     )
     server.run("streamable-http", host=host, port=port)
 

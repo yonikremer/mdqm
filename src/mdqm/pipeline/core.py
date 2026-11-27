@@ -583,7 +583,10 @@ def _json_list(value: object) -> tuple[str, ...]:
 
 def _last_success(store: Store, stage: str) -> tuple[str, tuple[str, ...]] | None:
     """The input hash and outputs of a stage's last successful run, or ``None``."""
-    row = store.connect().execute(_SELECT_LAST_RAN, (stage,)).fetchone()
+    # Constant statement, value bound: nothing is interpolated into the SQL text.
+    row = store.connect().execute(
+        _SELECT_LAST_RAN, (stage,)
+    ).fetchone()  # nosemgrep: python-sql-injection
     if row is None:
         return None
     return (str(row["inputs_hash"]), _json_list(row["outputs"]))
@@ -602,6 +605,7 @@ def _error_text(exc: BaseException) -> str:
 def _record(ctx: PipelineContext, report: StageReport, *, started: datetime) -> None:
     """Write one attempt's row. One transaction per stage, so a failure keeps earlier rows."""
     with ctx.store.writing() as conn:
+        # Constant statement, every value bound.
         conn.execute(
             _INSERT_RUN,
             (
@@ -743,8 +747,10 @@ def run_pipeline(
 def available_stages() -> tuple[Stage, ...]:
     """The stages this build registers, in run order.
 
-    Empty today: S01 is the runner. Each D-stage task adds its own object here (or in its own file)
-    and its shape is already fixed by :class:`Stage`; D9's mining already exists as a function with
-    its own batch hash, and its stage wrapper belongs to the task that wires it to a source pull.
+    Each D-stage task adds its own object here. A stage that reads a source needs its adapters, so
+    those are constructed by the caller that has them (``mdqm.pipeline.cli``); what this returns is
+    what can run with no wiring beyond the context.
     """
+    # D1+D2 read the catalog, so they need adapters; the CLI builds them from settings and calls
+    # `run_pipeline` with that list. Nothing here is registered without its source dependency.
     return ()
