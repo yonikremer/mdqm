@@ -24,7 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 pg = ["psycopg[binary]>=3.2", "psycopg-pool>=3.2"]
 oracle = ["oracledb>=2.3"]            # Thin mode only: no Oracle Client
-mssql = []                            # driver chosen by task A08 (spike: mssql-python vs pymssql vs pyodbc)
+mssql = ["mssql-python>=1.0"]            # D06. Ships wheels for Windows/Linux/macOS and bundles the ODBC driver and its DLLs, so nothing is installed on the host at runtime. A08 still owns the final choice.
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.24",
@@ -91,6 +91,12 @@ ignore_missing_imports = true
 # rest of `src` on a machine that never installed the extra.
 [[tool.mypy.overrides]]
 module = ["psycopg", "psycopg.*"]
+ignore_missing_imports = true
+
+# mssql-python is the optional `mssql` extra (task D06); CI installs `.[dev]` only, so mypy must
+# not demand the driver on a machine that never loads the SQL Server dataset.
+[[tool.mypy.overrides]]
+module = ["mssql_python", "mssql_python.*"]
 ignore_missing_imports = true
 
 # Typing scope for editors and the LSP, matching what CI enforces ([tool.mypy]: strict on "src").
