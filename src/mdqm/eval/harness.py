@@ -24,9 +24,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from mdqm.models import Limits
 from mdqm.semantic.loader import load as load_layer
 
+REPO_ROOT = Path(__file__).resolve().parents[3]  # src/mdqm/eval/harness.py
 QUESTIONS = Path("tests/eval/questions.yaml")
 LAYER = Path("examples/semantic_example.yaml")
 
@@ -107,38 +107,63 @@ def _rows_from_batches(batches: Sequence[Any]) -> list[dict[str, Any]]:
     return list(pa.Table.from_batches(list(batches)).to_pylist())
 
 
-def run_spec_path(
-    question: Question, *, source: str, adapter: Any, layer: Any
-) -> Mapping[str, Any]:
-    """Compile the curated spec and run it against the real source; returns ``{columns, rows}``."""
-    from datetime import UTC, datetime
+def _json_or_fail(text: str, what: str) -> Mapping[str, Any]:
+    """Parse ``text`` or raise a message naming what could not be parsed and its first bytes.
 
-    from mdqm.compiler import CompileContext, compile_spec
-    from mdqm.spec import parse_spec
+    A harness that dies with `JSONDecodeError` on a non-JSON line tells the operator nothing; the
+    first bytes of what actually came back usually do.
+    """
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"{what} is not JSON ({exc.msg} at {exc.colno}): {text[:120]!r}"
+        ) from None
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"{what} is JSON but not an object: {type(parsed).__name__}")
+    return parsed
+
+
+def run_spec_path(question: Question) -> Mapping[str, Any]:
+    """Answer the question through the product, exactly as an agent does: the MCP `query` tool.
+
+    Compiling and executing here was wrong, and running it proved why: the tool applies the
+    value-map grouping and normalisations on the way out, so a hand-rolled compile+execute leg
+    reported FAIL on questions the product answers correctly. The spec path now goes through
+    `scripts/mdqm_call.py` -- the same client, transport and envelope an agent uses -- so the
+    harness cannot drift from what the product actually does.
+    """
+    import subprocess
+    import sys
 
     if question.spec is None:
         return {"kind": "skipped", "problem": "no spec in the question set"}
-    snapshot = adapter.extract_catalog()
-    columns = {
-        f"{source}.{table.name}": tuple(c.name for c in table.columns) for table in snapshot.tables
-    }
-    compiled = compile_spec(
-        parse_spec(dict(question.spec)),
-        CompileContext(
-            layer=layer,
-            source=source,
-            dialect=adapter.dialect(),
-            exec_ts=datetime(2026, 11, 25, tzinfo=UTC),
-            columns=columns,
-            max_rows=10_000,
-        ),
+    completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "mdqm_call.py"),
+            "call",
+            "query",
+            json.dumps({"spec": dict(question.spec)}),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=180,
+        check=False,
+        cwd=str(REPO_ROOT),
     )
-    if not compiled.ok or compiled.fragment is None:
-        error = compiled.error
-        return {"kind": "error", "error_code": None if error is None else error.code}
-    limits = Limits(timeout_s=60, max_rows=10_000, max_bytes=64 << 20, max_partitions=64)
-    rows = _rows_from_batches(adapter.execute(compiled.fragment, limits))
-    return {"kind": "rows", "rows": rows}
+    if completed.returncode != 0:
+        raise RuntimeError(f"mdqm_call failed: {completed.stderr.strip()[:200]}")
+    envelope = _json_or_fail(completed.stdout, "mdqm_call stdout")
+    for item in envelope.get("content") or []:
+        if isinstance(item, str):
+            payload = _json_or_fail(item, "query tool payload")
+            if payload.get("status") == "error":
+                error = payload.get("error") or {}
+                return {"kind": "error", "error_code": error.get("code")}
+            return {"kind": "rows", "rows": list(payload.get("sample") or [])}
+    raise RuntimeError(f"query returned no content: {envelope}")
 
 
 def oracle_duckdb(world: Any) -> Any:
@@ -215,7 +240,7 @@ def evaluate(*, target: Any, adapters: Mapping[str, Any], layer: Any, world: Any
         spec_result, oracle_result, detail = "SKIP", "SKIP", ""
         if adapter is not None:
             try:
-                spec_actual = run_spec_path(question, source=source, adapter=adapter, layer=layer)
+                spec_actual = run_spec_path(question)
                 spec_result = compare(question, spec_actual)
             except Exception as exc:  # noqa: BLE001 - one question must not stop the run
                 spec_result, detail = "ERROR", f"{type(exc).__name__}: {exc}"
