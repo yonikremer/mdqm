@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from types import ModuleType
 
@@ -192,6 +193,213 @@ def test_the_download_asks_pip_for_the_image_platform(offline: ModuleType, tmp_p
     assert "--only-binary=:all:" in argv
 
 
+# --- B3: a Linux wheelhouse cannot be staged natively from Windows --------------------
+#
+# `--platform` filters which wheels are eligible; environment markers are still evaluated for the
+# interpreter that runs pip. On Windows `mcp` requires `pywin32` for `sys_platform == "win32"` and
+# there is no manylinux wheel of it: ResolutionImpossible, whatever the flags say.
+
+
+@pytest.mark.parametrize(
+    ("host", "target_platform", "needs_container"),
+    [
+        # The reproduced bug: Linux target, Windows host.
+        ("win32", "manylinux2014_x86_64", True),
+        ("darwin", "manylinux_2_17_x86_64", True),
+        ("linux", "manylinux2014_x86_64", False),
+        # Same-family staging resolves its own markers correctly, and is explicitly allowed.
+        ("win32", "win_amd64", False),
+    ],
+)
+def test_a_linux_target_from_a_non_linux_host_needs_a_container(
+    offline: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    host: str,
+    target_platform: str,
+    needs_container: bool,
+) -> None:
+    monkeypatch.setattr(offline, "host_os", lambda: host)
+
+    reason = offline.staging_container_reason(target_platform)
+
+    assert (reason is not None) is needs_container
+    if needs_container:
+        # The message has to name the mechanism, or the operator cannot tell why it refuses.
+        assert "environment markers" in reason
+        assert host in reason
+
+
+def test_the_container_download_is_the_same_contract_plus_the_target_os(
+    offline: ModuleType, tmp_path: Path
+) -> None:
+    argv = offline.container_download_argv(
+        tmp_path, tmp_path / "requirements.txt", "manylinux2014_x86_64", "python:3.12-slim"
+    )
+
+    assert argv[:4] == ["docker", "run", "--rm", "--volume"]
+    assert "python:3.12-slim" in argv
+    # The container's own python runs pip: the host's interpreter would bring the host's markers.
+    assert sys.executable not in argv
+    assert "--only-binary=:all:" in argv
+    assert argv[argv.index("--platform") + 1] == "manylinux2014_x86_64"
+    assert argv[argv.index("--abi") + 1] == "cp312"
+    # Mounted, so the wheels land on the host: the wheelhouse and the requirement list.
+    mounts = [value for flag, value in zip(argv, argv[1:], strict=False) if flag == "--volume"]
+    assert any(mount.endswith(":/wheelhouse") for mount in mounts)
+    assert any(mount.endswith(":/requirements.txt:ro") for mount in mounts)
+    assert argv[argv.index("--dest") + 1] == "/wheelhouse"
+    assert argv[argv.index("--requirement") + 1] == "/requirements.txt"
+
+
+def test_a_mirror_reaches_the_staging_container(
+    offline: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A site that can only see an internal index must stage through it, not through PyPI."""
+    monkeypatch.setenv("PIP_INDEX_URL", "https://pypi.internal/simple")
+    monkeypatch.setenv("PIP_TRUSTED_HOST", "pypi.internal")
+
+    argv = offline.container_download_argv(
+        tmp_path, tmp_path / "requirements.txt", "manylinux2014_x86_64", "python:3.12-slim"
+    )
+
+    assert "PIP_INDEX_URL=https://pypi.internal/simple" in argv
+    assert "PIP_TRUSTED_HOST=pypi.internal" in argv
+
+
+def test_the_container_install_uses_no_index_and_can_lose_the_network(
+    offline: ModuleType, tmp_path: Path
+) -> None:
+    """`--no-download` runs air-gapped for real: no index flag, and no network at all."""
+    argv = offline.container_install_argv(tmp_path, tmp_path, "python:3.12-slim", network_free=True)
+
+    assert argv[argv.index("--network") + 1] == "none"
+    joined = " ".join(argv)
+    assert "--no-index" in joined
+    assert "--find-links /wheelhouse" in joined
+    assert "mdqm[pg]" in joined
+    # The image's interpreter, not the host's: a manylinux wheelhouse has no win_amd64 binaries.
+    assert sys.executable not in argv
+    assert "/venv/bin/mdqm --version" in joined
+
+
+def test_the_container_is_online_while_downloading(offline: ModuleType, tmp_path: Path) -> None:
+    """Staging still has to reach an index; only the air-gapped re-run may not."""
+    argv = offline.container_install_argv(tmp_path, tmp_path, "python:3.12-slim")
+    assert "--network" not in argv
+
+
+def test_no_download_never_runs_a_pip_download(
+    offline: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The air-gapped path must not touch an index -- the build backend included."""
+    ran: list[list[str]] = []
+    monkeypatch.setattr(offline, "_run", lambda command, cwd=None: ran.append(list(command)))
+
+    staged = offline.stage_wheelhouse(tmp_path, download=False, target_platform="win_amd64")
+
+    assert staged.wheels == {}
+    assert ran, "the project wheel still has to be built"
+    assert not [command for command in ran if "download" in command]
+    assert all("--no-index" in command for command in ran)
+
+
+# --- B4: a staged wheelhouse is closed, not just named --------------------------------
+
+
+def _fake_wheel(path: Path, name: str, *, requires: tuple[str, ...] = ()) -> Path:
+    """A real zip with a dist-info/METADATA, so the closure check reads what pip would read."""
+    metadata = ["Metadata-Version: 2.1", f"Name: {name}", "Version: 1.0"]
+    metadata += [f"Requires-Dist: {requirement}" for requirement in requires]
+    path.mkdir(parents=True, exist_ok=True)
+    target = path / f"{name.replace('-', '_')}-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(target, "w") as archive:
+        archive.writestr(
+            f"{name.replace('-', '_')}-1.0.dist-info/METADATA",
+            "\n".join(metadata) + "\n",
+        )
+    return target
+
+
+def test_the_build_backend_closure_is_checked_not_assumed(
+    offline: ModuleType, tmp_path: Path
+) -> None:
+    """`hatchling` alone cannot build this project; packaging/pathspec/pluggy/trove-classifiers
+    are unmarked requirements of it, so an absent wheel is a hole."""
+    _fake_wheel(
+        tmp_path,
+        "hatchling",
+        requires=(
+            "packaging>=24",
+            "pathspec>=0.12",
+            "pluggy>=1.0",
+            'trove-classifiers; extra == "metadata"',  # marked: the target decides, not us
+        ),
+    )
+    staged = offline.scan_wheelhouse(tmp_path, target_platform="manylinux2014_x86_64")
+
+    gaps = offline.closure_gaps(tmp_path, staged)
+
+    assert gaps == [
+        "hatchling requires 'packaging>=24', which is not staged",
+        "hatchling requires 'pathspec>=0.12', which is not staged",
+        "hatchling requires 'pluggy>=1.0', which is not staged",
+    ]
+
+
+def test_a_closed_wheelhouse_has_no_gaps(offline: ModuleType, tmp_path: Path) -> None:
+    _fake_wheel(tmp_path, "hatchling", requires=("packaging>=24",))
+    _fake_wheel(tmp_path, "packaging")
+    staged = offline.scan_wheelhouse(tmp_path, target_platform="manylinux2014_x86_64")
+
+    assert offline.closure_gaps(tmp_path, staged) == []
+
+
+def test_a_wheel_that_is_not_a_zip_is_not_a_crash(offline: ModuleType, tmp_path: Path) -> None:
+    (tmp_path / "broken-1.0-py3-none-any.whl").write_text("not a zip", encoding="utf-8")
+    staged = offline.scan_wheelhouse(tmp_path, target_platform="manylinux2014_x86_64")
+
+    assert offline.closure_gaps(tmp_path, staged) == []
+
+
+# --- the operator can refuse the container --------------------------------------------
+
+
+def test_no_docker_fails_loudly_instead_of_staging_for_the_wrong_os(
+    offline: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(offline, "host_os", lambda: "win32")
+    monkeypatch.setattr(offline, "_run", lambda command, cwd=None: None)
+
+    code = offline.main(["--no-download", "--no-docker", "--wheelhouse", str(tmp_path)])
+    printed = capsys.readouterr().out
+
+    assert code == 1
+    assert "--no-docker" in printed
+    assert "pywin32" in printed
+    assert "offline install check passed" not in printed
+
+
+def test_a_missing_docker_is_a_named_failure(
+    offline: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(offline, "host_os", lambda: "win32")
+    monkeypatch.setattr(offline.shutil, "which", lambda name: None)
+    monkeypatch.setattr(offline, "_run", lambda command, cwd=None: None)
+
+    code = offline.main(["--no-download", "--wheelhouse", str(tmp_path)])
+    printed = capsys.readouterr().out
+
+    assert code == 1
+    assert "no 'docker' on PATH" in printed
+    assert "offline install check passed" not in printed
+
+
 # --- H4: the no-download path never reaches an index ----------------------------------
 
 
@@ -272,6 +480,31 @@ def test_a_pip_failure_is_reported_as_a_problem_not_a_traceback(
     assert "offline install check passed" not in printed
     assert "FAILED" in printed
     assert "--no-index" in printed, "the message must name the command that failed"
+
+
+def test_a_wrong_platform_wheel_fails_the_run_and_is_named(
+    offline: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The reproduction end to end: a win_amd64 wheel in a Linux wheelhouse is a failed check."""
+    (tmp_path / "psycopg_binary-3.3.9-cp312-cp312-win_amd64.whl").write_text("", encoding="utf-8")
+    monkeypatch.setattr(offline, "host_os", lambda: "linux")
+    monkeypatch.setattr(offline, "_run", lambda command, cwd=None: None)
+    monkeypatch.setattr(offline, "fresh_install", lambda *args, **kwargs: None)
+
+    code = offline.main(["--no-download", "--wheelhouse", str(tmp_path)])
+    printed = capsys.readouterr().out
+
+    assert code == 1
+    assert "wheels staged for another platform" in printed
+    assert "psycopg_binary-3.3.9-cp312-cp312-win_amd64.whl" in printed
+    # And the build backend is reported by name, not swallowed by the wrong-platform complaint: an
+    # empty-of-Linux-wheelhouse means hatchling is missing too, and the operator must see both.
+    assert "no wheel staged for:" in printed
+    assert "hatchling" in printed
+    assert "offline install check passed" not in printed
 
 
 class TestWheelhouse:

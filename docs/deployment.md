@@ -69,31 +69,71 @@ cannot verify a mirror. Section 5 says exactly what it does prove.
 
 ## 3. Mode B: build with no index at all (fully disconnected)
 
-Stage the wheels on a Linux host of the image's platform — `manylinux2014_x86_64`, `cp312`:
+One command from **any** OS, Windows included. This is the whole instruction:
 
 ```
 python scripts/check_offline_install.py --wheelhouse wheelhouse
 ```
 
-That builds the `mdqm` wheel, downloads the whole closure for the **image's** platform (not the
-staging machine's: a `win_amd64` wheel cannot install in a `manylinux` image and is reported as
-missing), installs `mdqm[pg]` from the wheelhouse into a fresh virtual environment with `--no-index`,
-and runs a smoke import plus a real store migration. It fails on a source archive, because an sdist
-would need a compiler the target does not have.
+That builds the `mdqm` wheel, stages the whole closure for the **image's** platform
+(`manylinux2014_x86_64`, `cp312`), installs `mdqm[pg]` from the wheelhouse into a fresh virtual
+environment with `--no-index`, and runs a smoke import plus a real store migration.
 
-`--no-download` is the air-gapped re-run: it uses the staged wheels and never touches a package
-index — including for the build backend, which is why `hatchling` has to be in the wheelhouse.
+**On Windows or macOS it stages and installs inside a container.** Not a convenience: `--platform`
+only filters which *wheels* are eligible, while **environment markers are still evaluated for the
+interpreter running pip**. On Windows `mcp` requires `pywin32` (`sys_platform == "win32"`), no
+manylinux wheel of `pywin32` exists, and plain pip dies with `ResolutionImpossible` no matter how
+the platform flags are set. So the script runs the target's own interpreter:
+
+```
+docker run --rm --volume <abs>/wheelhouse:/wheelhouse \
+           --volume <abs>/wheelhouse/requirements.txt:/requirements.txt:ro \
+           python:3.12-slim python -m pip download \
+             --only-binary=:all: --platform manylinux2014_x86_64 \
+             --implementation cp --python-version 3.12 --abi cp312 \
+             --dest /wheelhouse --requirement /requirements.txt
+```
+
+- Inside the Linux container the markers resolve for Linux, so the same resolution succeeds.
+- The install + smoke steps also run there, because a manylinux wheelhouse holds no `win_amd64`
+  binaries — installing it into a Windows venv fails on `duckdb` and would prove nothing.
+- Docker is auto-detected. `--no-docker` refuses to use it and fails loudly instead; a machine with
+  no Docker and no Linux host cannot stage this wheelhouse at all, and saying so is the honest answer.
+- `--docker-image` overrides the staging image (default `python:3.12-slim`). It only ever stages, it
+  never ships, so point it at your registry mirror. Pull it beforehand if egress is closed:
+  `docker pull <mirror>/python:3.12-slim`, or `docker load` it from a saved tarball.
+- A mirror is honoured: `PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`, `PIP_TRUSTED_HOST` and `PIP_CERT`
+  from the environment are passed into the staging container.
+
+What the check proves, and a green run means all of it: the wheelhouse holds the build backend
+(`hatchling`) **plus its closure** (`packaging`, `pathspec`, `pluggy`, `trove-classifiers` — no
+unmarked requirement of any staged wheel may be absent), every platform-specific wheel is
+`manylinux*`/`linux*` for `x86_64`, no `*.tar.gz` is present, and nothing for another OS
+(a `win_amd64` wheel counts as *absent*, never as present). A package that cannot be staged for the
+target is a failure that names it.
 
 Then carry `wheelhouse/` in and build:
 
 ```
 python scripts/check_offline_install.py --no-download
+```
+
+`--no-download` is the air-gapped re-run: staged wheels only, and its container runs with
+`--network none`, so an index access is impossible rather than merely avoided — including for the
+build backend, which is why `hatchling` has to be in the wheelhouse.
+
+```
 docker build --build-arg INSTALL_MODE=wheelhouse --tag mdqm:local .
 ```
 
 `wheelhouse/` is committed as a directory with a placeholder `.gitkeep`, because `COPY wheelhouse/`
 fails outright when the directory is absent; the wheels themselves are deployment artefacts and
 `.gitignore` keeps them out of the repository (mirror mode never reads their contents).
+
+**Mode A needs none of this.** A site with an internal PyPI mirror builds the image with no
+wheelhouse, no container, no `check_offline_install.py` run: `pip` inside the image build resolves
+the closure from the mirror (section 2). The wheelhouse, the staging container and `--no-download`
+exist only for the site that has no index to talk to.
 
 ## 4. Running it
 
@@ -166,14 +206,18 @@ python scripts/check_offline_install.py     # wheelhouse closure, fresh install,
 python scripts/check_offline_install.py --help
 ```
 
-What it proves: the dependency closure (including the `hatchling` build backend) can be installed
-into a clean virtual environment with `--no-index`; every staged artefact is an installable wheel for
-the requested platform; the `Dockerfile` pins its base image, runs non-root, has a `HEALTHCHECK`,
-carries no literal credential and installs nothing in the runtime stage.
+What it proves: the dependency closure (including the `hatchling` build backend and its own
+requirements) can be installed into a clean virtual environment with `--no-index`; every staged
+artefact is an installable wheel for the requested platform, and a wheel for another OS counts as
+absent; the `Dockerfile` pins its base image, runs non-root, has a `HEALTHCHECK`, carries no literal
+credential and installs nothing in the runtime stage. For a Linux target staged from Windows or
+macOS, the closure and the install are proven **inside a Linux container**, which is the environment
+the image actually has; the run that did it is recorded in `progress/M08-offline.md`.
 
 What it does **not** prove: that `docker build` works, that the image starts, that a pod schedules,
-or that a mirror carries a package. There is no container runtime in the development environment, so
-none of those has been run here. See `progress/DEPLOY-review-1.md`.
+or that a mirror carries a package. `docker build` is still not run by any command here — the
+wheelhouse and the clean-venv install are, and the container stages only pip. See
+`progress/M08.md` and `progress/M08-offline.md`.
 
 **Pin the base image by digest when you mirror it.** A tag is not reproducible on an air gap:
 `python:3.12-slim-bookworm` can be re-pushed, and a rebuilt image would then differ from the one that
