@@ -105,8 +105,16 @@ Created by `docker/pg/init/01-init.sh` on the first start of an empty volume:
   current and future tables in `public` (the read-only account is layer one of three);
 - `pg_stat_statements` created in all three databases (the server is started with
   `-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all`), which is where
-  the query-mining stage reads its stats from;
+  the query-mining stage reads its stats from, and `pg_read_all_stats` granted to `mdqm_ro` so the
+  miner sees every role's statement text (the view masks other roles' text as
+  `<insufficient privilege>` without it, and mining would silently see only our own reads);
 - `track_io_timing=on`, so I/O timing is available to the planner work.
+
+A volume created before the `pg_read_all_stats` grant needs the one line by hand:
+
+```powershell
+docker compose --profile pg exec pg psql -U postgres -d crm -c "GRANT pg_read_all_stats TO mdqm_ro"
+```
 
 Verify it yourself after the first `up pg`:
 

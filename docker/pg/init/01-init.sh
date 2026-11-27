@@ -26,6 +26,10 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mdqm_ro')
 \gexec
 ALTER ROLE mdqm_ro WITH LOGIN PASSWORD :'ro_password';
 ALTER ROLE mdqm_ro SET default_transaction_read_only = on;
+-- Query-store mining (A04) needs the statement text of *every* role: pg_stat_statements masks
+-- another role's text as `<insufficient privilege>` unless the reader holds this predefined role.
+-- Read-only: it grants visibility of statistics, never data and never a write.
+GRANT pg_read_all_stats TO mdqm_ro;
 SQL
 
 for db in crm billing erp; do

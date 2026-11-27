@@ -18,5 +18,7 @@ class RawQuery(MDQMModel):
     dialect: str = Field(min_length=1)
     calls: int | None = Field(default=None, ge=0)
     mean_time_ms: float | None = Field(default=None, ge=0)
+    total_time_ms: float | None = Field(default=None, ge=0)
+    rows: int | None = Field(default=None, ge=0)
     last_seen: UtcDatetime | None = None
     user: str | None = None

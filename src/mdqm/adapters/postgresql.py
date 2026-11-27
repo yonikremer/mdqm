@@ -60,6 +60,13 @@ import pyarrow as pa
 from psycopg import conninfo, sql
 
 from mdqm.adapters.base import OPTIONAL_METHODS, ArrowStream, NotSupported
+from mdqm.adapters.postgresql_stats import (
+    MUTABILITY_CAPABILITY,
+    MUTABILITY_SQL,
+    QueryStoreReader,
+    mutability_from_rows,
+    query_store_state,
+)
 from mdqm.config.secrets import SecretProvider
 from mdqm.config.settings import SourceConfig
 from mdqm.models import (
@@ -125,18 +132,6 @@ _CAPABILITY_PARTITIONS: Final = "partition_metadata"
 #: than unsupported. PostgreSQL can do all of them; the code that reads them belongs to another
 #: task, and saying "this source cannot" would be a lie the capability report repeats.
 _NOT_YET_EXPLAIN: Final = "EXPLAIN plan parsing is task A03 (adapters/postgresql_plan.py)"
-_NOT_YET_QUERIES: Final = "query-store mining is task A04 (adapters/postgresql_stats.py)"
-_NOT_YET_STATS: Final = "mutability counters are task A04 (adapters/postgresql_stats.py)"
-
-#: ``options`` keys this adapter understands. Anything else is logged by name, never guessed at.
-#: Postgres keeps per-table change counters for free; that is what S05 classifies mutability from.
-_MUTABILITY_SQL: Final = """
-SELECT schemaname || '.' || relname AS table_name,
-       n_live_tup, n_tup_ins, n_tup_upd, n_tup_del, n_tup_hot_upd,
-       n_mod_since_analyze, last_analyze, last_autovacuum
-FROM pg_stat_user_tables
-ORDER BY 1
-"""
 
 
 def _partition_relation_names(cursor: psycopg.Cursor[Any]) -> list[str]:
@@ -654,6 +649,8 @@ class PostgresAdapter:
         self._monotonic = monotonic or time.monotonic
         self._pool: psycopg_pool.ConnectionPool[psycopg.Connection[Any]] | None = None
         self._cursor_seq = 0
+        #: pg_stat_statements keeps cumulative counters; this holds the previous reading.
+        self._query_store = QueryStoreReader()
 
     def __repr__(self) -> str:
         """Name the source and the user, never the connection string (it may hold a password)."""
@@ -733,6 +730,7 @@ class PostgresAdapter:
             cur.execute("SELECT to_regclass('pg_catalog.pg_partitioned_table') IS NOT NULL")
             partitioned = cur.fetchone()
             can_read_partitions = bool(partitioned and partitioned[0])
+            queries = query_store_state(cur)
         capabilities = {
             _CAPABILITY_PARTITIONS: Capability(
                 supported=can_read_partitions,
@@ -741,8 +739,14 @@ class PostgresAdapter:
                 else "this server has no declarative partitioning catalog (pre-10)",
             ),
             "explain_plan": Capability(detail=_NOT_YET_EXPLAIN),
-            "query_store": Capability(detail=_NOT_YET_QUERIES),
-            "mutability_counters": Capability(detail=_NOT_YET_STATS),
+            # Claimed only when the extension is installed *and* this role may select from it:
+            # the conformance kit requires a claimed capability's method not to raise.
+            OPTIONAL_METHODS["mine_queries"]: Capability(
+                supported=queries.supported, detail=queries.detail
+            ),
+            MUTABILITY_CAPABILITY: Capability(
+                supported=True, detail="pg_stat_user_tables (n_tup_ins/upd/del/hot_upd)"
+            ),
         }
         return Capabilities(
             source=self._source,
@@ -888,32 +892,26 @@ class PostgresAdapter:
         ``mutable_critical`` (S05). They are counters, not deltas: two readings give the change.
         """
         with self._connection() as connection, connection.cursor() as cur:
-            cur.execute(_MUTABILITY_SQL)
+            cur.execute(MUTABILITY_SQL)
             rows = cur.fetchall()
-        captured_at = self._clock()
-        stats: list[TableStats] = []
-        for row in rows:
-            stats.append(
-                TableStats(
-                    source=self._source,
-                    table=str(row[0]),
-                    captured_at=captured_at,
-                    row_estimate=_as_int(row[1]),
-                    rows_inserted=_as_int(row[2]),
-                    rows_updated=_as_int(row[3]),
-                    rows_deleted=_as_int(row[4]),
-                    hot_updates=_as_int(row[5]),
-                    rows_modified_since_analyze=_as_int(row[6]),
-                    last_analyze=row[7],
-                    last_autovacuum=row[8],
-                )
-            )
-        return stats
+        return mutability_from_rows(self._source, rows, self._clock())
 
     def mine_queries(self, since: datetime) -> Iterator[RawQuery]:
-        """Not this task: reading ``pg_stat_statements`` is A04's mining source."""
-        capability = OPTIONAL_METHODS["mine_queries"]
-        raise NotSupported(capability, "pg_stat_statements mining is task A04, not built yet")
+        """Statements this database has already run, from ``pg_stat_statements``.
+
+        The view keeps *cumulative* counters, so each call reports the delta against the previous
+        call on this adapter (the first call is the baseline): stage D9 sums what it is given, and
+        the same totals twice would count one execution twice. ``since`` cannot narrow a statement:
+        the view carries no per-statement timestamps (see :mod:`mdqm.adapters.postgresql_stats`).
+
+        Raises :class:`NotSupported` with the ``query_store`` capability when the extension is not
+        installed or this role may not read it -- never a crash, and never an empty list that looks
+        like "this database runs nothing".
+        """
+        with self._connection() as connection, connection.cursor() as cur:
+            yield from self._query_store.read(
+                cur, source=self._source, dialect=self.dialect(), since=since
+            )
 
     def execute(self, fragment: Fragment, limits: Limits) -> ArrowStream:
         """Run one compiled fragment on a server-side cursor and stream it as Arrow batches.
