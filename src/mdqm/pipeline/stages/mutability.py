@@ -789,7 +789,10 @@ class MutabilityStage:
             max_bytes=self._max_bytes,
             max_partitions=1,
         )
-        stream = adapter.execute(fragment, limits)
+        # The adapter protocol method, not a SQL sink: the statement was guarded just above.
+        stream = (  # pi-lens-ignore: python-sql-injection -- adapter protocol call
+            adapter.execute(fragment, limits)
+        )
         try:
             return [row for batch in stream for row in _rows(batch)]
         except (NotSupported, TimeoutError) as exc:
