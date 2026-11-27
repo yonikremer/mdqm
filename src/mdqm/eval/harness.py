@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from mdqm.semantic.loader import load as load_layer
+from mdqm.sql.execution import run_local
 
 REPO_ROOT = Path(__file__).resolve().parents[3]  # src/mdqm/eval/harness.py
 QUESTIONS = Path("tests/eval/questions.yaml")
@@ -195,14 +196,16 @@ def oracle_duckdb(world: Any) -> Any:
     }
     for schema, tables in datasets.items():
         # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        con.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+        run_local(con, f"CREATE SCHEMA IF NOT EXISTS {schema}")
         for name, rows in tables.items():
             table = pa.Table.from_pylist([asdict(row) for row in rows])
             con.register("_load", table)
             # Schema and table names come from the fixed dict above, never from a caller.
             # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-            con.execute(
-                f'CREATE OR REPLACE TABLE {schema}."{name}" AS SELECT * FROM _load'  # noqa: S608
+            # Names come from the fixed dict above; S608 cannot see that.
+            run_local(
+                con,
+                f'CREATE OR REPLACE TABLE {schema}."{name}" AS SELECT * FROM _load',  # noqa: S608
             )
             con.unregister("_load")
     return con

@@ -60,6 +60,7 @@ from mdqm.cache.freshness import (
 from mdqm.config.settings import Settings
 from mdqm.models import PartitionGranularity
 from mdqm.planner.partitions import Range, align_to_partitions
+from mdqm.sql.execution import local_ident, local_idents, run_local, set_local
 
 __all__ = [
     "DEFAULT_MAX_BYTES",
@@ -428,16 +429,17 @@ class SegmentCache:
             target.parent.mkdir(parents=True, exist_ok=True)
             self._con = duckdb.connect(str(target))
         # UTC everywhere: a stored segment's fetched_at must round-trip to the same instant.
-        self._con.execute("SET TimeZone='UTC'")
-        # DuckDB cannot bind a SET value as a parameter; _require_size has already restricted it to
-        # <number><unit>, so nothing but a size can reach this statement.
-        self._con.execute(f"SET memory_limit='{memory_limit}'")  # nosemgrep
+        # `set_local` is the one place a setting reaches SQL text: it validates the name against a
+        # fixed table and the value against that setting's pattern, because a driver cannot bind a
+        # SET. `_require_size` has already restricted the size to <number><unit>.
+        set_local(self._con, "TimeZone", "UTC")
+        set_local(self._con, "memory_limit", memory_limit)
         # DuckDB's default temp_directory is `.tmp` relative to the process CWD (/app in the image,
         # read-only there), and TMPDIR does not move it, so this is always set explicitly.
         spill = Path(spill_dir) if spill_dir is not None else Settings().paths.spill_dir
         spill.mkdir(parents=True, exist_ok=True)
-        self._con.execute(f"SET temp_directory='{spill.as_posix()}'")  # nosemgrep
-        self._con.execute(_METADATA_DDL)
+        set_local(self._con, "temp_directory", spill.as_posix())
+        run_local(self._con, _METADATA_DDL)
 
     # --- lifecycle ------------------------------------------------------------------------
 
@@ -644,7 +646,7 @@ class SegmentCache:
             # columns, which DuckDB refuses to register, so the held rows are kept as they are.
             return self._read_rows(spec, window)
         ident = _row_table_name(self._key(spec, window))
-        keys = ", ".join(f'"{name}"' for name in policy.unique_key)
+        keys = local_idents(policy.unique_key)
         with self._lock:
             self._con.register("_mdqm_diff", diff)
             try:
@@ -654,15 +656,19 @@ class SegmentCache:
                 # ident is 'seg_' + 32 hex digits of a sha256 and each key is a validated plain
                 # column name, so the only things interpolated into this DML are safe identifiers
                 # (DuckDB cannot bind an identifier as a parameter).
-                self._con.execute(
-                    f'CREATE OR REPLACE TABLE main."{ident}" AS '  # noqa: S608
+                # `ident` and every column in `keys` go through `local_ident`, which validates the
+                # shape and quotes it: DuckDB cannot bind an identifier, so this is the one place the
+                # name becomes text. Values are never interpolated here.
+                run_local(
+                    self._con,
+                    f"CREATE OR REPLACE TABLE main.{local_ident(ident)} AS "  # noqa: S608
                     "SELECT * EXCLUDE (_seq, _rn) FROM ("
                     "SELECT *, ROW_NUMBER() OVER "
                     f"(PARTITION BY {keys} ORDER BY _seq DESC) AS _rn FROM ("
-                    f'SELECT *, 0 AS _seq FROM main."{ident}" '
+                    f"SELECT *, 0 AS _seq FROM main.{local_ident(ident)} "
                     "UNION ALL BY NAME "
                     "SELECT *, 1 AS _seq FROM _mdqm_diff"
-                    ")) WHERE _rn = 1"
+                    ")) WHERE _rn = 1",
                 )
                 return self._con.sql(
                     f'SELECT * FROM main."{ident}"'  # noqa: S608
@@ -679,9 +685,10 @@ class SegmentCache:
         with self._lock:
             self._con.register("_mdqm_seg_load", table)
             try:
-                self._con.execute(
-                    f'CREATE OR REPLACE TABLE main."{ident}" '  # noqa: S608
-                    "AS SELECT * FROM _mdqm_seg_load"
+                run_local(
+                    self._con,
+                    f"CREATE OR REPLACE TABLE main.{local_ident(ident)} "  # noqa: S608
+                    "AS SELECT * FROM _mdqm_seg_load",
                 )
             finally:
                 self._con.unregister("_mdqm_seg_load")
@@ -783,7 +790,7 @@ class SegmentCache:
         with self._lock:
             for key, ident, _bytes, _fetched in rows:
                 # ident is 'seg_' + 32 hex digits of a sha256 (see _row_table_name).
-                self._con.execute(f'DROP TABLE IF EXISTS main."{ident}"')  # nosemgrep
+                run_local(self._con, f"DROP TABLE IF EXISTS main.{local_ident(ident)}")
                 self._con.execute("DELETE FROM _mdqm_segments WHERE key = ?", [key])
 
     # --- reporting ------------------------------------------------------------------------

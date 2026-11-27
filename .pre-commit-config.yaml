@@ -64,13 +64,14 @@ repos:
 
       # Our own rule: it looks at *how* a statement was built (interpolation, concatenation,
       # formatting) instead of refusing every non-literal, which is what the built-in rule does. It
-      # runs on the runtime query paths; the test loaders build DDL from their own constants and are
-      # tracked separately.
+      # runs on the runtime query paths (the stages included: they build SQL for sources); the
+      # synthetic-data loaders under mdqm/testing/ build DDL, which the read-only guard refuses, so
+      # the checker exempts that one tree by path.
       - id: sql-sinks
         name: no values interpolated into runtime SQL
         entry: python scripts/precommit_hook.py scripts/check_sql_sinks.py
         language: system
-        files: ^src/mdqm/(adapters|sql|server|executor|compiler|semantic|planner|governor|store|review|context|results|cache)/
+        files: ^src/mdqm/(adapters|sql|server|executor|compiler|semantic|planner|governor|store|review|context|results|cache|pipeline|eval)/
         pass_filenames: true
 
       # ---- pre-push: slower, whole-repository gates ----

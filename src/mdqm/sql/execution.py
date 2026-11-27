@@ -122,6 +122,29 @@ def run_local(
     return cursor.execute(text, params)
 
 
+#: The shape of an identifier this repository will quote into local SQL text. Deliberately narrow:
+#: the names here are ours (a table we created, a column a segment is keyed by), and anything that does
+#: not look like a plain SQL identifier is refused rather than quoted.
+_LOCAL_IDENT: re.Pattern[str] = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,62}$")
+
+
+def local_ident(name: str) -> str:
+    """``name`` quoted for a local engine, after validating its shape.
+
+    A driver cannot bind an identifier, so an identifier is the one thing that must become SQL text.
+    It becomes text here, through a shape check, and nowhere else -- a caller that needs a table name
+    in a statement calls this instead of building an f-string.
+    """
+    if not _LOCAL_IDENT.fullmatch(name):
+        raise ValueError(f"{name!r} is not a plain identifier, so it cannot be quoted into SQL")
+    return f'"{name}"'
+
+
+def local_idents(names: Sequence[str]) -> str:
+    """``local_ident`` for a list, comma-separated: the shape a column list needs."""
+    return ", ".join(local_ident(name) for name in names)
+
+
 #: Settings this repository is willing to change on a local engine, with the shape their value may take.
 _LOCAL_SETTINGS: dict[str, re.Pattern[str]] = {
     "memory_limit": re.compile(r"^[0-9]{1,6}(KB|MB|GB|TB)$"),

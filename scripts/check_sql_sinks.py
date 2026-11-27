@@ -48,9 +48,20 @@ FORMAT_METHODS = frozenset({"format", "join", "replace"})
 TRUSTED_ASSEMBLERS = frozenset({"mdqm/sql/execution.py"})
 """The one module allowed to assemble statement text itself.
 
-It exposes `prepare`/`execute_one`/`wrapped`/`set_local`/`create_table_*`, validates every identifier
-and setting value, and is the boundary the rest of the code calls. Exempting it by path is deliberate
-and reviewable; exempting call sites is not, which is why this list has exactly one entry.
+It exposes `prepare`/`execute_one`/`wrapped`/`set_local`/`local_ident`, validates every identifier and
+setting value, and is the boundary the rest of the code calls. Exempting it by path is deliberate and
+reviewable; exempting call sites is not, which is why this list has exactly one entry.
+"""
+
+TRUSTED_PREFIXES = ("mdqm/testing/",)
+"""Development tooling that writes DDL: the synthetic world's loaders and the fake adapter.
+
+They create, fill and drop tables, so the read-only guard is the wrong tool for them and they cannot
+call `prepare()`. Exempting the whole tree instead of a dozen call sites keeps the decision in one
+reviewable line; the server's query path never runs through these modules, and the pre-commit hook
+does not scope them as runtime. Everything in `adapters/`, `sql/`, `server/`, `executor/`,
+`compiler/`, `semantic/`, `planner/`, `governor/`, `store/`, `review/`, `context/`, `results/`,
+`cache/`, `pipeline/` and `eval/` is checked.
 """
 
 
@@ -66,11 +77,12 @@ class Finding:
         return f"{self.path}:{self.line}: {self.reason}"
 
 
-def _literal_strings(tree: ast.Module) -> set[str]:
-    """Names bound only to string literals, at module scope or anywhere (union, conservatively).
+def _bindings(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """``(literals, tainted)``: names bound only to string literals, and names bound to anything else.
 
-    A name that is assigned an interpolated value anywhere is *not* included, so the check cannot be
-    fooled by re-assignment.
+    A name assigned a literal *somewhere* and something else elsewhere lands in ``tainted``, so the
+    check cannot be fooled by re-assignment. Both sets are needed: the literal one excuses a statement,
+    the tainted one is what the rule reports.
     """
     literals: set[str] = set()
     tainted: set[str] = set()
@@ -87,11 +99,70 @@ def _literal_strings(tree: ast.Module) -> set[str]:
         for target in targets:
             if not isinstance(target, ast.Name):
                 continue
-            if is_literal:
-                literals.add(target.id)
-            else:
-                tainted.add(target.id)
-    return literals - tainted
+            (literals if is_literal else tainted).add(target.id)
+    return literals - tainted, tainted
+
+
+#: Attribute reads that carry a compiled object rather than text: a plan and a fragment are both
+#: produced by our own compiler and guarded when they run, and the same trust already applies to
+#: ``fragment.sql`` in :func:`_describe`.
+_TYPED_ATTRIBUTES = frozenset({"plan", "fragment", "sql"})
+
+
+def _is_fragment_expr(node: ast.expr) -> bool:
+    """True for a compiled ``Fragment(...)``/``FederatedPlan(...)``: the port's argument, not text.
+
+    ``adapter.execute(fragment, limits)`` and ``executor.execute(plan, user=...)`` are *our* ports:
+    they take a compiled object, not a string, and the fragment is guarded when it runs. The method
+    name ``execute`` is shared with the drivers, so the argument's provenance is what separates the
+    two.
+    """
+    if isinstance(node, ast.Attribute):
+        return node.attr in _TYPED_ATTRIBUTES
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+    return name.endswith(("Fragment", "Plan"))
+
+
+def _annotates_fragment(annotation: ast.expr | None) -> bool:
+    if annotation is None:
+        return False
+    if isinstance(annotation, ast.Name):
+        return annotation.id.endswith("Fragment")
+    if isinstance(annotation, ast.Attribute):
+        return annotation.attr.endswith("Fragment")
+    if isinstance(annotation, ast.Subscript):
+        return _annotates_fragment(annotation.value)
+    if isinstance(annotation, ast.BinOp):
+        return _annotates_fragment(annotation.left) or _annotates_fragment(annotation.right)
+    return False
+
+
+def _fragment_names(tree: ast.Module) -> set[str]:
+    """Names that hold a compiled fragment: assigned from ``Fragment(...)``, or so annotated.
+
+    Conservative in the safe direction only: a name that is *also* assigned anything else is dropped,
+    so a re-use cannot smuggle text through a earlier fragment assignment.
+    """
+    fragment: set[str] = set()
+    tainted: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if _is_fragment_expr(node.value):
+                    fragment.add(target.id)
+                else:
+                    tainted.add(target.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for argument in (*node.args.args, *node.args.kwonlyargs):
+                if _annotates_fragment(argument.annotation):
+                    fragment.add(argument.arg)
+    return fragment - tainted
 
 
 def _describe(node: ast.expr) -> str | None:
@@ -116,6 +187,16 @@ def _describe(node: ast.expr) -> str | None:
         if name in SAFE_CALLS:
             return None
         if name in FORMAT_METHODS:
+            # `sql.SQL("...").format(sql.Identifier(col))` quotes the identifier itself, so the
+            # receiver being a checked composition is what makes `.format` safe there.
+            receiver = func.value if isinstance(func, ast.Attribute) else None
+            if isinstance(receiver, ast.Call):
+                inner = receiver.func
+                inner_name = (
+                    inner.attr if isinstance(inner, ast.Attribute) else getattr(inner, "id", "")
+                )
+                if inner_name in SAFE_CALLS:
+                    return None
             return f"statement is built with `{name}()`"
         return None
     if isinstance(node, ast.Attribute):
@@ -140,9 +221,13 @@ def check_source(path: Path, text: str) -> Iterator[Finding]:
         tree = ast.parse(text, filename=str(path))
     except SyntaxError:
         return
-    if str(path).replace("\\", "/").endswith(tuple(TRUSTED_ASSEMBLERS)):
+    posix = str(path).replace("\\", "/")
+    if posix.endswith(tuple(TRUSTED_ASSEMBLERS)) or any(
+        f"/{prefix}" in f"/{posix}" for prefix in TRUSTED_PREFIXES
+    ):
         return
-    literals = _literal_strings(tree)
+    literals, tainted = _bindings(tree)
+    fragments = _fragment_names(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -152,7 +237,27 @@ def check_source(path: Path, text: str) -> Iterator[Finding]:
         if not node.args:
             continue
         statement = node.args[0]
-        if isinstance(statement, ast.Name) and statement.id in literals:
+        if isinstance(statement, ast.Name):
+            # A name is safe when every assignment to it is a string literal, and also when it holds a
+            # compiled fragment handed to the adapter port. A name that *somewhere* holds interpolated
+            # text is reported: that is how an injection travels across two lines.
+            #
+            # The limit, stated plainly: a bare parameter is not traced. `def go(cursor, text):
+            # cursor.execute(text)` is not reported, because at that point the question is "was the
+            # guard run", not "did text building happen" -- and that question is answered at execution
+            # time by `prepare()`/`execute_one()`, which is the design. This rule catches the text
+            # being built, which is the half a lint rule can see.
+            if statement.id in literals or statement.id in fragments:
+                continue
+            if statement.id in tainted:
+                yield Finding(
+                    path=path,
+                    line=node.lineno,
+                    reason=(
+                        f"{method}(): statement is the variable {statement.id!r}, which is assigned "
+                        "something other than a string literal (bind the values instead)"
+                    ),
+                )
             continue
         reason = _describe(statement)
         if reason is not None:

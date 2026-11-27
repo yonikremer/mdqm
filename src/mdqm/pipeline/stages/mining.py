@@ -44,6 +44,7 @@ from typing import Any, Final
 
 from mdqm.models.base import MDQMModel, UtcDatetime
 from mdqm.models.query import RawQuery
+from mdqm.sql.execution import run_local
 from mdqm.sql.fingerprint import ConversionHint, HintEvidence, QueryFacts, analyze
 from mdqm.store.db import Store
 
@@ -429,12 +430,12 @@ def _count(value: Any, what: str) -> int:
 
 def watermark(store: Store, source: str) -> datetime | None:
     """The next pull's starting point for ``source``: the newest ``last_seen`` ever mined."""
-    row = store.connect().execute(_SELECT_WATERMARK, (source,)).fetchone()
+    row = run_local(store.connect(), _SELECT_WATERMARK, (source,)).fetchone()
     return None if row is None else _parse_iso(row["watermark"])
 
 
 def _already_mined(conn: sqlite3.Connection, source: str, batch: str) -> bool:
-    row = conn.execute(_SELECT_BATCH, (source, batch)).fetchone()
+    row = run_local(conn, _SELECT_BATCH, (source, batch)).fetchone()
     return row is not None
 
 
@@ -498,7 +499,7 @@ def ingest(
             )
         after = _latest(before, seen)
         for query in report.queries:
-            existing = conn.execute(_SELECT_ROW, (source, query.fingerprint)).fetchone()
+            existing = run_local(conn, _SELECT_ROW, (source, query.fingerprint)).fetchone()
             calls, statements, users, first_seen, last_seen = (
                 query.calls,
                 query.statements,
@@ -508,7 +509,8 @@ def ingest(
             )
             if existing is not None:
                 calls, statements, users, first_seen, last_seen = _merge_rows(existing, query)
-            conn.execute(
+            run_local(
+                conn,
                 _UPSERT_ROW,
                 (
                     source,
@@ -523,7 +525,8 @@ def ingest(
                     _iso(exec_ts),
                 ),
             )
-        conn.execute(
+        run_local(
+            conn,
             _INSERT_BATCH,
             (
                 source,
@@ -535,7 +538,7 @@ def ingest(
             ),
         )
         if after is not None:
-            conn.execute(_UPSERT_WATERMARK, (source, _iso(after), _iso(exec_ts)))
+            run_local(conn, _UPSERT_WATERMARK, (source, _iso(after), _iso(exec_ts)))
     logger.info(
         "mined past queries",
         extra={
@@ -576,7 +579,7 @@ def read(
     if source is not None:
         sql = f"{_SELECT_ROWS} WHERE source = ?"
         params = (source,)
-    rows = store.connect().execute(sql, params).fetchall()
+    rows = run_local(store.connect(), sql, params).fetchall()
     queries = [
         MinedQuery(
             source=str(row["source"]),

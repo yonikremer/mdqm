@@ -51,6 +51,7 @@ from mdqm.llm.result import StructuredLLM
 from mdqm.models.base import MDQMModel, UtcDatetime
 from mdqm.semantic.loader import CURATED_DIR, GENERATED_DIR
 from mdqm.semantic.writer import write_generated
+from mdqm.sql.execution import run_local
 from mdqm.store.db import Store
 
 __all__ = [
@@ -586,9 +587,7 @@ def _json_list(value: object) -> tuple[str, ...]:
 def _last_success(store: Store, stage: str) -> tuple[str, tuple[str, ...]] | None:
     """The input hash and outputs of a stage's last successful run, or ``None``."""
     # Constant statement, value bound: nothing is interpolated into the SQL text.
-    row = (
-        store.connect().execute(_SELECT_LAST_RAN, (stage,)).fetchone()
-    )  # nosemgrep: python-sql-injection
+    row = run_local(store.connect(), _SELECT_LAST_RAN, (stage,)).fetchone()
     if row is None:
         return None
     return (str(row["inputs_hash"]), _json_list(row["outputs"]))
@@ -608,7 +607,8 @@ def _record(ctx: PipelineContext, report: StageReport, *, started: datetime) -> 
     """Write one attempt's row. One transaction per stage, so a failure keeps earlier rows."""
     with ctx.store.writing() as conn:
         # Constant statement, every value bound.
-        conn.execute(
+        run_local(
+            conn,
             _INSERT_RUN,
             (
                 report.stage,

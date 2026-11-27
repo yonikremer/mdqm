@@ -85,6 +85,7 @@ from mdqm.review.queue import (
 from mdqm.semantic.errors import SemanticError
 from mdqm.semantic.loader import load
 from mdqm.semantic.models import SemanticLayer
+from mdqm.sql.execution import run_local
 from mdqm.store.db import Store
 
 __all__ = [
@@ -1038,7 +1039,7 @@ def _bound_text(bound: object) -> str | None:
 def _meta_value(store: Store, key: str) -> str | None:
     # The statement is a module constant and the key travels as a bound `?` parameter, so there is
     # nothing to inject; the scanner cannot see through the constant.
-    row = store.connect().execute(_SELECT_META, (key,)).fetchone()  # nosemgrep
+    row = run_local(store.connect(), _SELECT_META, (key,)).fetchone()
     return None if row is None else str(row["value"])
 
 
@@ -1046,7 +1047,7 @@ def _write_meta(store: Store, key: str, value: str, *, at: datetime) -> None:
     """Upsert one ``mdqm_meta`` row through the store's own writer, so there is one write path."""
     with store.writing() as conn:
         # Constant statement, every value bound: no interpolation reaches the SQL text.
-        conn.execute(_UPSERT_META, (key, value, at.isoformat()))  # nosemgrep
+        run_local(conn, _UPSERT_META, (key, value, at.isoformat()))
 
 
 def read_baseline(store: Store, source: str) -> CatalogSnapshot | None:
@@ -1116,7 +1117,7 @@ def blocked_references(store: Store, *, source: str | None = None) -> tuple[str,
     labels: set[str] = set()
     # The prefix is matched in Python on the key column: the statement is a constant with no
     # parameter at all, and mdqm_meta holds a handful of rows (identifiers and hashes, never data).
-    rows = store.connect().execute(_SELECT_ALL_META).fetchall()  # nosemgrep
+    rows = run_local(store.connect(), _SELECT_ALL_META).fetchall()
     for row in rows:
         if not any(str(row["key"]).startswith(prefix) for prefix in wanted):
             continue

@@ -38,6 +38,7 @@ from mdqm.cache.freshness import (
     SystemClock,
     is_fresh_at,
 )
+from mdqm.sql.execution import run_local
 
 __all__ = ["FragmentCache", "FragmentLookup", "fragment_key"]
 
@@ -208,7 +209,7 @@ class FragmentCache:
         A DuckDB connection refuses a new statement while an earlier result is unfinished, so every
         write here is drained rather than left to the garbage collector.
         """
-        self._con.execute(sql, params).fetchall()
+        run_local(self._con, sql, params).fetchall()
 
     def size(self) -> int:
         """How many fragments are held. A point-in-time count, for tests and the audit view."""
