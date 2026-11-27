@@ -898,9 +898,10 @@ class PostgresAdapter:
         like "this database runs nothing".
         """
         with self._connection() as connection, connection.cursor() as cur:
-            yield from self._query_store.read(
+            mined = self._query_store.read(
                 cur, source=self._source, dialect=self.dialect(), since=since
             )
+        return iter(mined)
 
     def execute(self, fragment: Fragment, limits: Limits) -> ArrowStream:
         """Run one compiled fragment on a server-side cursor and stream it as Arrow batches.

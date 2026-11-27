@@ -248,7 +248,11 @@ def statements(cursor: psycopg.Cursor[Any], state: QueryStoreState) -> list[Stat
     SQL). A ``DECLARE ... CURSOR FOR <query>`` row *is* a query: the text is unwrapped to the
     statement inside and summed with every other row for the same statement.
     """
-    cursor.execute(sql.SQL(_MINE_SQL).format(total=sql.Identifier(state.total_column)))
+    # The statement is a module constant; only the detected column name is interpolated, as a
+    # quoted identifier. Not a value, so it cannot be a bind parameter.
+    cursor.execute(
+        sql.SQL(_MINE_SQL).format(total=sql.Identifier(state.total_column))
+    )  # nosemgrep: python-sql-injection
     totals: dict[str, Statement] = {}
     users: dict[str, set[str]] = {}
     dropped = 0
