@@ -67,7 +67,8 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from datetime import UTC, date, datetime, time as dt_time
+from datetime import UTC, date, datetime
+from datetime import time as dt_time
 from decimal import Decimal
 from typing import Any, ClassVar, Final
 from xml.etree import ElementTree
@@ -722,7 +723,9 @@ class SqlServerAdapter:
         self._source = config.name
         self._conninfo = _conninfo(config, secrets)
         self._pool_size = _positive_int(options.get("pool_size"), DEFAULT_POOL_SIZE, "pool_size")
-        self._batch_size = _positive_int(options.get("batch_size"), DEFAULT_BATCH_SIZE, "batch_size")
+        self._batch_size = _positive_int(
+            options.get("batch_size"), DEFAULT_BATCH_SIZE, "batch_size"
+        )
         self._connect_timeout_s = _positive_int(
             options.get("connect_timeout"), 10, "connect_timeout"
         )
@@ -834,7 +837,10 @@ class SqlServerAdapter:
         except Exception as exc:
             return False, f"SET SHOWPLAN_XML ON failed: {exc}"
         if "ShowPlanXML" not in xml:
-            return False, "SET SHOWPLAN_XML ON returned something that is not a ShowPlanXML document"
+            return (
+                False,
+                "SET SHOWPLAN_XML ON returned something that is not a ShowPlanXML document",
+            )
         return True, (
             "SET SHOWPLAN_XML ON: cost, estimates and the indexes used are in the XML, but "
             "PartitionsAccessed is not (it only appears in an actual plan), so explain reports "
@@ -854,7 +860,10 @@ class SqlServerAdapter:
                 cursor.close()
         state = "" if row is None else str(row[0])
         if state not in {"READ_WRITE", "READ_ONLY"}:
-            return False, f"Query Store is {state or 'absent'} (ALTER DATABASE ... SET QUERY_STORE = ON)"
+            return (
+                False,
+                f"Query Store is {state or 'absent'} (ALTER DATABASE ... SET QUERY_STORE = ON)",
+            )
         try:
             with self._connection() as connection:
                 cursor = connection.cursor()
@@ -917,7 +926,9 @@ class SqlServerAdapter:
             columns.setdefault(key, []).append(
                 Column(
                     name=str(row[2]),
-                    native_type=_native_type(type_name, _as_int(row[4]), _as_int(row[5]), _as_int(row[6])),
+                    native_type=_native_type(
+                        type_name, _as_int(row[4]), _as_int(row[5]), _as_int(row[6])
+                    ),
                     normalized_type=normalized_type(type_name),
                     nullable=bool(row[7]),
                     ordinal=_as_int(row[8]),
@@ -1444,9 +1455,7 @@ def plan_summary(xml: str, *, partitions_total: int | None = None) -> PlanSummar
         uses_index=bool(indexes) if indexes else None,
         indexes_used=tuple(indexes),
         est_rows=_as_float(None if statement is None else statement.get("StatementEstRows")),
-        est_cost=_as_float(
-            None if statement is None else statement.get("StatementSubTreeCost")
-        ),
+        est_cost=_as_float(None if statement is None else statement.get("StatementSubTreeCost")),
         pruning_proof=PruningProof.UNKNOWN,
         raw=raw or None,
     )
@@ -1482,7 +1491,7 @@ def _raw_queries(rows: Sequence[Sequence[Any]]) -> list[RawQuery]:
 
 
 def _stream_error(
-    exc: BaseException, *, cancelled: bool, timed_out: bool, timeout_s: float
+    exc: Exception, *, cancelled: bool, timed_out: bool, timeout_s: float
 ) -> Exception:
     """Translate a driver error: a cancellation or a missed deadline, otherwise the raw error.
 
@@ -1525,7 +1534,9 @@ def _parse_boundary(text: str) -> datetime | None:
     return None
 
 
-def _native_type(type_name: str, length: int | None, precision: int | None, scale: int | None) -> str:
+def _native_type(
+    type_name: str, length: int | None, precision: int | None, scale: int | None
+) -> str:
     """The type as SQL Server spells it, with the size/precision the catalog keeps separately."""
     lowered = type_name.lower()
     if lowered in {"varchar", "char", "varbinary", "binary"} and length is not None:
@@ -1555,7 +1566,9 @@ def _arrays_from_rows(schema: pa.Schema, rows: Sequence[Sequence[Any]]) -> list[
         column = [row[position] for row in rows]
         if pa.types.is_string(field.type):
             arrays.append(
-                pa.array([None if value is None else str(value) for value in column], type=field.type)
+                pa.array(
+                    [None if value is None else str(value) for value in column], type=field.type
+                )
             )
         elif pa.types.is_binary(field.type):
             arrays.append(
