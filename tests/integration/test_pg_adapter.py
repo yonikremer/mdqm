@@ -168,7 +168,10 @@ def write_probe(target: PgTarget) -> Iterator[str]:
     the transaction; with it, only ``read-only transaction`` can stop the write.
     """
     with psycopg.connect(target.dsn("billing")) as conn, conn.cursor() as cur:
-        cur.execute(f"CREATE SEQUENCE IF NOT EXISTS public.{WRITE_PROBE_SEQUENCE}")
+        # Drop first: a sequence left behind by an interrupted run would make CREATE raise a
+        # UniqueViolation on pg_class rather than being silently reused.
+        cur.execute(f"DROP SEQUENCE IF EXISTS public.{WRITE_PROBE_SEQUENCE}")
+        cur.execute(f"CREATE SEQUENCE public.{WRITE_PROBE_SEQUENCE}")
         cur.execute(f"GRANT USAGE ON SEQUENCE public.{WRITE_PROBE_SEQUENCE} TO mdqm_ro")
         conn.commit()
     try:
