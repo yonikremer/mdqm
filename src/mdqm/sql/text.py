@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def as_query(text: str) -> Any:  # noqa: ANN401 - the laundered type is the point, see the module docstring
+def as_query(text: str) -> Any:
     """Return ``text`` as something a driver's ``LiteralString`` parameter accepts.
 
     Callers pass SQL they built themselves (a compiled fragment, a module constant). Using this

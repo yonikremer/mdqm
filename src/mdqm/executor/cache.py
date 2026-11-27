@@ -84,8 +84,7 @@ def fragment_key(
     for part in parts:
         if _SEPARATOR in part:
             raise ValueError(f"a cache key part must not contain {_SEPARATOR!r}")
-    digest = hashlib.sha256(_SEPARATOR.join(parts).encode("utf-8")).hexdigest()
-    return digest
+    return hashlib.sha256(_SEPARATOR.join(parts).encode("utf-8")).hexdigest()
 
 
 class FragmentCache:

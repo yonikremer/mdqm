@@ -13,7 +13,7 @@ from typing import Annotated, Any
 
 from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
-__all__ = ["Duration", "DURATION_HELP", "parse_duration"]
+__all__ = ["DURATION_HELP", "Duration", "parse_duration"]
 
 #: Seconds in each unit suffix. ``m`` is minutes, ``ms`` milliseconds; there is no month/year
 #: because a month is not a fixed number of seconds.

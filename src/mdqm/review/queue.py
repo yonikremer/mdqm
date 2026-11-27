@@ -32,7 +32,7 @@ import tempfile
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from pydantic import Field
 from ruamel.yaml import YAML
@@ -60,6 +60,9 @@ __all__ = [
 
 #: The table holding every proposal and every decision.
 PROPOSALS_TABLE: str = "review_proposals"
+
+# The statements that name a table, built once from the constant above; values are bound.
+_SELECT_PROPOSAL: Final[str] = f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?"  # noqa: S608 - module constant
 
 #: A section name is a file stem, never a path: the same rule as ``semantic.writer``.
 _ALLOWED_SECTION_CHARS: frozenset[str] = frozenset(
@@ -268,9 +271,8 @@ class ReviewQueue:
         """The proposal with this id, or :class:`ReviewError` if no such row exists."""
         # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         # Module-constant SQL, values bound.
-        row = self._store.connect().execute(
-            f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?", (proposal,)  # noqa: S608 - constant
-        ).fetchone()
+        # pi-lens-ignore: python-sql-injection
+        row = self._store.connect().execute(_SELECT_PROPOSAL, (proposal,)).fetchone()
         if row is None:
             raise ReviewError(f"no proposal with id {proposal!r}")
         return _row_to_proposal(row)
@@ -468,9 +470,8 @@ class ReviewQueue:
     def _find(self, proposal: str) -> Proposal | None:
         # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         # Module-constant SQL, values bound.
-        row = self._store.connect().execute(
-            f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?", (proposal,)  # noqa: S608
-        ).fetchone()
+        # pi-lens-ignore: python-sql-injection
+        row = self._store.connect().execute(_SELECT_PROPOSAL, (proposal,)).fetchone()
         return None if row is None else _row_to_proposal(row)
 
     def _insert(self, proposal: Proposal) -> None:

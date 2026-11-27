@@ -166,7 +166,7 @@ def test_unknown_capability_is_not_registered() -> None:
     [
         pytest.param({}, ["unknown"] * len(FEATURES), id="nothing-probed"),
         pytest.param(
-            {name: True for name in CAPABILITIES},
+            dict.fromkeys(CAPABILITIES, True),
             [],
             id="everything-supported",
         ),

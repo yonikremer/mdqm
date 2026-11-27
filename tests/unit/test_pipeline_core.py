@@ -157,7 +157,7 @@ def snapshot(root: Path) -> dict[str, tuple[int, bytes]]:
 
 def rows(store: Store, stage: str | None = None) -> list[Any]:
     """The pipeline ledger, oldest first, optionally for one stage."""
-    sql = f"SELECT * FROM {PIPELINE_RUN_TABLE}"  # noqa: S608 - a module constant
+    sql = f"SELECT * FROM {PIPELINE_RUN_TABLE}"
     params: tuple[object, ...] = ()
     if stage is not None:
         sql += " WHERE stage = ?"
@@ -695,7 +695,7 @@ def mining_stage(queries: Sequence[RawQuery]) -> FakeStage:
 
 
 def count(store: Store, table: str) -> int:
-    return int(store.connect().execute(f"SELECT count(*) AS n FROM {table}").fetchone()["n"])  # noqa: S608
+    return int(store.connect().execute(f"SELECT count(*) AS n FROM {table}").fetchone()["n"])
 
 
 def test_mining_runs_through_the_pipeline_and_skips_on_the_second_pass(

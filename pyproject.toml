@@ -71,10 +71,28 @@ target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "S"]
-ignore = ["S101"]                     # assert is fine in tests
+# Security first (`S`), then the hidden-bug families (`B` bugbear, `BLE` blind excepts, `TRY`
+# exception anti-patterns, `RUF` ruff's own bug-finders, `A` builtin shadowing), then correctness of
+# time (`DTZ`: this project is timezone-sensitive) and quality (`PERF`, `C4`, `PIE`, `RET`).
+select = [
+    "E", "F", "I", "W",
+    "S", "B", "BLE", "TRY", "RUF", "A",
+    "DTZ", "PERF", "C4", "PIE", "RET",
+    "UP", "SIM", "ASYNC",
+]
+ignore = [
+    "S101",    # assert: the tests are built on it
+    # Style, not bugs. `TRY003` wants exception classes instead of messages (490 sites, a rewrite of
+    # every error path for no behavioural gain); `RUF001/2/3` flags "ambiguous" unicode, which here is
+    # Hebrew text and typographic dashes in prose. Enabling them would only teach people to ignore the
+    # whole run.
+    "TRY003",
+    "RUF001", "RUF002", "RUF003",
+]
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S105", "S106", "S608"]
+# Test fixtures write naive datetimes on purpose (a fixed instant, not the clock) and bind values into
+# literal SQL to prove the guard; the security rules stay on everywhere else.
+"tests/**" = ["S105", "S106", "S608", "DTZ001", "DTZ007"]
 "scripts/**" = ["E501", "S603", "S607", "S310"]
 
 [tool.mypy]

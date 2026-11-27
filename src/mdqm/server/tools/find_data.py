@@ -65,9 +65,9 @@ from mdqm.store.audit import AuditLog
 
 __all__ = [
     "EMPTY_HINT",
+    "NO_BASIS",
     "FindDataAnswer",
     "FindDataServices",
-    "NO_BASIS",
     "SpecSkeleton",
     "configure_find_data",
     "current_find_data",
@@ -275,7 +275,7 @@ def _refused(services: FindDataServices, user_id: str, error: ErrorResponse) -> 
     if services.audit is not None:
         try:
             services.audit.record_refusal(user_id=user_id, tool="find_data", error=error)
-        except Exception:  # noqa: BLE001 - an audit failure must not hide the refusal itself
+        except Exception:
             logger.exception(
                 "could not audit a find_data refusal", extra={"error_code": error.code}
             )

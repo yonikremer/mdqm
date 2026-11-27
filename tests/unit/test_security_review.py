@@ -196,7 +196,7 @@ def test_the_adapter_wires_its_own_host_into_the_transport() -> None:
         transport=httpx.MockTransport(_Recorder()),
     )
     with pytest.raises(OpenApiError) as refused:
-        client = adapter._client  # noqa: SLF001 - the transport under test is the point
+        client = adapter._client
         assert client is not None
         client.get(ATTACKER_PATH)
     assert refused.value.code == "INVALID_SPEC"

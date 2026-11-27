@@ -77,7 +77,7 @@ logger = logging.getLogger(__name__)
 
 def _statement(*parts: str) -> str:
     """Assemble one SQL statement from module-level constants only (never from caller input)."""
-    return "".join(parts)  # noqa: S608 - fragments are constants; values are bound parameters
+    return "".join(parts)
 
 
 #: One row per stage attempt: the ledger a rerun reads to decide what to skip.

@@ -694,7 +694,7 @@ def stored_counts(store: Store) -> dict[str, tuple[int, int, tuple[str, ...]]]:
     rows = (
         store.connect()
         .execute(
-            f"SELECT fingerprint, calls, statements, users FROM {MINED_QUERY_TABLE}"  # noqa: S608
+            f"SELECT fingerprint, calls, statements, users FROM {MINED_QUERY_TABLE}"
         )
         .fetchall()
     )
@@ -810,7 +810,7 @@ def test_ingest_ignores_an_empty_batch(tmp_path: Path) -> None:
     assert (
         store.connect()
         .execute(
-            f"SELECT COUNT(*) AS n FROM {WATERMARK_TABLE}"  # noqa: S608
+            f"SELECT COUNT(*) AS n FROM {WATERMARK_TABLE}"
         )
         .fetchone()["n"]
         == 0

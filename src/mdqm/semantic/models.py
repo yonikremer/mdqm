@@ -430,7 +430,7 @@ class ValueMap(MDQMModel):
                 seen[key] = value
         for column, codes in self.sources.items():
             _qualified(column, "a value map source column")
-            stray = sorted({code for code in codes.values()} - allowed)
+            stray = sorted(set(codes.values()) - allowed)
             if stray:
                 raise ValueError(
                     f"source {column!r} maps to {stray}, which are not canonical values "

@@ -24,7 +24,7 @@ from mdqm.config import (
     find_literal_secrets,
 )
 
-SECRET_VALUE = "throwaway-value-8f2c1d"  # noqa: S105 - throwaway, asserted to never leak
+SECRET_VALUE = "throwaway-value-8f2c1d"
 
 
 @pytest.fixture(autouse=True)

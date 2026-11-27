@@ -37,7 +37,7 @@ from mdqm.llm import (
 )
 
 # A throwaway value: the tests assert it never appears in a log line or an exception.
-KEY = "throwaway-model-key-5d3e"  # noqa: S105
+KEY = "throwaway-model-key-5d3e"
 NOW = datetime(2026, 4, 1, 9, 30, tzinfo=UTC)
 BASE_URL = "http://model.local/v1"
 MODEL = "glm-test"

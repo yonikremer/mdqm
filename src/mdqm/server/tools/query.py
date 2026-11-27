@@ -554,7 +554,7 @@ def _run(
             applied_fixes=fixes,
             plan=plan,
         )
-    except Exception as exc:  # noqa: BLE001 - internal failures become INTERNAL_ERROR, not a stack
+    except Exception as exc:
         logger.exception("query execution failed", extra={"source": source})
         return _refused(
             services,
@@ -701,7 +701,7 @@ def _explain(
         summary = adapter.explain(fragment)
     except NotSupported:
         return None, None
-    except Exception as exc:  # noqa: BLE001 - a source that cannot plan cannot be trusted to run
+    except Exception as exc:
         logger.warning("EXPLAIN failed", extra={"source": source}, exc_info=exc)
         return None, from_exception(exc, source=source, timeout_s=services.limits.timeout_s)
     return summary, gate_plan(
@@ -781,7 +781,7 @@ def _refused(
             version_hash=services.layer.version_hash,
             sources=tuple(sources),
         )
-    except Exception:  # noqa: BLE001 - an audit failure must not replace the agent's answer
+    except Exception:
         logger.exception("could not audit a query refusal", extra={"error_code": error.code})
     frozen: str | None = None
     if original_sql is not None and dialect is not None:
@@ -861,7 +861,7 @@ def _record(
                 row_count=max(0, rows),
             )
         )
-    except Exception:  # noqa: BLE001 - the answer is the caller's; a lost audit row is ours
+    except Exception:
         logger.exception("could not audit a query", extra={"source": source})
 
 
@@ -878,5 +878,5 @@ def _record_history(
         return
     try:
         services.history.record(entry())
-    except Exception:  # noqa: BLE001 - history is a convenience, the answer and audit are not
+    except Exception:
         logger.warning("could not record a run in history", exc_info=True)

@@ -59,7 +59,7 @@ def build_adapters(settings: Settings) -> dict[str, SourceAdapter]:
     for config in settings.sources:
         try:
             adapters[config.name] = registry.create(config)
-        except Exception as exc:  # noqa: BLE001 - re-raised with the source named
+        except Exception as exc:
             raise WiringError(f"source {config.name!r}: {type(exc).__name__}: {exc}") from exc
     return adapters
 

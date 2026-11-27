@@ -394,7 +394,7 @@ def test_hash_strategy_needs_a_filter_on_the_key_itself(sql: str, expected_parti
     assert plan.estimate is not None
     assert plan.estimate.partitions == expected_partitions
     assert plan.estimate.total == 4
-    if sql.startswith("cust_id =") or sql.startswith("cust_id IN"):
+    if sql.startswith(("cust_id =", "cust_id IN")):
         assert PartitionNote.ESTIMATE_UNPROVEN in plan.notes
     else:
         assert PartitionNote.NEEDS_HUMAN_APPROVAL in plan.notes

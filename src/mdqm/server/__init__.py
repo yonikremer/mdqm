@@ -55,7 +55,7 @@ __all__ = [
     "register_tools",
     "render_tool_schemas",
     "serve",
-    "tool_schemas",
     "tokens_file_path",
+    "tool_schemas",
     "write_tool_schemas",
 ]

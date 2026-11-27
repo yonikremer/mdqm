@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from tasks_def import LANES, T  # noqa: E402
+from tasks_def import LANES, T
 
 ROOT = Path(__file__).resolve().parent.parent
 

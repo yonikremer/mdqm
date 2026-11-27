@@ -366,7 +366,7 @@ def _class(evidence: TableEvidence, name: Mutability, *reasons: str) -> Classifi
 
 def format_duration(value: timedelta) -> str:
     """A duration as the semantic layer writes it: whole seconds, never a bare number."""
-    return f"{int(round(value.total_seconds()))}s"
+    return f"{round(value.total_seconds())}s"
 
 
 def percentiles(values: Sequence[float]) -> tuple[float, float, float, float]:
@@ -380,7 +380,7 @@ def percentiles(values: Sequence[float]) -> tuple[float, float, float, float]:
     ordered = sorted(values)
 
     def rank(fraction: float) -> float:
-        index = min(len(ordered) - 1, max(0, int(round(fraction * (len(ordered) - 1)))))
+        index = min(len(ordered) - 1, max(0, round(fraction * (len(ordered) - 1))))
         return ordered[index]
 
     return (ordered[0], rank(0.50), rank(0.99), ordered[-1])

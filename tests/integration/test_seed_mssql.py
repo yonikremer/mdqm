@@ -78,7 +78,7 @@ def _counts(target: MssqlTarget) -> dict[str, int]:
     with connect(target) as conn, conn.cursor() as cur:
         out: dict[str, int] = {}
         for table in ("customers", "usage_events"):
-            cur.execute(f"SELECT COUNT_BIG(*) FROM dbo.{table}")  # noqa: S608 - module constant
+            cur.execute(f"SELECT COUNT_BIG(*) FROM dbo.{table}")
             row = cur.fetchone()
             out[f"erp.{table}"] = 0 if row is None else int(row[0])
         return out
@@ -89,7 +89,7 @@ def seed(request: pytest.FixtureRequest) -> Iterator[Seed]:
     """Load the small world twice into SQL Server (the second run is the idempotency check)."""
     try:
         target = target_from_environ()
-    except Exception as exc:  # noqa: BLE001 - any settings failure means "not configured here"
+    except Exception as exc:
         _unavailable(request, f"SQL Server connection settings: {exc}")
         raise AssertionError("unreachable") from exc
 
@@ -97,7 +97,7 @@ def seed(request: pytest.FixtureRequest) -> Iterator[Seed]:
         # master, so the probe answers "is the server there" and not "does erp exist yet".
         with connect(target, database="master") as conn:
             conn.cursor().execute("SELECT 1")
-    except Exception as exc:  # noqa: BLE001 - driver missing, container down, wrong password
+    except Exception as exc:
         _unavailable(request, f"SQL Server at {target.server}: {type(exc).__name__}: {exc}")
         raise AssertionError("unreachable") from exc
 

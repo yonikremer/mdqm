@@ -108,7 +108,7 @@ def _unavailable(request: pytest.FixtureRequest, reason: str) -> None:
 def pg(request: pytest.FixtureRequest) -> Iterator[PgTarget]:
     try:
         target = target_from_environ()
-    except Exception as exc:  # noqa: BLE001 - any settings failure means "not configured here"
+    except Exception as exc:
         _unavailable(request, f"PostgreSQL connection settings: {exc}")
         raise AssertionError("unreachable") from exc
     try:

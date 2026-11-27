@@ -89,7 +89,7 @@ def seed(request: pytest.FixtureRequest) -> Iterator[Seed]:
     """Load the small world twice (the second run is the idempotency check)."""
     try:
         target = target_from_environ()
-    except Exception as exc:  # noqa: BLE001 - any settings failure means "not configured here"
+    except Exception as exc:
         _unavailable(request, f"PostgreSQL connection settings: {exc}")
         raise AssertionError("unreachable") from exc
 

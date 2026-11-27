@@ -38,7 +38,12 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         # A quoted literal only: `password = secrets.get(...)` is code reading a
         # secret, not a secret committed to the file, and flagging it is how a hook
         # gets switched off. Shell/template references ("$VAR") are excluded too.
-        re.compile(r"(?i)password\s*[:=]\s*['\"](?!\$)[^'\"$]{12,}['\"]"),
+        # No backslash escapes at all: a mangled `` in this line once turned into a
+        # literal backspace byte and the pattern silently matched nothing.
+        re.compile(
+            r"password[^A-Za-z0-9_]{0,3}[:=][ 	]*['\"](?!\$)[^'\"$]{12,}['\"]",
+            re.IGNORECASE,
+        ),
     ),
 )
 
@@ -48,8 +53,26 @@ ALLOWLIST_MARKER = "pragma: allowlist secret"
 #: Only text files are scanned; a wheel or a PNG cannot carry a match we care about.
 TEXT_SUFFIXES = frozenset(
     {
-        ".py", ".toml", ".yaml", ".yml", ".json", ".md", ".txt", ".cfg", ".ini", ".env", ".sql",
-        ".sh", ".ps1", ".bat", ".ndjson", ".example", ".ts", ".js", ".css", ".html",
+        ".py",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".json",
+        ".md",
+        ".txt",
+        ".cfg",
+        ".ini",
+        ".env",
+        ".sql",
+        ".sh",
+        ".ps1",
+        ".bat",
+        ".ndjson",
+        ".example",
+        ".ts",
+        ".js",
+        ".css",
+        ".html",
     }
 )
 

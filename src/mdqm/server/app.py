@@ -155,7 +155,7 @@ def create_server(
     # told two different things by the same server. Wiring it here makes that impossible.
     # `custom_route` has no return annotation in the SDK, so mypy cannot type the decorator.
     @server.custom_route("/healthz", methods=["GET"])  # type: ignore[untyped-decorator]
-    async def healthz(request: Request) -> Response:  # noqa: ARG001 - the SDK's handler signature
+    async def healthz(request: Request) -> Response:
         """Liveness probe: public on purpose, so a load balancer needs no token."""
         return JSONResponse({"status": "ok", "name": "mdqm", "version": version})
 

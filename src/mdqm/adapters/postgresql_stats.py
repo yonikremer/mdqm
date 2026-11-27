@@ -43,11 +43,11 @@ from mdqm.models import RawQuery, TableStats
 
 __all__ = [
     "MASKED_QUERY",
-    "MUTABILITY_SQL",
     "MUTABILITY_CAPABILITY",
+    "MUTABILITY_SQL",
     "QUERY_STORE_CAPABILITY",
-    "QueryStoreState",
     "QueryStoreReader",
+    "QueryStoreState",
     "mutability_from_rows",
     "query_store_state",
 ]

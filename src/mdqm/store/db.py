@@ -101,7 +101,7 @@ _SELECT_MIGRATION_VERSIONS: Final[str] = f"SELECT version FROM {MIGRATION_TABLE}
 # FTS5 probe statements. The only substitution anywhere in this module is the probe table's own
 # constant name (S608 is about caller input, and this module takes none into SQL).
 def _fts5_sql(template: str) -> str:
-    return template.format(table=FTS5_PROBE_TABLE)  # noqa: S608
+    return template.format(table=FTS5_PROBE_TABLE)
 
 
 _FTS5_CREATE: Final[str] = _fts5_sql("CREATE VIRTUAL TABLE temp.{table} USING fts5(body)")

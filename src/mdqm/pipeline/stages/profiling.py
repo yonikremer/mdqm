@@ -354,8 +354,8 @@ def _distinct_from_n_distinct(value: float, row_estimate: int) -> int:
     means half the rows are distinct, so the count is an estimate by construction.
     """
     if value >= 0:
-        return int(round(value))
-    return int(round(abs(value) * max(0, row_estimate)))
+        return round(value)
+    return round(abs(value) * max(0, row_estimate))
 
 
 def _bounds_from(
@@ -396,7 +396,7 @@ def parse_pg_stats(
         if isinstance(commons, Sequence) and isinstance(frequencies, Sequence):
             for value, frequency in zip(commons, frequencies, strict=False):
                 if isinstance(frequency, (int, float)):
-                    count = int(round(frequency * row_estimate))
+                    count = round(frequency * row_estimate)
                     counts.append(TopValue(value=_as_text(value) or "", count=count))
         histogram = row.get("histogram_bounds")
         minimum, maximum = _bounds_from(
@@ -1102,7 +1102,7 @@ def _scaled(observed: int, seen: int, estimate: int | None) -> int:
     """Distinct count for a partial sample: scale to the table, never past its row count."""
     if seen <= 0 or estimate is None or estimate <= seen:
         return observed
-    return min(estimate, max(observed, int(round(observed * estimate / seen))))
+    return min(estimate, max(observed, round(observed * estimate / seen)))
 
 
 def _rows_of(batch: pa.RecordBatch) -> list[Mapping[str, Any]]:

@@ -1114,7 +1114,7 @@ class OracleAdapter:
             try:
                 # `statement` is compiled-and-guarded SQL text, not a value; binds stay binds.
                 # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-                cur.execute(  # noqa: S608  # nosemgrep: python-sql-injection
+                cur.execute(  # nosemgrep: python-sql-injection
                     f"EXPLAIN PLAN SET STATEMENT_ID = '{statement_id}' FOR {statement}",
                     dict(params) if params else None,  # pyright: ignore[reportArgumentType]
                 )

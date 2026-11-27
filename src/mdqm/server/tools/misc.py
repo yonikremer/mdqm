@@ -211,7 +211,7 @@ def _refusal(*, surface: str, user_id: str, error: ErrorResponse) -> ErrorRespon
     """Audit a refusal, then hand the same structured error to the agent."""
     try:
         current_services().audit.record_refusal(user_id=user_id, tool=surface, error=error)
-    except Exception:  # noqa: BLE001 - an audit failure must not hide the refusal itself
+    except Exception:
         # The refusal is the caller's answer; the failed audit is ours to log, never to swap for a
         # different code. Losing one audit row is bad, answering with the wrong error is worse.
         logger.exception("could not audit a %s refusal", surface, extra={"error_code": error.code})

@@ -607,7 +607,7 @@ def _record_federated(
                 row_count=max(0, rows),
             )
         )
-    except Exception:  # noqa: BLE001 - the answer is the caller's; a lost audit row is ours
+    except Exception:
         logger.exception("could not audit a federated query", extra={"sources": len(plan.steps)})
 
 

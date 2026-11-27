@@ -342,7 +342,7 @@ def test_an_unknown_dsl_key_is_refused_by_name() -> None:
     adapter = _adapter()
     fragment = adapter.fragment("usage")
     with pytest.raises(ElasticError) as refused:
-        adapter._parse_request(  # noqa: SLF001 - the validator is the unit under test
+        adapter._parse_request(
             fragment.model_copy(update={"dsl": {"table": "usage", "size": 10}})
         )
     assert refused.value.code == "INVALID_SPEC"

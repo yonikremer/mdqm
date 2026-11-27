@@ -117,7 +117,7 @@ def cluster(request: pytest.FixtureRequest) -> Iterator[Cluster]:
     """Load the small world through the D07 loader and point an adapter at the alias."""
     try:
         target = target_from_environ()
-    except Exception as exc:  # noqa: BLE001 - any settings failure means "not configured here"
+    except Exception as exc:
         _unavailable(request, f"Elasticsearch connection settings: {exc}")
         raise AssertionError("unreachable") from exc
 
@@ -397,9 +397,9 @@ def test_a_fragment_carrying_aggs_is_refused_with_a_fix(cluster: Cluster) -> Non
 
 def test_the_client_transport_refuses_every_write(cluster: Cluster) -> None:
     """The adapter's own client refuses the method, and the cluster never sees the request."""
-    client = cluster.adapter._client  # noqa: SLF001 - the point is to test the real client
+    client = cluster.adapter._client
     assert client is not None
-    assert isinstance(client._transport, SearchOnlyTransport)  # noqa: SLF001
+    assert isinstance(client._transport, SearchOnlyTransport)
 
     attempts = [
         ("PUT", f"/{ALIAS}-a09-write-probe"),
@@ -433,7 +433,7 @@ def test_the_one_post_the_transport_allows_is_forced_by_the_server(cluster: Clus
     assert response.status_code == httpx.codes.METHOD_NOT_ALLOWED
     assert "POST" in response.text, response.text
 
-    client = cluster.adapter._client  # noqa: SLF001
+    client = cluster.adapter._client
     assert client is not None
     allowed = client.post(ESQL_PATH, content='{"query": "ROW mdqm_probe = 1"}')
     assert allowed.status_code == httpx.codes.OK

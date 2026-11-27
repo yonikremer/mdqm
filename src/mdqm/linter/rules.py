@@ -53,8 +53,8 @@ __all__ = [
     "Severity",
     "Target",
     "duration_text",
-    "spec_duration",
     "spec_dump",
+    "spec_duration",
 ]
 
 #: One adapter for the semantic layer's ``timedelta`` window -> the spec's calendar-aware duration.

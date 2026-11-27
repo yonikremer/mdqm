@@ -511,7 +511,7 @@ def _unit_name(node: exp.Expression | None) -> str | None:
 
 def _micros(value: Fraction) -> int:
     """Exact microseconds for a Fraction; anything finer rounds to the nearest microsecond."""
-    return int(round(value))
+    return round(value)
 
 
 def _shift(value: datetime, offset: _Offset) -> datetime:

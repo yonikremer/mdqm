@@ -43,7 +43,7 @@ def pg(require_services: bool) -> PgTarget:
         target = target_from_environ()
         with psycopg.connect(target.dsn("billing"), connect_timeout=5):
             return target
-    except Exception as exc:  # noqa: BLE001 - any failure means "no service here"
+    except Exception as exc:
         service_unavailable(require_services, f"PostgreSQL: {exc}")
         raise AssertionError("unreachable: service_unavailable either fails or skips") from exc
 

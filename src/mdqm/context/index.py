@@ -126,7 +126,7 @@ _STAR: Final[str] = "*"
 # `remove_diacritics 2` folds Latin accents; Hebrew niqqud are folded by normalize_label on both
 # sides, because unicode61 does not remove them (see the module docstring).
 _FTS_CREATE: Final[str] = (
-    f"CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE} "  # noqa: S608 - module constants
+    f"CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE} "
     'USING fts5(title, names, labels, body, tokenize="unicode61 remove_diacritics 2")'
 )
 #: A clock, injected so a logged search has a timestamp a test can predict without sleeping.

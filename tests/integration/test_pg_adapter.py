@@ -123,7 +123,7 @@ def target(request: pytest.FixtureRequest) -> PgTarget:
     """Where the compose PostgreSQL lives, from ``.env`` (never a hard-coded credential)."""
     try:
         found = target_from_environ()
-    except Exception as exc:  # noqa: BLE001 - any settings failure means "not configured here"
+    except Exception as exc:
         _unavailable(request, f"PostgreSQL connection settings: {exc}")
         raise AssertionError("unreachable") from exc
     try:

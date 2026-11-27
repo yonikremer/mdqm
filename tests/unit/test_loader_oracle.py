@@ -14,7 +14,7 @@ import pytest
 
 pytest.importorskip("oracledb", reason="the `oracle` extra is not installed")
 
-from mdqm.testing.loaders.oracle import (  # noqa: E402 - after importorskip
+from mdqm.testing.loaders.oracle import (
     GENERATED_PARTITION_PREFIX,
     INITIAL_PARTITION,
     LoaderError,
@@ -29,7 +29,7 @@ from mdqm.testing.loaders.oracle import (  # noqa: E402 - after importorskip
     target_from_environ,
     to_stored_timestamp,
 )
-from mdqm.testing.world import WorldConfig, build_world  # noqa: E402
+from mdqm.testing.world import WorldConfig, build_world
 
 
 @pytest.mark.parametrize(

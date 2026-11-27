@@ -74,7 +74,7 @@ def _config(name: str, database: str, target: PgTarget) -> SourceConfig:
 def target(request: pytest.FixtureRequest) -> PgTarget:
     try:
         found = target_from_environ()
-    except Exception as exc:  # noqa: BLE001 - any settings failure means "not configured here"
+    except Exception as exc:
         _unavailable(request, f"PostgreSQL connection settings: {exc}")
         raise AssertionError("unreachable") from exc
     try:

@@ -85,8 +85,8 @@ __all__ = [
     "collisions",
     "column_references",
     "confidence",
-    "matched_fields",
     "looks_personal",
+    "matched_fields",
     "render_prompt",
     "rotated",
     "validate_labels",
@@ -455,7 +455,7 @@ def validate_labels(
                         f"synonym {synonym!r} is not written in the language of {field}",
                     )
                 )
-    known = {name for name in known_columns}
+    known = set(known_columns)
     for field in ("name_he", "name_en", "description_he", "description_en"):
         for reference in column_references(str(getattr(labels, field))):
             if reference not in known:

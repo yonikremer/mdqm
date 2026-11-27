@@ -563,7 +563,7 @@ def _adapter(name: str, tables: Mapping[str, pa.Table]) -> FakeAdapter:
     """
     adapter = FakeAdapter(name=name, tables=dict(tables))
     # The fake exposes no session knob, and its connection is Optional until it is closed.
-    connection = adapter._con  # noqa: SLF001
+    connection = adapter._con
     assert connection is not None
     connection.execute("SET TimeZone='UTC'")
     return adapter

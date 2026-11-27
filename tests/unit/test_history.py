@@ -629,7 +629,7 @@ def test_every_field_survives_the_round_trip(history: HistoryStore) -> None:
 
 def test_a_corrupt_row_is_reported_not_defaulted(history: HistoryStore) -> None:
     recorded = history.record(weekly_entry())
-    history._store.connect().execute(  # noqa: SLF001 - the test tampers with the file on purpose
+    history._store.connect().execute(
         f"UPDATE {HISTORY_TABLE} SET fragments = 'not json' WHERE id = ?", (recorded.id,)
     )
 

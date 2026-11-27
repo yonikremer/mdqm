@@ -134,7 +134,7 @@ PROPOSED_BY: Final[str] = "pipeline/D10"
 
 def _statement(*parts: str) -> str:
     """Assemble one SQL statement from module-level constants only (never from caller input)."""
-    return "".join(parts)  # noqa: S608 - fragments are constants; values are bound parameters
+    return "".join(parts)
 
 
 _SELECT_META: Final[str] = _statement("SELECT value FROM mdqm_meta WHERE key = ?")

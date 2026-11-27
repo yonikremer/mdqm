@@ -67,7 +67,7 @@ def server(require_services: bool) -> str:
     try:
         response = httpx2.get(HEALTHZ, timeout=5.0)
         response.raise_for_status()
-    except Exception as exc:  # noqa: BLE001 - any failure means "not running here"
+    except Exception as exc:
         service_unavailable(require_services, f"mdqm server at {HEALTHZ}: {exc}")
         raise AssertionError("unreachable") from exc
     if not TOKENS.is_file():

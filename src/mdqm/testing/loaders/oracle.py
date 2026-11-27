@@ -338,9 +338,7 @@ def ensure_read_only_user(target: OracleTarget, admin: oracledb.Connection) -> N
     identifier = target.ro_user.upper()
     try:
         # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        cur.execute(
-            f"create user {identifier} identified by {_quote_password(target.ro_password)}"
-        )
+        cur.execute(f"create user {identifier} identified by {_quote_password(target.ro_password)}")
     except oracledb.DatabaseError as exc:
         # ORA-01920: the image already created it.
         if "ORA-01920" not in str(exc):
@@ -481,6 +479,7 @@ def _insert(
     statement = f"insert into {table} ({', '.join(columns)}) values ({placeholders})"  # noqa: S608
     written = 0
     for batch in _batched(rows, INSERT_BATCH):
+        # pi-lens-ignore: python-sql-injection
         cur.executemany(statement, batch)
         written += len(batch)
     return written

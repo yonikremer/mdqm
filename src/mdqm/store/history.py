@@ -108,7 +108,7 @@ _MAX_TOKEN: Final[int] = 200
 # FTS5 index: `remove_diacritics 2` so Hebrew niqqud and Latin accents fold (the text is also
 # normalised before it is stored, so the LIKE fallback matches the same way).
 _FTS_CREATE: Final[str] = (
-    f"CREATE VIRTUAL TABLE IF NOT EXISTS {HISTORY_FTS_TABLE} "  # noqa: S608 - module constant
+    f"CREATE VIRTUAL TABLE IF NOT EXISTS {HISTORY_FTS_TABLE} "
     'USING fts5(search_text, tokenize="unicode61 remove_diacritics 2")'
 )
 # Backfill, so a row written while FTS5 was unavailable is still findable once it is available.

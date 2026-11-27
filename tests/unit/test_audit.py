@@ -235,7 +235,7 @@ def test_rewriting_a_row_and_its_successor_still_breaks_later(
     tamper(store, f"UPDATE {AUDIT_LOG_TABLE} SET row_count = 999 WHERE id = 2")
     # Re-hash row 2 consistently with its forged payload, the way a careful attacker would.
     forged = rows[1].model_copy(update={"row_count": 999})
-    from mdqm.store.audit import _digest  # noqa: PLC0415 - exercising the chain's own digest
+    from mdqm.store.audit import _digest
 
     tamper(
         store,
@@ -268,7 +268,7 @@ def test_truncating_every_row_is_caught(store: Store, audit: AuditLog, clock: Fa
 def test_a_corrupted_stored_hash_is_caught(audit: AuditLog, clock: FakeClock) -> None:
     """A hash that does not match the row's fields is caught, even at full length."""
     fill(audit, 2, clock)
-    conn = audit._store.connect()  # noqa: SLF001 - the test drives the store directly
+    conn = audit._store.connect()
     conn.execute("DROP TRIGGER IF EXISTS audit_log_no_update")
     conn.execute(f"UPDATE {AUDIT_LOG_TABLE} SET hash = ? WHERE id = 1", ("f" * 64,))
     verdict = audit.verify_chain()
@@ -279,7 +279,7 @@ def test_a_corrupted_stored_hash_is_caught(audit: AuditLog, clock: FakeClock) ->
 def test_a_short_stored_hash_never_reaches_the_chain(audit: AuditLog, clock: FakeClock) -> None:
     """The table's own CHECK refuses a hash that is not 64 hex characters."""
     fill(audit, 2, clock)
-    conn = audit._store.connect()  # noqa: SLF001 - the test drives the store directly
+    conn = audit._store.connect()
     conn.execute("DROP TRIGGER IF EXISTS audit_log_no_update")
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint"):
         conn.execute(f"UPDATE {AUDIT_LOG_TABLE} SET hash = 'not-a-hash' WHERE id = 1")
@@ -294,7 +294,7 @@ def test_a_blocked_delete_is_audited_with_the_agent_visible_code(
     audit: AuditLog, clock: FakeClock
 ) -> None:
     """The guard refuses the DELETE, and that refusal is what lands in the log."""
-    from mdqm.sql.guard import guard  # noqa: PLC0415 - keep the pure guard out of module import
+    from mdqm.sql.guard import guard
 
     result = guard("DELETE FROM customers WHERE cust_id = 1", "postgres")
     assert not result.ok
@@ -327,7 +327,7 @@ def test_every_guard_refusal_reaches_the_audit(
     audit: AuditLog, clock: FakeClock, sql: str, expected: ErrorCode
 ) -> None:
     """Table-driven: each refusal kind is auditable, not just the DELETE the MVP names."""
-    from mdqm.sql.guard import guard  # noqa: PLC0415
+    from mdqm.sql.guard import guard
 
     result = guard(sql, "postgres")
     assert not result.ok, f"the guard allowed {sql!r}"
@@ -338,7 +338,7 @@ def test_every_guard_refusal_reaches_the_audit(
 
 
 def test_refusals_and_successes_are_countable_apart(audit: AuditLog, clock: FakeClock) -> None:
-    from mdqm.sql.guard import guard  # noqa: PLC0415
+    from mdqm.sql.guard import guard
 
     fill(audit, 3, clock)
     blocked = guard("DELETE FROM customers", "postgres").error
@@ -415,7 +415,7 @@ def test_the_entry_model_has_no_payload_field() -> None:
                 user_id="yoni",
                 tool="run_query",
                 outcome=AuditOutcome.OK,
-                # the unknown key is the thing under test  # noqa: E501
+                # the unknown key is the thing under test
                 **{forbidden: "anything"},  # pyright: ignore[reportCallIssue]
             )
 
@@ -556,7 +556,7 @@ def test_purge_records_a_checkpoint_row(store: Store, audit: AuditLog, clock: Fa
         store.connect()
         .execute(
             # S608: constant table name.
-            f"SELECT last_purged_id, last_purged_hash FROM {AUDIT_CHECKPOINT_TABLE} WHERE id = 1"  # noqa: S608
+            f"SELECT last_purged_id, last_purged_hash FROM {AUDIT_CHECKPOINT_TABLE} WHERE id = 1"
         )
         .fetchone()
     )
@@ -641,7 +641,7 @@ def test_the_head_mirror_is_written(store: Store, audit: AuditLog, clock: FakeCl
 
 def test_a_naive_clock_is_refused(store: Store) -> None:
     """A naive datetime would silently mean local time; the audit stores UTC only."""
-    log = AuditLog(store, clock=lambda: datetime(2024, 1, 1))  # noqa: DTZ001 - on purpose
+    log = AuditLog(store, clock=lambda: datetime(2024, 1, 1))
     with pytest.raises(AuditError):
         log.record(ok_entry())
 
@@ -659,9 +659,9 @@ def test_count_matches_the_rows(audit: AuditLog, clock: FakeClock) -> None:
 
 def test_cli_audit_verify_exits_zero_on_a_clean_log(tmp_path: Path) -> None:
     """Acceptance: `mdqm audit verify` exits 0 when the chain holds."""
-    from typer.testing import CliRunner  # noqa: PLC0415
+    from typer.testing import CliRunner
 
-    from mdqm.cli import app  # noqa: PLC0415
+    from mdqm.cli import app
 
     path = tmp_path / "meta.sqlite"
     opened = Store(path)
@@ -680,9 +680,9 @@ def test_cli_audit_verify_exits_zero_on_a_clean_log(tmp_path: Path) -> None:
 
 def test_cli_audit_verify_exits_one_on_a_tampered_log(tmp_path: Path) -> None:
     """Acceptance: and exits 1, naming the first bad id, when a row was edited."""
-    from typer.testing import CliRunner  # noqa: PLC0415
+    from typer.testing import CliRunner
 
-    from mdqm.cli import app  # noqa: PLC0415
+    from mdqm.cli import app
 
     path = tmp_path / "meta.sqlite"
     opened = Store(path)

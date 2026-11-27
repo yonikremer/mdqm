@@ -403,15 +403,20 @@ class AuditLog:
             params.append(limit)
         # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         # Literal fragments over a module-constant table name; both values are bound.
+        # pi-lens-ignore: python-sql-injection
         return tuple(_to_record(row) for row in self._store.connect().execute(sql, params))
 
     def count(self) -> int:
         """How many audit rows the log holds."""
         # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         # Module-constant SQL, no values.
-        row = self._store.connect().execute(
-            f"SELECT COUNT(*) FROM {AUDIT_LOG_TABLE}"  # noqa: S608 - constant table name
-        ).fetchone()
+        row = (
+            self._store.connect()
+            .execute(
+                f"SELECT COUNT(*) FROM {AUDIT_LOG_TABLE}"  # noqa: S608 - constant table name
+            )
+            .fetchone()
+        )
         return int(row[0])
 
     def _checkpoint(self, conn: sqlite3.Connection) -> tuple[int, str] | None:
@@ -558,6 +563,7 @@ class AuditLog:
                 )
             finally:
                 if trigger is not None:
+                    # pi-lens-ignore: python-sql-injection
                     conn.execute(trigger)
             conn.execute(
                 # S608: constant table name.

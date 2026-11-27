@@ -215,7 +215,7 @@ def _percentile(values: Sequence[float], q: float) -> float:
     if not values:
         return 0.0
     ordered = sorted(values)
-    rank = max(0, min(len(ordered) - 1, int(round(q / 100.0 * len(ordered) + 0.5)) - 1))
+    rank = max(0, min(len(ordered) - 1, round(q / 100.0 * len(ordered) + 0.5) - 1))
     return ordered[rank]
 
 

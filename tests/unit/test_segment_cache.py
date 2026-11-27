@@ -562,11 +562,11 @@ def test_duckdb_memory_limit_and_spill_dir_are_applied(tmp_path: Path) -> None:
     store = SegmentCache(path=tmp_path / "segments.duckdb", memory_limit="64MB", spill_dir=spill)
     try:
         assert spill.is_dir(), "the spill directory is created"
-        configured = store._con.execute(  # noqa: SLF001 - the setting is what is being tested
+        configured = store._con.execute(
             "SELECT current_setting('temp_directory')"
         ).fetchall()
         assert Path(configured[0][0]).resolve() == spill.resolve()
-        loaded = store._con.execute(  # noqa: SLF001
+        loaded = store._con.execute(
             "SELECT extension_name, install_mode FROM duckdb_extensions() WHERE loaded"
         ).fetchall()
         assert loaded, "DuckDB's own core functions are linked in"
@@ -632,7 +632,7 @@ def test_a_tail_policy_requires_a_unique_key_and_plain_column_names() -> None:
 def test_a_naive_exec_ts_is_refused(cache: SegmentCache) -> None:
     """Every instant in the system is timezone-aware; a naive one is a bug, not agent input."""
     with pytest.raises(ValueError, match="timezone-aware"):
-        cache.lookup(_spec(), _month(2026, 1), exec_ts=datetime(2026, 6, 20))  # noqa: DTZ001
+        cache.lookup(_spec(), _month(2026, 1), exec_ts=datetime(2026, 6, 20))
 
 
 def test_a_segment_part_reports_its_row_count(cache: SegmentCache) -> None:

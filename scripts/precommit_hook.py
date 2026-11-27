@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     interpreter = project_python()
     command = [str(interpreter), *arguments]
     # `-m` is passed through as-is; anything else is a script path, which we hand to the interpreter.
-    completed = subprocess.run(  # noqa: S603 - fixed argv built here, no shell
+    completed = subprocess.run(
         command,
         cwd=str(REPO_ROOT),
         check=False,

@@ -17,10 +17,10 @@ import pytest
 
 pytest.importorskip("oracledb", reason="the `oracle` extra is not installed")
 
-import oracledb  # noqa: E402 - after importorskip
+import oracledb
 
-from mdqm.adapters.base import OPTIONAL_METHODS  # noqa: E402 - after importorskip
-from mdqm.adapters.oracle import (  # noqa: E402 - after importorskip
+from mdqm.adapters.base import OPTIONAL_METHODS
+from mdqm.adapters.oracle import (
     OracleAdapter,
     OracleCancelled,
     OracleConfigError,
@@ -38,8 +38,8 @@ from mdqm.adapters.oracle import (  # noqa: E402 - after importorskip
     parse_high_value,
     plan_summary,
 )
-from mdqm.config.settings import SourceConfig  # noqa: E402 - after importorskip
-from mdqm.models import (  # noqa: E402 - after importorskip
+from mdqm.config.settings import SourceConfig
+from mdqm.models import (
     NormalizedType,
     PartitionGranularity,
     PartitionStrategy,

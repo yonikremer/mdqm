@@ -49,7 +49,7 @@ def test_duckdb_default_is_the_working_directory() -> None:
 def test_segment_cache_sets_the_spill_directory(cache_dir: Path) -> None:
     store = SegmentCache()
     try:
-        applied = store._con.execute(TEMP_DIRECTORY).fetchone()  # noqa: SLF001 - the point of the test
+        applied = store._con.execute(TEMP_DIRECTORY).fetchone()
     finally:
         store.close()
 
@@ -63,7 +63,7 @@ def test_federated_executor_sets_the_spill_directory(cache_dir: Path) -> None:
     governor = Governor({})  # no source is contacted: the constructor only opens DuckDB
     runner = FederatedExecutor(governor, layer=SemanticLayer())
     try:
-        applied = runner._con.execute(TEMP_DIRECTORY).fetchone()  # noqa: SLF001 - the point of the test
+        applied = runner._con.execute(TEMP_DIRECTORY).fetchone()
     finally:
         runner.close()
 
@@ -79,7 +79,7 @@ def test_an_explicit_spill_dir_still_wins(tmp_path: Path, monkeypatch: pytest.Mo
 
     store = SegmentCache(spill_dir=explicit)
     try:
-        applied = store._con.execute(TEMP_DIRECTORY).fetchone()  # noqa: SLF001 - the point of the test
+        applied = store._con.execute(TEMP_DIRECTORY).fetchone()
     finally:
         store.close()
 

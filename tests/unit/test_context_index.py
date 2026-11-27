@@ -254,7 +254,7 @@ def test_every_indexed_entity_kind_is_present(store: Store) -> None:
     build(store)
     kinds = {
         str(row[0])
-        for row in store.connect().execute(f"SELECT DISTINCT kind FROM {DOC_TABLE}")  # noqa: S608
+        for row in store.connect().execute(f"SELECT DISTINCT kind FROM {DOC_TABLE}")
     }
     assert kinds == {kind.value for kind in DocKind}
 

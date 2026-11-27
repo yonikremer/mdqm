@@ -78,7 +78,7 @@ def _counts(target: OracleTarget) -> dict[str, int]:
     with connect_owner(target) as conn, conn.cursor() as cur:
         out: dict[str, int] = {}
         for table in ALL_TABLES:
-            cur.execute(f"select count(*) from {table}")  # noqa: S608 - module constant
+            cur.execute(f"select count(*) from {table}")
             row = cur.fetchone()
             out[f"billing.{table}"] = 0 if row is None else int(row[0])
         return out
@@ -94,7 +94,7 @@ def seed(request: pytest.FixtureRequest) -> Iterator[Seed]:
     """Load the small world twice into Oracle (the second run is the idempotency check)."""
     try:
         target = target_from_environ()
-    except Exception as exc:  # noqa: BLE001 - any settings failure means "not configured here"
+    except Exception as exc:
         _unavailable(request, f"Oracle connection settings: {exc}")
         raise AssertionError("unreachable") from exc
 
@@ -179,7 +179,7 @@ def test_planted_orphans_and_hebrew_lookup_survive_the_load(seed: Seed) -> None:
     with connect_owner(seed.target) as conn, conn.cursor() as cur:
         placeholders = ", ".join(f":{i}" for i in range(1, len(orphan_clients) + 1))
         cur.execute(
-            "select count(*) from usage_events where client_no in "  # noqa: S608 - placeholders only
+            "select count(*) from usage_events where client_no in "
             f"({placeholders})",
             sorted(orphan_clients),
         )
@@ -403,7 +403,7 @@ def _plan_partition_range(target: OracleTarget, statement: str, binds: Sequence[
     """Rows of the partition operation in ``PLAN_TABLE`` for one ``EXPLAIN PLAN``."""
     with connect_owner(target) as conn, conn.cursor() as cur:
         cur.execute("delete from plan_table")
-        cur.execute(f"explain plan for {statement}", list(binds))  # noqa: S608 - test literal
+        cur.execute(f"explain plan for {statement}", list(binds))
         cur.execute(
             "select operation, partition_start, partition_stop from plan_table "
             "where operation like 'PARTITION RANGE%' order by id"

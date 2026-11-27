@@ -849,7 +849,7 @@ def test_a_non_table_kind_is_skipped_in_words(tmp_path: Path, store: Store, worl
         stage = ProfilingStage({"crm": adapter})
         skipped: list[str] = []
         assert (
-            stage._profile_table(  # noqa: SLF001
+            stage._profile_table(
                 "crm", adapter, table, exec_ts=NOON, skipped=skipped, fixes=[], notes=[]
             )
             is None

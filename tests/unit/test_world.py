@@ -406,7 +406,7 @@ def _run_cli(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
         cwd=tmp_path,
         env=env,
         check=False,
-    )  # noqa: S603 - fixed argv, no shell
+    )
 
 
 def test_cli_writes_world_and_ground_truth(tmp_path: Path) -> None:
@@ -476,7 +476,7 @@ def test_config_rejects_naive_anchor() -> None:
     from datetime import datetime
 
     with pytest.raises(ValueError):
-        WorldConfig(anchor=datetime(2026, 1, 1))  # noqa: DTZ001 - the point of the test
+        WorldConfig(anchor=datetime(2026, 1, 1))
 
 
 def test_tiny_world_still_has_one_of_each_plant() -> None:
