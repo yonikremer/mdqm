@@ -9,20 +9,24 @@ module cannot reuse the PostgreSQL shape: a **partition function** owns the boun
 
 What A08 verified on SQL Server 2022 (16.0.4135.4) and what that decides here:
 
-* **Estimated plans do not carry partition access.** ``SET SHOWPLAN_XML ON`` returns a
-  ``ShowPlanXML`` whose ``RelOp`` says ``Partitioned="1"`` for a partitioned table but has no
-  ``RunTimePartitionSummary``/``PartitionsAccessed`` element at all -- at ``TRIVIAL`` and at
-  ``FULL`` optimization level alike. So :meth:`explain` reports the cost, the estimates and the
-  indexes it really found, and leaves ``pruning_proof=UNKNOWN`` instead of inventing a verdict.
-  The element that *does* carry the pruned range (``<PartitionsAccessed PartitionCount="1">
-  <PartitionRange Start="1" End="1"/>``) only appears in an **actual** plan
-  (``SET STATISTICS XML ON``), which means executing the statement -- not an ``EXPLAIN``.
-  ``docs/mssql-driver.md`` quotes both shapes.
+* **What an estimated plan says about partitions, and what it does not.** ``SET SHOWPLAN_XML ON``
+  puts the pruned range in a **partition-id seek predicate** on the computed column ``PtnId1000``:
+  ``<StartRange ScanType="GE">...<ScalarOperator ScalarString="(9)">`` and
+  ``<EndRange ScanType="LE">..."(11)-(1)"`` -- partitions 9 through 10. So ``explain`` **can**
+  prove pruning and count the partitions, as long as the key filter is a compile-time literal
+  (which is what our compiler emits). What the XML never carries is
+  ``RunTimePartitionSummary/PartitionsAccessed``: that element appears only in an **actual** plan
+  (``SET STATISTICS XML ON``), i.e. only by executing the statement, and it reported
+  ``PartitionCount="1"`` for the literal case and ``PartitionCount="18"`` for the ``varchar``
+  one. A parameterised value shows ``RangePartitionNew(...)`` in the same place instead of a
+  number, so the range is in the plan but its ends are unknown before execution: ``UNPROVEN``.
+  ``docs/mssql-driver.md`` quotes all three shapes.
 * **A ``varchar`` literal on a ``datetime2`` partition key eliminates nothing.** With
-  ``start_time >= '2024-01-01'`` the actual plan accessed all 18 partitions (an implicit
-  ``CONVERT`` on the key). With ``CONVERT(datetime2(6), '2024-01-01', 126)`` it accessed 1 of 18.
-  That is a compiler/fragment concern, recorded here because it is the difference between a
-  pruned scan and a full one, and it is what the ``docs/mssql-driver.md`` finding documents.
+  ``start_time >= '2024-01-01'`` the actual plan accessed all 18 partitions and the estimated plan
+  had **no** ``PtnId1000`` predicate (an implicit ``CONVERT`` on the key); with
+  ``CONVERT(datetime2(6), '2024-01-01', 126)`` it accessed 1 of 18. That is a compiler/fragment
+  concern, recorded here because it is the difference between a pruned scan and a full one, and it
+  is what ``explain`` reports as ``UNPROVEN`` (a scan with no partition predicate).
 * **Cancellation works through the driver.** ``cursor.cancel()`` interrupts a running statement
   (``Operation canceled``, SQLSTATE ``HYT00``-free) and the session stays usable; so does
   ``Connection.timeout`` (``Query timeout expired``). The deadline is enforced by our own
@@ -64,10 +68,12 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from datetime import UTC, date, datetime, time as dt_time
+from datetime import UTC, date, datetime
+from datetime import time as dt_time
 from decimal import Decimal
 from typing import Any, ClassVar, Final
 from xml.etree import ElementTree
@@ -565,10 +571,11 @@ class SqlServerArrowStream:
         self.bytes_returned = 0
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
-        """Yield batches until the source, a cap or a deadline stops the scan."""
-        if self._closed or self._cancelled:
+        """Yield batches until the source, a cap, a cancellation or a deadline stops the scan."""
+        if self._closed:
             return
         while True:
+            self._check_cancelled()
             self._check_deadline()
             rows = self._fetch()
             if not rows:
@@ -596,6 +603,17 @@ class SqlServerArrowStream:
                 timed_out=self._watchdog.fired,
                 timeout_s=self._timeout_s,
             ) from exc
+
+    def _check_cancelled(self) -> None:
+        """Stop the stream once :meth:`cancel` was called.
+
+        The driver's ``SQLCancel`` only lands while a fetch is in flight, so a cancellation that
+        arrives between two fast batches would otherwise be lost; this flag is what makes it
+        authoritative. The server-side break has still been sent, so the abandoned statement stops
+        producing rows instead of running to completion for nobody.
+        """
+        if self._cancelled:
+            raise SqlServerCancelled("the SQL Server statement was cancelled by the caller")
 
     def _check_deadline(self) -> None:
         """Raise once the deadline passed, having stopped the server-side statement too."""
@@ -722,7 +740,9 @@ class SqlServerAdapter:
         self._source = config.name
         self._conninfo = _conninfo(config, secrets)
         self._pool_size = _positive_int(options.get("pool_size"), DEFAULT_POOL_SIZE, "pool_size")
-        self._batch_size = _positive_int(options.get("batch_size"), DEFAULT_BATCH_SIZE, "batch_size")
+        self._batch_size = _positive_int(
+            options.get("batch_size"), DEFAULT_BATCH_SIZE, "batch_size"
+        )
         self._connect_timeout_s = _positive_int(
             options.get("connect_timeout"), 10, "connect_timeout"
         )
@@ -834,11 +854,11 @@ class SqlServerAdapter:
         except Exception as exc:
             return False, f"SET SHOWPLAN_XML ON failed: {exc}"
         if "ShowPlanXML" not in xml:
-            return False, "SET SHOWPLAN_XML ON returned something that is not a ShowPlanXML document"
+            return False, "SET SHOWPLAN_XML ON returned no ShowPlanXML document"
         return True, (
-            "SET SHOWPLAN_XML ON: cost, estimates and the indexes used are in the XML, but "
-            "PartitionsAccessed is not (it only appears in an actual plan), so explain reports "
-            "pruning_proof=unknown"
+            "SET SHOWPLAN_XML ON: cost, estimates, indexes and the partition-id seek predicate "
+            "(PtnId1000) are in the XML; RunTimePartitionSummary/PartitionsAccessed is not, so a "
+            "parameterised range reads as unproven"
         )
 
     def _probe_query_store(self) -> tuple[bool, str]:
@@ -854,7 +874,9 @@ class SqlServerAdapter:
                 cursor.close()
         state = "" if row is None else str(row[0])
         if state not in {"READ_WRITE", "READ_ONLY"}:
-            return False, f"Query Store is {state or 'absent'} (ALTER DATABASE ... SET QUERY_STORE = ON)"
+            return False, (
+                f"Query Store is {state or 'absent'} (ALTER DATABASE ... SET QUERY_STORE = ON)"
+            )
         try:
             with self._connection() as connection:
                 cursor = connection.cursor()
@@ -917,7 +939,9 @@ class SqlServerAdapter:
             columns.setdefault(key, []).append(
                 Column(
                     name=str(row[2]),
-                    native_type=_native_type(type_name, _as_int(row[4]), _as_int(row[5]), _as_int(row[6])),
+                    native_type=_native_type(
+                        type_name, _as_int(row[4]), _as_int(row[5]), _as_int(row[6])
+                    ),
                     normalized_type=normalized_type(type_name),
                     nullable=bool(row[7]),
                     ordinal=_as_int(row[8]),
@@ -1048,11 +1072,13 @@ class SqlServerAdapter:
 
         Nothing is executed: ``SHOWPLAN`` only asks the optimizer, so asking the cost of a scan
         never causes it. What the XML carries on SQL Server 2022 (measured, see
-        ``docs/mssql-driver.md``) is the cost, the estimate and the indexes; what it does **not**
-        carry is which partitions the scan will touch -- ``RelOp/@Partitioned="1"`` says the table
-        *is* partitioned, and nothing in an estimated plan says how many were pruned. So
-        ``pruning_proof`` stays ``UNKNOWN`` and ``partitions_scanned`` stays ``None``; the known
-        number, ``partitions_total``, comes from the catalog instead of a guess.
+        ``docs/mssql-driver.md``): the cost, the estimate, the indexes, and -- for a partitioned
+        table -- a partition-id seek predicate that names the pruned partition range whenever the
+        key filter is a literal (``PROVEN``, with a counted ``partitions_scanned``). A
+        parameterised filter shows ``RangePartitionNew(...)`` there instead, and a scan with no
+        partition predicate reaches every partition: both are ``UNPROVEN``, because neither proves
+        a narrower scan. ``UNKNOWN`` is kept for a plan with no partitioned table at all, where
+        there is nothing to prove.
         """
         text = fragment.sql
         if text is None:
@@ -1423,33 +1449,101 @@ def granularity(boundaries: Sequence[datetime]) -> PartitionGranularity | None:
 def plan_summary(xml: str, *, partitions_total: int | None = None) -> PlanSummary:
     """Turn a ``ShowPlanXML`` document into a :class:`~mdqm.models.PlanSummary`.
 
-    The estimate and the cost come from ``StmtSimple`` and the indexes from ``RelOp``. The pruning
-    verdict does not: an estimated plan carries no ``RunTimePartitionSummary``, so the only honest
-    answer is ``UNKNOWN`` (see the module docstring and ``docs/mssql-driver.md``).
+    The pruning verdict is read from the partition-id seek predicate, which is where an *estimated*
+    SQL Server plan puts it. Measured on 2022 (16.0.4135.4) with a literal key filter::
+
+        <IndexScan ...><Object ... Table="[usage_events]" Index="[usage_events_pk]" .../>
+          <SeekPredicates><SeekPredicateNew><SeekKeys>
+            <StartRange ScanType="GE"><RangeColumns>
+              <ColumnReference Column="PtnId1000"/>...</RangeColumns>
+              <RangeExpressions><ScalarOperator ScalarString="(9)">           <!-- partition 9 -->
+            <EndRange ScanType="LE">...<ScalarOperator ScalarString="(11)-(1)"> <!-- last = 10 -->
+
+    So the plan states the partition ids when the filter value is a compile-time literal -- which
+    is what the compiler emits (it inlines literals). A parameterised value shows
+    ``RangePartitionNew(...)`` there instead, which is a runtime expression: the range is in the
+    plan but its ends are not known before execution, so the verdict is ``UNPROVEN`` (Oracle's
+    ``PSTART = KEY``). A partitioned scan with no partition-id predicate at all reaches every
+    partition, which proves nothing either. ``UNKNOWN`` is reserved for a plan with no partitioned
+    table, where there is nothing to prove. The element that would report the count directly
+    (``RunTimePartitionSummary/PartitionsAccessed``) only exists in an *actual* plan.
     """
-    root = ElementTree.fromstring(xml)  # noqa: S314 - the document comes from the server, not a user
+    root = ElementTree.fromstring(xml)  # noqa: S314 - the document comes from the server
     statement = root.find(".//{*}StmtSimple")
     indexes: list[str] = []
-    for relop in root.iter("{*}RelOp"):
+    for relop in root.findall(".//{*}RelOp"):
         if "Index" not in str(relop.get("PhysicalOp", "")):
             continue
-        for obj in relop.iter("{*}Object"):
+        for obj in relop.findall(".//{*}Object"):
             name = obj.get("Index")
             if name and name not in indexes:
                 indexes.append(name)
+    proof, scanned = _pruning_verdict(root)
     raw = xml if len(xml) <= _RAW_PLAN_LIMIT else xml[:_RAW_PLAN_LIMIT] + "<!-- truncated -->"
     return PlanSummary(
-        partitions_scanned=None,
-        partitions_total=partitions_total,
+        partitions_scanned=scanned,
+        partitions_total=partitions_total if proof is not PruningProof.UNKNOWN else None,
         uses_index=bool(indexes) if indexes else None,
         indexes_used=tuple(indexes),
         est_rows=_as_float(None if statement is None else statement.get("StatementEstRows")),
-        est_cost=_as_float(
-            None if statement is None else statement.get("StatementSubTreeCost")
-        ),
-        pruning_proof=PruningProof.UNKNOWN,
+        est_cost=_as_float(None if statement is None else statement.get("StatementSubTreeCost")),
+        pruning_proof=proof,
         raw=raw or None,
     )
+
+
+def _pruning_verdict(root: ElementTree.Element) -> tuple[PruningProof, int | None]:
+    """``(proof, partitions_scanned)`` from the partition-id seek predicates in the plan."""
+    partitioned = [
+        relop for relop in root.findall(".//{*}RelOp") if relop.get("Partitioned") == "1"
+    ]
+    if not partitioned:
+        return PruningProof.UNKNOWN, None
+    if len(partitioned) == 1:
+        bounds = _partition_id_range(partitioned[0])
+        if bounds is not None:
+            first, last = bounds
+            if first is not None and last is not None and last >= first:
+                return PruningProof.PROVEN, last - first + 1
+    # Either the range is a runtime expression (a parameterised value) or there is no partition-id
+    # predicate at all, which is a scan of every partition: neither proves anything was pruned.
+    return PruningProof.UNPROVEN, None
+
+
+def _partition_id_range(relop: ElementTree.Element) -> tuple[int | None, int | None] | None:
+    """The literal partition-id range a ``PtnId`` seek predicate names, or ``None`` if absent."""
+    for keys in relop.findall(".//{*}SeekKeys"):
+        columns = [ref.get("Column", "") for ref in keys.findall(".//{*}ColumnReference")]
+        if not any(column.startswith("PtnId") for column in columns):
+            continue
+        bounds: list[int | None] = []
+        for side in ("StartRange", "EndRange"):
+            expression = keys.find(f"{{*}}{side}/{{*}}RangeExpressions/{{*}}ScalarOperator")
+            bounds.append(
+                None if expression is None else _partition_id(expression.get("ScalarString"))
+            )
+        return bounds[0], bounds[1]
+    return None
+
+
+def _partition_id(text: str | None) -> int | None:
+    """``"(9)"`` -> 9 and ``"(11)-(1)"`` -> 10 (``end - 1`` as SQL Server writes it); else ``None``.
+
+    Only those two literal shapes are accepted: anything else (``RangePartitionNew(...)``) is a
+    runtime expression, and guessing a number from it is exactly the invention this method must not
+    do.
+    """
+    if not text:
+        return None
+    match = _PARTITION_ID_RE.match(text.strip())
+    if match is None:
+        return None
+    first, subtract = int(match.group(1)), match.group(2)
+    return first if subtract is None else first - int(subtract)
+
+
+#: ``(9)`` or ``(11)-(1)``: the two literal shapes a partition-id range expression takes.
+_PARTITION_ID_RE: Final = re.compile(r"^\((-?\d+)\)(?:-\((\d+)\))?$")
 
 
 #: How much plan XML is kept in ``PlanSummary.raw``. A plan for a wide query can run to megabytes,
@@ -1482,7 +1576,7 @@ def _raw_queries(rows: Sequence[Sequence[Any]]) -> list[RawQuery]:
 
 
 def _stream_error(
-    exc: BaseException, *, cancelled: bool, timed_out: bool, timeout_s: float
+    exc: Exception, *, cancelled: bool, timed_out: bool, timeout_s: float
 ) -> Exception:
     """Translate a driver error: a cancellation or a missed deadline, otherwise the raw error.
 
@@ -1517,15 +1611,22 @@ def _parse_boundary(text: str) -> datetime | None:
         return None
     if candidate.endswith("Z"):
         candidate = candidate[:-1]
-    for pattern in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(candidate, pattern).replace(tzinfo=UTC)
-        except ValueError:
-            continue
-    return None
+    if _BOUNDARY_RE.match(candidate) is None:
+        return None
+    try:
+        return datetime.fromisoformat(candidate).replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
-def _native_type(type_name: str, length: int | None, precision: int | None, scale: int | None) -> str:
+#: The shapes ``CONVERT(varchar, value, 126)`` produces: a date, optionally with a time and up to
+#: nine fractional digits (``datetime2(7)`` renders seven). Anything else is refused, not guessed.
+_BOUNDARY_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,9})?)?$")
+
+
+def _native_type(
+    type_name: str, length: int | None, precision: int | None, scale: int | None
+) -> str:
     """The type as SQL Server spells it, with the size/precision the catalog keeps separately."""
     lowered = type_name.lower()
     if lowered in {"varchar", "char", "varbinary", "binary"} and length is not None:
@@ -1555,7 +1656,9 @@ def _arrays_from_rows(schema: pa.Schema, rows: Sequence[Sequence[Any]]) -> list[
         column = [row[position] for row in rows]
         if pa.types.is_string(field.type):
             arrays.append(
-                pa.array([None if value is None else str(value) for value in column], type=field.type)
+                pa.array(
+                    [None if value is None else str(value) for value in column], type=field.type
+                )
             )
         elif pa.types.is_binary(field.type):
             arrays.append(
