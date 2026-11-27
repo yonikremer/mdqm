@@ -25,3 +25,4 @@ docker/server/*
 /bench/
 /.q.json
 /.h.txt
+/.c.json
