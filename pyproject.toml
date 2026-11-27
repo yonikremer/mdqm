@@ -44,6 +44,7 @@ all = ["mdqm[pg,oracle,mssql,dev]"]
 postgresql = "mdqm.adapters.postgresql:PostgresAdapter"
 openapi = "mdqm.adapters.openapi:OpenApiAdapter"
 elastic = "mdqm.adapters.elastic:ElasticAdapter"
+oracle = "mdqm.adapters.oracle:OracleAdapter"
 
 [project.scripts]
 mdqm = "mdqm.cli:app"
@@ -97,6 +98,14 @@ ignore_missing_imports = true
 # not demand the driver on a machine that never loads the SQL Server dataset.
 [[tool.mypy.overrides]]
 module = ["mssql_python", "mssql_python.*"]
+ignore_missing_imports = true
+
+# oracledb is the optional `oracle` extra (AGENTS.md section 3). Same reason: the adapter imports it
+# at module level, which is right at runtime and must not stop mypy from checking the rest of `src`
+# on a machine that never installed the extra.
+[[tool.mypy.overrides]]
+module = ["oracledb", "oracledb.*"]
+ignore_missing_imports = true
 ignore_missing_imports = true
 
 # Typing scope for editors and the LSP, matching what CI enforces ([tool.mypy]: strict on "src").
