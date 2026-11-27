@@ -42,7 +42,7 @@ from psycopg import sql
 
 from mdqm.models import Fragment, Limits
 from mdqm.testing.loaders.postgres import PgTarget, target_from_environ
-from mdqm.testing.world import ANCHOR
+from mdqm.testing.world import ANCHOR, WorldConfig
 
 #: The world window's last 30 days: one event-time partition, every ingestion-time partition.
 WINDOW_START: datetime = ANCHOR - timedelta(days=30)
@@ -89,23 +89,36 @@ def pg(request: pytest.FixtureRequest) -> Iterator[PgTarget]:
     yield target
 
 
+@pytest.fixture(scope="module")
+def seeded(pg: PgTarget) -> None:
+    """Load the **default** world before the claims are checked.
+
+    E01's answers describe the default world (2000 customers); the D03 tests use the small one for
+    speed. A test that asserts against E01 while the database holds the small world compares two
+    different datasets and fails for a reason that has nothing to do with the code -- which is
+    exactly what happened before this fixture existed.
+    """
+    from mdqm.testing.loaders.postgres import load
+
+    load(pg, WorldConfig())
+
+
 # --- building the adapter, however task A02 spells it --------------------------------------
 
 
-class _DsnSecrets:
-    """A secret provider that resolves a source's secret name to its read-only DSN.
+class _PasswordSecrets:
+    """A secret provider that resolves a secret name to the read-only password.
 
-    The adapter contract (``AGENTS.md`` section 3) gives an adapter a ``SourceConfig`` and a secret
-    provider, so a database adapter learns where to connect from its secret. That is the wiring
-    assumed here, and it is the only assumption: everything else is the
-    :class:`~mdqm.adapters.base.SourceAdapter` protocol.
+    A02's contract is explicit: ``options`` carries host/port/dbname/user and the secret is the
+    **password** only. An earlier version of this test handed the whole DSN over as the secret,
+    which the adapter then sent as a password -- the pool could never connect.
     """
 
     def __init__(self, target: PgTarget) -> None:
         self._target = target
 
     def get(self, name: str) -> str:
-        return self._target.dsn(name.removesuffix("_ro"), read_only=True)
+        return self._target.ro_password
 
 
 def postgres_adapter(target: PgTarget, source: str) -> Any:
@@ -123,9 +136,23 @@ def postgres_adapter(target: PgTarget, source: str) -> Any:
     from mdqm.adapters.registry import AdapterRegistry
     from mdqm.config.settings import SourceConfig
 
-    registry = AdapterRegistry(secrets=_DsnSecrets(target), entry_points=lambda: ())
+    registry = AdapterRegistry(secrets=_PasswordSecrets(target), entry_points=lambda: ())
     registry.register("postgresql", factory)
-    return registry.create(SourceConfig(name=source, adapter="postgresql", secret=f"{source}_ro"))
+    return registry.create(
+        SourceConfig(
+            name=source,
+            adapter="postgresql",
+            secret=source + "_ro",
+            # A02 refuses a source with no database user: the server needs a per-person
+            # identity, and the secret provider resolves it. Tests use the read-only role.
+            options={
+                "host": target.host,
+                "port": target.port,
+                "dbname": source,
+                "user": target.ro_user,
+            },
+        )
+    )
 
 
 def _drained(stream: Any) -> list[dict[str, Any]]:
@@ -145,7 +172,9 @@ def _limits(timeout_s: float = 30.0) -> Limits:
 # --- claim (a): the conversions, on data PostgreSQL really holds ---------------------------
 
 
-def test_real_billing_average_matches_two_independent_derivations(pg: PgTarget) -> None:
+def test_real_billing_average_matches_two_independent_derivations(
+    pg: PgTarget, seeded: None
+) -> None:
     """Claim (a) against a real server: the raw limit rounded half-up to 5000, then averaged.
 
     FAILS IF: the SQL the compiler emitted produces a number other than (1) the half-up arithmetic
@@ -195,7 +224,7 @@ def test_real_billing_average_matches_two_independent_derivations(pg: PgTarget) 
     # (1) the same arithmetic, written by hand, executed by the server.
     with psycopg.connect(pg.dsn("billing")) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT state, AVG(((credit_limit + 2500) // 5000) * 5000) FROM public.accounts "
+            "SELECT state, AVG(floor((credit_limit + 2500) / 5000) * 5000) FROM public.accounts "
             "WHERE credit_limit IS NOT NULL GROUP BY 1"
         )
         oracle = {
@@ -218,7 +247,9 @@ def test_real_billing_average_matches_two_independent_derivations(pg: PgTarget) 
         assert produced[status] == pytest.approx(wanted, rel=tolerance), status
 
 
-def test_catalog_finds_usage_events_and_its_monthly_partitions(pg: PgTarget) -> None:
+def test_catalog_finds_usage_events_and_its_monthly_partitions(
+    pg: PgTarget, seeded: None
+) -> None:
     """Claim: capability detection, not assumptions -- the partition set is discovered.
 
     FAILS IF: ``usage_events`` is reported as a plain table; or its discovered partition bounds do
@@ -252,8 +283,10 @@ def test_catalog_finds_usage_events_and_its_monthly_partitions(pg: PgTarget) -> 
     assert partitioning.granularity is PartitionGranularity.MONTH
     expected = monthly_partitions(ANCHOR, forward=0)
     assert len(partitioning.bounds) == len(expected) >= 12
+    # `suffix` already carries the `p` (e.g. "p2024_11"), so prefixing it again would name a
+    # relation that does not exist and the test would fail against correct code.
     assert [bound.name for bound in partitioning.bounds] == [
-        f"usage_events_p{partition.suffix}" for partition in expected
+        f"usage_events_{partition.suffix}" for partition in expected
     ]
 
 
@@ -381,13 +414,15 @@ def test_timeout_cancels_a_real_pg_sleep(pg: PgTarget) -> None:
     fragment = Fragment(
         source="billing",
         dialect="postgres",
-        sql="SELECT pg_sleep(5) AS slept",
+        sql="SELECT count(*) AS n FROM usage_events a CROSS JOIN usage_events b",
         exec_ts=datetime(2026, 11, 25, 15, 0, tzinfo=ANCHOR.tzinfo),
     )
     started = time.monotonic()
     try:
         with pytest.raises(GovernorRefusal) as excinfo:
-            governor.execute(source="billing", user="e2e", fragment=fragment, limits=_limits(0.5))
+            governor.execute(
+                source="billing", user="e2e", fragment=fragment, limits=_limits(0.5)
+            )
         elapsed = time.monotonic() - started
     finally:
         adapter.close()
@@ -398,7 +433,7 @@ def test_timeout_cancels_a_real_pg_sleep(pg: PgTarget) -> None:
     with psycopg.connect(pg.dsn("billing")) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' "
-            "AND query LIKE '%pg_sleep%' AND pid <> pg_backend_pid()"
+            "AND query LIKE '%usage_events b%' AND pid <> pg_backend_pid()"
         )
         row = cur.fetchone()
     assert row is not None

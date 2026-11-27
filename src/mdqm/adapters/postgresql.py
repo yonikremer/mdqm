@@ -113,7 +113,11 @@ DEFAULT_STATEMENT_TIMEOUT_MS: Final = 60_000
 #: Fractional digits declared for a ``numeric`` column in Arrow. Arrow decimals are fixed-scale and
 #: PostgreSQL's ``numeric`` is not, so a value with more digits than this raises ``ArrowInvalid``
 #: rather than being rounded: losing a digit of money silently is worse than a loud failure.
-NUMERIC_SCALE: Final = 9
+#:
+#: 18 is not arbitrary. ``AVG(numeric(14,2))`` is the canonical query of this project, and
+#: PostgreSQL returns it with scale 16+ (e.g. ``29731.68654173702905``); at scale 9 every average
+#: failed to convert. A value that still exceeds 18 digits keeps failing loudly, which is the point.
+NUMERIC_SCALE: Final = 18
 
 _CAPABILITY_PARTITIONS: Final = "partition_metadata"
 
@@ -855,7 +859,9 @@ class PostgresAdapter:
         if text is None:
             raise NotSupported(OPTIONAL_METHODS["explain"], "this fragment carries no SQL")
         with self._connection() as connection, connection.cursor() as cur:
-            cur.execute(sql.SQL("EXPLAIN (FORMAT JSON) " + text))
+            # `text` is a fragment the compiler built through the AST and the guard inspected;
+            # it is SQL, not a value, so it cannot be a bind parameter. Marked, not hidden.
+            cur.execute(sql.SQL("EXPLAIN (FORMAT JSON) " + text))  # nosemgrep: python-sql-injection
             row = cur.fetchone()
             document = row[0] if row else None
             plan = document[0]["Plan"] if document else {}
