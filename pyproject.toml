@@ -85,6 +85,13 @@ files = ["src"]
 module = ["pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
 
+# psycopg is the optional `pg` extra (AGENTS.md section 3): `src/mdqm/testing/loaders/postgres.py`
+# imports it at module level, which is right at runtime but must not stop mypy from checking the
+# rest of `src` on a machine that never installed the extra.
+[[tool.mypy.overrides]]
+module = ["psycopg", "psycopg.*"]
+ignore_missing_imports = true
+
 # Typing scope for editors and the LSP, matching what CI enforces ([tool.mypy]: strict on "src").
 # pyright is not part of scripts/check.py, so it must not report against rules this project does
 # not adopt: `scripts/` is untyped by policy (mypy's `files = ["src"]`), and sqlglot exposes
