@@ -3,11 +3,11 @@
 ``query`` does most of the work; the other four are lookups around it. Descriptions are written for
 a weak model: what it does, when to call it, and one example.
 
-This module is the package's front door: it holds the one tool whose body is still a stub
-(``query`` in M03) plus the shared answer model, and re-exports the other four from
-:mod:`mdqm.server.tools.misc` (M05) and :mod:`mdqm.server.tools.find_data` (M02). Each tool gets
-its own module as its body lands; the name, description and wire schema stay put, because that is
-the agent's contract.
+This module is the package's front door. Each tool's body lives in its own module -- ``query`` in
+:mod:`mdqm.server.tools.query` (M03), ``find_data`` in :mod:`mdqm.server.tools.find_data` (M02), the
+three lookups in :mod:`mdqm.server.tools.misc` (M05) -- because the name, description and wire
+schema are the agent's contract while the body keeps growing. A server built without a pipeline
+still answers, in the ``not_implemented`` shape, instead of failing.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from mdqm.models.base import MDQMModel
-from mdqm.server.context import current_context
 from mdqm.server.tools.find_data import (
     EMPTY_HINT,
     FindDataAnswer,
@@ -47,7 +46,18 @@ from mdqm.server.tools.misc import (
     reset_services,
     use_services,
 )
-from mdqm.spec.models import QuerySpec
+from mdqm.server.tools.query import (
+    PlanInfo,
+    QueryAnswer,
+    QueryServices,
+    QueryServicesUnavailable,
+    SegmentFreshness,
+    configure_query_services,
+    current_query_services,
+    query,
+    reset_query_services,
+    use_query_services,
+)
 
 __all__ = [
     "EMPTY_HINT",
@@ -60,12 +70,19 @@ __all__ = [
     "HistoryAnswer",
     "HistoryItem",
     "NotImplementedResult",
+    "PlanInfo",
+    "QueryAnswer",
+    "QueryServices",
+    "QueryServicesUnavailable",
+    "SegmentFreshness",
     "ServicesUnavailable",
     "SpecSkeleton",
     "ToolServices",
     "configure_find_data",
+    "configure_query_services",
     "configure_services",
     "current_find_data",
+    "current_query_services",
     "current_services",
     "feedback",
     "find_data",
@@ -74,8 +91,10 @@ __all__ = [
     "query",
     "register_tools",
     "reset_find_data",
+    "reset_query_services",
     "reset_services",
     "use_find_data",
+    "use_query_services",
     "use_services",
 ]
 
@@ -95,32 +114,6 @@ class NotImplementedResult(MDQMModel):
     user_id: str = Field(description="The authenticated caller the server saw.")
     problem: str = Field(description="What is missing.")
     fix: str = Field(description="What to do instead, right now.")
-
-
-def _not_implemented(surface: str, problem: str, fix: str) -> NotImplementedResult:
-    """Build the stub answer for the authenticated caller of this message."""
-    return NotImplementedResult(
-        surface=surface, user_id=current_context().user_id, problem=problem, fix=fix
-    )
-
-
-def query(
-    spec: QuerySpec,
-) -> NotImplementedResult:
-    """Run one query spec and get a summary, a small sample and a handle. This is the main tool.
-
-    Send a spec, never SQL. The server lints it, enforces time bounds and partition pruning, picks
-    the source and the unit conversions, and answers with a summary plus a `handle` you page with
-    `get_more`. Errors carry `code`, `problem` and an exact `fix`.
-    Example: query({"spec": {"from": "customers", "select": [{"measure": "credit_limit_r5000",
-    "agg": "avg"}], "group_by": ["customer_status"], "limit": 50}})
-    """
-    return _not_implemented(
-        "query",
-        f"no executor is wired yet, so the spec from {spec.from_table!r} cannot run",
-        "this build serves the protocol only; run `mdqm probe` then `mdqm bootstrap` once the "
-        "pipeline tasks have landed",
-    )
 
 
 #: The tool functions in :data:`TOOL_NAMES` order. Names and docstrings come from here.

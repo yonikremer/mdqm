@@ -2085,7 +2085,7 @@
       }
     },
     {
-      "description": "Run one query spec and get a summary, a small sample and a handle. This is the main tool.\n\n    Send a spec, never SQL. The server lints it, enforces time bounds and partition pruning, picks\n    the source and the unit conversions, and answers with a summary plus a `handle` you page with\n    `get_more`. Errors carry `code`, `problem` and an exact `fix`.\n    Example: query({\"spec\": {\"from\": \"customers\", \"select\": [{\"measure\": \"credit_limit_r5000\",\n    \"agg\": \"avg\"}], \"group_by\": [\"customer_status\"], \"limit\": 50}})\n    ",
+      "description": "Run one query spec and get a summary, a small sample and a handle. This is the main tool.\n\n    Send `spec`, never SQL. The server lints it, prunes the partitions and the time window, picks\n    the source, and answers with `summary`, `sample` and `result_handle` (page it with `get_more`).\n    A `dry_run` in the spec stops after the plan; `fresh` skips the cache. Errors carry `code`,\n    `problem` and an exact `fix`.\n    Example: query({\"spec\": {\"from\": \"billing.accounts\", \"select\": [\"customer_status\"],\n    \"limit\": 5}})\n    ",
       "inputSchema": {
         "$defs": {
           "Agg": {
@@ -2405,55 +2405,622 @@
           }
         },
         "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The source `sql` runs on. Required with `sql`, ignored with `spec`.",
+            "title": "Source"
+          },
           "spec": {
-            "$ref": "#/$defs/QuerySpec"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QuerySpec"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The query spec. Send this, not SQL: it is linted and compiled for you."
+          },
+          "sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Emergency only: one read-only statement. Needs `source`. Writes are refused and audited.",
+            "title": "Sql"
           }
         },
-        "required": [
-          "spec"
-        ],
         "title": "queryArguments",
         "type": "object"
       },
       "name": "query",
       "outputSchema": {
-        "additionalProperties": false,
-        "description": "What a stub tool answers: an honest, typed \"not built yet\", plus the authenticated caller.\n\n``user_id`` is here so a misissued token shows up in the first call instead of in an empty\nresult. Once the pipeline lands, the user id moves into the history and audit records.",
-        "properties": {
-          "fix": {
-            "description": "What to do instead, right now.",
-            "title": "Fix",
+        "$defs": {
+          "ColumnStats": {
+            "additionalProperties": false,
+            "description": "Statistics for one column, with every approximation named.",
+            "properties": {
+              "distinct": {
+                "minimum": 0,
+                "title": "Distinct",
+                "type": "integer"
+              },
+              "distinct_kind": {
+                "description": "'exact', 'lower_bound' (row sample) or 'unavailable' (type has no kernel).",
+                "enum": [
+                  "exact",
+                  "lower_bound",
+                  "unavailable"
+                ],
+                "title": "Distinct Kind",
+                "type": "string"
+              },
+              "max_value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Max Value"
+              },
+              "min_value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "JSON scalar, or null when the type has no ordering.",
+                "title": "Min Value"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "nulls": {
+                "minimum": 0,
+                "title": "Nulls",
+                "type": "integer"
+              },
+              "type": {
+                "description": "Arrow type, e.g. 'int64' or 'timestamp[us]'.",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "type",
+              "nulls",
+              "distinct",
+              "distinct_kind"
+            ],
+            "title": "ColumnStats",
+            "type": "object"
+          },
+          "ErrorResponse": {
+            "additionalProperties": false,
+            "description": "A blockable/repairable failure, addressed to a weak agent.",
+            "properties": {
+              "code": {
+                "minLength": 1,
+                "title": "Code",
+                "type": "string"
+              },
+              "did_you_mean": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Did You Mean"
+              },
+              "fix": {
+                "minLength": 1,
+                "title": "Fix",
+                "type": "string"
+              },
+              "partitions_if_fixed": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Scan estimate after the fix, e.g. '2 of 60'.",
+                "title": "Partitions If Fixed"
+              },
+              "problem": {
+                "minLength": 1,
+                "title": "Problem",
+                "type": "string"
+              },
+              "status": {
+                "const": "error",
+                "default": "error",
+                "title": "Status",
+                "type": "string"
+              },
+              "valid_values": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Valid Values"
+              }
+            },
+            "required": [
+              "code",
+              "problem",
+              "fix"
+            ],
+            "title": "ErrorResponse",
+            "type": "object"
+          },
+          "PlanInfo": {
+            "additionalProperties": false,
+            "description": "What the plan says the query reads: the static estimate, plus the source's own plan.\n\n``pruning_proof`` is A03's verdict, not a promise: ``proven`` means the source's plan showed the\npruning, ``unproven`` means it did not, and ``unknown`` means no plan was obtained (no\n``EXPLAIN`` capability, a raw statement, or a cache hit).",
+            "properties": {
+              "est_rows": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Est Rows"
+              },
+              "notes": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "title": "Notes",
+                "type": "array"
+              },
+              "partitions_if_fixed": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "What a bounded window would read, e.g. '2 of 14'.",
+                "title": "Partitions If Fixed"
+              },
+              "partitions_scanned": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Partitions Scanned"
+              },
+              "partitions_total": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Partitions Total"
+              },
+              "pruning_proof": {
+                "$ref": "#/$defs/PruningProof",
+                "default": "unknown"
+              },
+              "uses_index": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Uses Index"
+              }
+            },
+            "title": "PlanInfo",
+            "type": "object"
+          },
+          "PruningProof": {
+            "description": "Whether the plan *proves* that only the intended partitions are scanned.",
+            "enum": [
+              "proven",
+              "unproven",
+              "unknown"
+            ],
+            "title": "PruningProof",
             "type": "string"
+          },
+          "ResultSummary": {
+            "additionalProperties": false,
+            "description": "What the agent gets instead of the result set: summary, sample, handle.",
+            "properties": {
+              "budget_clamped": {
+                "description": "True when the requested budget was not used as is.",
+                "title": "Budget Clamped",
+                "type": "boolean"
+              },
+              "budget_tokens": {
+                "description": "Budget actually applied after clamping.",
+                "exclusiveMinimum": 0,
+                "title": "Budget Tokens",
+                "type": "integer"
+              },
+              "columns": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/ColumnStats"
+                },
+                "title": "Columns",
+                "type": "array"
+              },
+              "columns_total": {
+                "minimum": 0,
+                "title": "Columns Total",
+                "type": "integer"
+              },
+              "columns_without_stats": {
+                "description": "Columns with no statistics here (not covered, or dropped for budget).",
+                "minimum": 0,
+                "title": "Columns Without Stats",
+                "type": "integer"
+              },
+              "handle": {
+                "description": "Opaque id for the stored result.",
+                "minLength": 1,
+                "title": "Handle",
+                "type": "string"
+              },
+              "next_call": {
+                "description": "Exact call that pages the remaining rows.",
+                "title": "Next Call",
+                "type": "string"
+              },
+              "rows_not_shown": {
+                "description": "Rows the agent has not seen; 0 means complete.",
+                "minimum": 0,
+                "title": "Rows Not Shown",
+                "type": "integer"
+              },
+              "rows_total": {
+                "minimum": 0,
+                "title": "Rows Total",
+                "type": "integer"
+              },
+              "sample": {
+                "description": "The first rows, in source order.",
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Sample",
+                "type": "array"
+              },
+              "sample_label": {
+                "description": "Human label: a sample, and of what.",
+                "title": "Sample Label",
+                "type": "string"
+              },
+              "sample_rows_wanted": {
+                "minimum": 0,
+                "title": "Sample Rows Wanted",
+                "type": "integer"
+              },
+              "status": {
+                "const": "ok",
+                "default": "ok",
+                "title": "Status",
+                "type": "string"
+              },
+              "tokens_estimated": {
+                "description": "Conservative token estimate of this answer.",
+                "minimum": 0,
+                "title": "Tokens Estimated",
+                "type": "integer"
+              },
+              "truncated": {
+                "description": "True when rows were left out of this answer.",
+                "title": "Truncated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "rows_total",
+              "handle",
+              "sample",
+              "sample_rows_wanted",
+              "sample_label",
+              "rows_not_shown",
+              "truncated",
+              "columns_total",
+              "columns_without_stats",
+              "tokens_estimated",
+              "budget_tokens",
+              "budget_clamped",
+              "next_call"
+            ],
+            "title": "ResultSummary",
+            "type": "object"
+          },
+          "SegmentFreshness": {
+            "additionalProperties": false,
+            "description": "Where one source's rows came from: a fresh cache hit, a refetch, or no cache at all.\n\n``fetched_at`` is when the server learned these rows, never \"now\": a cache hit that reported\n\"now\" would be indistinguishable from a fresh read, which is the confusion this field prevents.",
+            "properties": {
+              "age_s": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Age S"
+              },
+              "fetched_at": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Fetched At"
+              },
+              "reason": {
+                "default": "",
+                "title": "Reason",
+                "type": "string"
+              },
+              "source": {
+                "title": "Source",
+                "type": "string"
+              },
+              "status": {
+                "default": "uncached",
+                "enum": [
+                  "hit",
+                  "miss",
+                  "stale",
+                  "uncached"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "table": {
+                "title": "Table",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "table"
+            ],
+            "title": "SegmentFreshness",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One answer from ``query``: a summary, a small sample and a handle, or the refusal.\n\n``status`` is ``ok`` with an answer, ``dry_run`` with the plan only, ``error`` with the\nstructured :class:`~mdqm.models.ErrorResponse` the agent must act on, or ``not_implemented``\nwhen the server was built without a pipeline.",
+        "properties": {
+          "applied_fixes": {
+            "default": [],
+            "description": "Every change the server made to your request, in order.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Applied Fixes",
+            "type": "array"
+          },
+          "cache_hit": {
+            "default": false,
+            "description": "True when no source call was made.",
+            "title": "Cache Hit",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ErrorResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Set when status is 'error'."
+          },
+          "fix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What to do instead (not_implemented).",
+            "title": "Fix"
+          },
+          "freshness": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/SegmentFreshness"
+            },
+            "title": "Freshness",
+            "type": "array"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PlanInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "problem": {
-            "description": "What is missing.",
-            "title": "Problem",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What is missing (not_implemented).",
+            "title": "Problem"
+          },
+          "result_handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Page it with `get_more`.",
+            "title": "Result Handle"
+          },
+          "rows_total": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Rows Total",
+            "type": "integer"
+          },
+          "sample": {
+            "default": [],
+            "description": "The first rows, small enough to read whole.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Sample",
+            "type": "array"
           },
           "status": {
-            "const": "not_implemented",
-            "default": "not_implemented",
+            "default": "ok",
+            "enum": [
+              "ok",
+              "dry_run",
+              "error",
+              "not_implemented"
+            ],
             "title": "Status",
             "type": "string"
           },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ResultSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The bounded answer."
+          },
           "surface": {
-            "description": "Which tool (or endpoint) answered.",
+            "default": "query",
             "title": "Surface",
             "type": "string"
           },
           "user_id": {
-            "description": "The authenticated caller the server saw.",
+            "default": "",
             "title": "User Id",
             "type": "string"
           }
         },
-        "required": [
-          "surface",
-          "user_id",
-          "problem",
-          "fix"
-        ],
-        "title": "NotImplementedResult",
+        "title": "QueryAnswer",
         "type": "object"
       }
     }
