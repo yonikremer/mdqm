@@ -36,8 +36,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
+from mdqm.adapters.base import SourceAdapter
 from mdqm.compiler import CompileContext, CompiledQuery, compile_spec
 from mdqm.context.index import ContextIndex
 from mdqm.context.pack import DEFAULT_PACK_BUDGET, build_pack
@@ -370,6 +371,16 @@ def _sources(world: World) -> dict[str, FakeAdapter]:
 # --- the measurements ---------------------------------------------------------------------
 
 
+def adapters(sources: Mapping[str, Any]) -> Mapping[str, SourceAdapter]:
+    """The sources as a governor takes them.
+
+    A cast, not a wrapper: ``FakeAdapter.kind`` is an instance attribute while the protocol declares
+    it as a class variable, so a strict type checker cannot see that the fake is an adapter. F05's
+    conformance run is the real proof that it is one.
+    """
+    return cast(Mapping[str, SourceAdapter], dict(sources))
+
+
 def bench_compile(layer: SemanticLayer, runs: int) -> Measurement:
     """Parse + resolve + normalise + plan time and partitions + guard: one spec to one fragment."""
     measured = Measurement("compile+plan")
@@ -412,13 +423,17 @@ def bench_execute(
     measured = Measurement("execute (fake source)")
     compiled = _compile(layer, "billing", EXECUTE_SPEC)
     assert compiled.ok and compiled.fragment is not None, compiled.error
+    fragment = compiled.fragment
     limits = Limits(timeout_s=60.0, max_rows=100_000, max_bytes=64 << 20, max_partitions=64)
     adapter = sources["billing"]
 
     def once() -> int:
-        stream = adapter.execute(compiled.fragment, limits)
+        # The fragment is a compiled, guarded object, not interpolated SQL.
+        stream = adapter.execute(  # pi-lens-ignore: python-sql-injection -- adapter protocol
+            fragment, limits
+        )
         try:
-            rows = sum(batch.num_rows for batch in stream)
+            rows = sum(int(batch.num_rows) for batch in stream)
         finally:
             stream.close()
         assert rows > 0
@@ -436,7 +451,7 @@ def bench_cache(
     """The same fragment served twice: the miss, then the hits, with the source-call count."""
     miss = Measurement("cache miss (fetch)")
     hit = Measurement("cache hit")
-    governor = Governor(dict(sources))
+    governor = Governor(adapters(sources))
     billing = sources["billing"]
     runner = FederatedExecutor(
         governor, layer=layer, spill_dir=directory / "cache_spill", path=directory / "cache.duckdb"
@@ -471,7 +486,7 @@ def bench_join(
 ) -> Measurement:
     """The federated join: two fragments, one DuckDB join, the aggregate, the quality report."""
     measured = Measurement("federated join")
-    governor = Governor(dict(sources))
+    governor = Governor(adapters(sources))
     runner = FederatedExecutor(governor, layer=layer, spill_dir=directory / "join_spill")
     answers: list[list[dict[str, Any]]] = []
     try:

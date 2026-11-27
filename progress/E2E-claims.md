@@ -38,13 +38,13 @@ world: 200 customers, 5001 usage events
 
 stage                              p50         p95     n  note
 --------------------------  ----------  ----------  ----  ------------------------
-compile+plan                   1.988ms     2.763ms    20  186 chars SQL, 2+0 predicates
-execute (fake source)          1.191ms     1.517ms     6  1240 rows fetched per run
-cache miss (fetch)            24.202ms    24.202ms     1  1 source call(s)
-cache hit                      9.698ms    10.945ms    20  20 hits, 0 new calls
-context pack build             0.608ms     1.054ms    20  303 tokens, 8 facts
-federated join                26.654ms    63.552ms     6  3 groups, active first
-round/normalise round-trip   495.527ms   501.646ms     3  10000 labels + 10000 roundings/pass, 49.55 us/value
+compile+plan                   2.131ms     3.072ms    20  186 chars SQL, 2+0 predicates
+execute (fake source)          1.015ms     1.085ms     6  1240 rows fetched per run
+cache miss (fetch)            25.209ms    25.209ms     1  1 source call(s)
+cache hit                     10.365ms    14.693ms    20  20 hits, 0 new calls
+context pack build             0.688ms     0.965ms    20  303 tokens, 8 facts
+federated join                24.613ms    69.943ms     6  3 groups, active first
+round/normalise round-trip   488.926ms   524.158ms     3  10000 labels + 10000 roundings/pass, 48.89 us/value
 
 read these as shapes, not targets: same machine, same seed, same work.
 context pack: 303 tokens / 8 facts; values round-tripped: 30000

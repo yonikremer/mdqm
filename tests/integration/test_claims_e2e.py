@@ -31,7 +31,7 @@ import pyarrow as pa
 import pytest
 from ruamel.yaml import YAML
 
-from mdqm.adapters.base import ArrowStream
+from mdqm.adapters.base import ArrowStream, SourceAdapter
 from mdqm.compiler import CompileContext, CompiledQuery, compile_spec
 from mdqm.context.index import ApprovedExample, ContextIndex
 from mdqm.context.pack import MAX_EXAMPLES, MIN_PACK_BUDGET, OmissionReason, PackKind, build_pack
@@ -296,10 +296,20 @@ def sources(pinned_world: World) -> Iterator[dict[str, FakeAdapter]]:
             adapter.close()
 
 
+def adapters(sources: Mapping[str, Any]) -> Mapping[str, SourceAdapter]:
+    """The sources as a governor takes them.
+
+    A cast, not a wrapper: ``FakeAdapter.kind`` is an instance attribute while the protocol declares
+    it as a class variable, so a strict type checker cannot see that the fake is an adapter. F05's
+    conformance run is the real proof that it is one.
+    """
+    return cast(Mapping[str, SourceAdapter], dict(sources))
+
+
 @pytest.fixture
 def governed(sources: Mapping[str, FakeAdapter]) -> Governor:
     """The governor over the three sources: the only path a test has to an adapter."""
-    return Governor(dict(sources))
+    return Governor(adapters(sources))
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -608,7 +618,7 @@ def test_claim_a_same_number_different_meaning(
             question = questions[question_id]
             source = cast(str, question["spec"]["from"]).split(".")[0]
             outcome = execute_spec(
-                governor=Governor(per_source),
+                governor=Governor(adapters(per_source)),
                 layer=layer,
                 sources=per_source,
                 source=source,
@@ -813,10 +823,10 @@ def test_claim_d_late_arriving_rows_are_counted_not_dropped(
     assert "insertion_time >=" in sql, sql
     assert "start_time >=" in sql, "the original event-time predicate must stay"
     assert compiled.time_plan is not None
-    assert compiled.time_plan.derived_bound == since - timedelta(
-        seconds=pinned_world.expected.max_lag_seconds
-    )
-    assert all(event.start_time >= compiled.time_plan.derived_bound for event in late), (
+    derived = compiled.time_plan.derived_bound
+    assert derived is not None, "a 'new_since' question must derive an event-time bound"
+    assert derived == since - timedelta(seconds=pinned_world.expected.max_lag_seconds)
+    assert all(event.start_time >= derived for event in late), (
         "the derived bound would drop a late-arriving row"
     )
 
@@ -1132,7 +1142,7 @@ def test_claim_g_the_governor_caps_concurrency_and_really_cancels() -> None:
     table = pa.table({"n": list(range(5))})
     admission = Admission(AdmissionPolicy(max_global=9, per_user=9, per_source=3, max_wait_s=20.0))
     source = _GatedSource(gate, table)
-    burst = Governor({"fake": source}, admission=admission)
+    burst = Governor(adapters({"fake": source}), admission=admission)
 
     outcomes: list[str] = []
     lock = threading.Lock()
@@ -1165,7 +1175,7 @@ def test_claim_g_the_governor_caps_concurrency_and_really_cancels() -> None:
     # --- the deadline cancels, it does not abandon -----------------------------------
     clock = _ScriptedClock()
     spy = _CancelSpy(clock)
-    timed = Governor({"fake": spy}, clock=clock)  # type: ignore[arg-type]
+    timed = Governor(adapters({"fake": spy}), clock=clock)
     with pytest.raises(GovernorRefusal) as excinfo:
         timed.execute(
             source="fake",
