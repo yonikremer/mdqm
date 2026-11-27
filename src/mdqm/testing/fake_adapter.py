@@ -33,7 +33,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import duckdb
 import pyarrow as pa
@@ -220,7 +220,7 @@ class FakeAdapter:
     :meth:`for_world`.
     """
 
-    kind: Final[str] = "fake"
+    kind: ClassVar[str] = "fake"
 
     def __init__(
         self,

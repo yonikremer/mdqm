@@ -51,7 +51,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 import httpx
 import pyarrow as pa
@@ -598,7 +598,7 @@ class OpenApiAdapter:
         page_size: rows requested per page when the spec declares no page-size parameter.
     """
 
-    kind: Final[str] = "openapi"
+    kind: ClassVar[str] = "openapi"
 
     def __init__(
         self,
