@@ -56,20 +56,35 @@ A dropped row is never a silent row.
 
 ## Status: honest
 
-This is an early build. What is proven:
+This is an early build, and it is built so that every claim can be checked by running something.
 
-- The full path from a validated spec to executed SQL, including the 5000-rounding and the ÷10 form,
-  runs end-to-end against three in-process DuckDB sources and reproduces ground truth that was
-  computed independently of the code under test.
-- Guard, planner, cache, governor, audit, history, semantic layer, MCP tools and the Claude Code hook
-  have unit tests; `scripts/check.py` runs ruff, `mypy --strict` and the suite.
+**Verified against real services** (Docker Desktop, real containers; the commands are in
+`docs/dev-env.md`, `docs/deployment.md` and each `progress/*.md`):
 
-What is **not** proven:
+- **PostgreSQL**: the D03 schema loads (three databases, monthly range partitions, a read-only role
+  that the server itself refuses to write through), the A02 adapter passes the conformance kit, and
+  the canonical cross-source question -- average credit limit by status, with the 5000 half-up
+  rounding and the erp division-by-ten form -- reproduces ground truth on the real database.
+  `tests/integration/test_postgres_e2e.py` answers it three ways: the compiled spec, hand-written
+  SQL, and E01's offline answer.
+- **Elasticsearch**: monthly indices, the alias, the index template and the bulk load run against a
+  real node; the search adapter is exercised against the same data.
+- **The container**: `docker build` succeeds, the image runs as a non-root user with GID 0 (the
+  OpenShift pattern), `GET /healthz` answers, `mdqm probe` reaches the database, and a first boot
+  with no semantic layer starts and says so instead of crash-looping.
+- **The claims**: `tests/integration/test_claims_e2e.py` asserts each problem this README opens with
+  -- the rounding, the refused query with zero source calls, the cache hit with no new fetch, the
+  late-arriving row kept by the derived bound, the audited refusal, the context pack inside its
+  budget, and the governor's concurrency cap with a real cancellation.
+- **Benchmarks**: `scripts/bench.py` measures each stage and asserts only invariants; the model
+  benchmark (`scripts/bench_glm.py`) scores a real weak model's answers against E01's ground truth.
 
-- Nothing here has ever run against a real PostgreSQL, Oracle or SQL Server instance. No container
-  runtime was available while it was built, so the compose stack and the Dockerfile are written and
-  statically verified but never started. See `progress/D01.md` and `progress/M08.md` for the exact list.
-- Oracle, SQL Server and Elasticsearch support is written, not exercised.
+**Not proven yet** (each is a named task, not a guess):
+
+- The MCP `query` tool that ties the compiled pipeline together (`M03`/`M04`) and the end-to-end
+  acceptance that runs it over real PostgreSQL (`E03`) are still open. Until they land, "end to end"
+  means the pipeline, not the tool surface.
+- Oracle and SQL Server support is written and unexercised (`D05`/`D06`, `A07`/`A08`).
 - The on-prem model endpoint has only been spoken to through a mock transport.
 
 `TASKS.md` holds the backlog and `progress/` holds one short report per finished task, including what
