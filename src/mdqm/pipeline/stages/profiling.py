@@ -40,10 +40,12 @@ staleness (never the wall clock), and every list comes out sorted.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Final, Protocol
 
@@ -324,6 +326,7 @@ class OptimizerStatistics(Protocol):
     code never learns which: it asks, or it takes the declared fallback and samples.
     """
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub: pyright requires an ellipsis body
     def column_stats(self, table: str) -> Sequence[ColumnStat] | None:
         """Statistics rows for ``table``, or ``None`` when this source has none for it."""
         ...
@@ -402,15 +405,14 @@ def parse_pg_stats(
         )
         null_frac = row.get("null_frac")
         n_distinct = row.get("n_distinct")
+        distinct = _as_float(n_distinct)
         parsed.append(
             ColumnStat(
                 table=str(row.get("tablename") or ""),
                 column=column,
-                null_fraction=float(null_frac) if isinstance(null_frac, (int, float)) else None,
+                null_fraction=_as_float(null_frac),
                 distinct=(
-                    _distinct_from_n_distinct(float(n_distinct), row_estimate)
-                    if isinstance(n_distinct, (int, float))
-                    else None
+                    None if distinct is None else _distinct_from_n_distinct(distinct, row_estimate)
                 ),
                 minimum=minimum,
                 maximum=maximum,
@@ -452,7 +454,11 @@ def _as_int(value: object) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value) if value.is_integer() else None
+        try:
+            number = int(value)
+        except (ValueError, OverflowError):  # NaN and +-Inf are not an integer a column holds
+            return None
+        return number if number == value else None
     if isinstance(value, str):
         text = value.strip()
         try:
@@ -461,6 +467,24 @@ def _as_int(value: object) -> int | None:
             return None
         return number
     return None
+
+
+def _as_float(value: object) -> float | None:
+    """A statistic as a finite ``float``, or ``None`` when it is missing or not a number.
+
+    Drivers differ on what they hand over for one statistic (a float, a ``Decimal``, text from a
+    text protocol), so the conversion is wrapped: a value we cannot read means "no statistic",
+    never a failure on the profile of a table we do not control.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (int, float, str, Decimal)):
+        return None
+    try:
+        number = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def detect_granularity(
@@ -548,7 +572,7 @@ def _bounds(values: Sequence[object]) -> tuple[str | None, str | None]:
         return (None, None)
     numbers = [_as_int(value) for value in present]
     if all(number is not None for number in numbers):
-        ordered = sorted(int(number) for number in numbers if number is not None)
+        ordered = sorted(number for number in numbers if number is not None)
         return (str(ordered[0]), str(ordered[-1]))
     texts = [text for text in (_as_text(value) for value in present) if text is not None]
     if not texts:

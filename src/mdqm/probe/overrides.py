@@ -64,6 +64,7 @@ _TAG = re.compile(r"!")
 class _KeyMarker(Protocol):
     """ruamel's ``lc.key(key)``: the 0-based (line, column) a mapping key starts on."""
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub: pyright needs the ellipsis
     def __call__(self, key: Any, /) -> tuple[int, int]: ...
 
 

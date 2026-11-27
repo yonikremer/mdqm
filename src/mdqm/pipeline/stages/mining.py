@@ -40,7 +40,7 @@ import sqlite3
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Final
+from typing import Any, Final
 
 from mdqm.models.base import MDQMModel, UtcDatetime
 from mdqm.models.query import RawQuery
@@ -414,6 +414,19 @@ def _parse_iso(value: object) -> datetime | None:
     return datetime.fromisoformat(value)
 
 
+def _count(value: Any, what: str) -> int:
+    """A stored counter as ``int``. A non-numeric value means a row we cannot trust, so it raises.
+
+    ``calls`` and ``statements`` are INTEGER columns this module wrote, but sqlite3 hands back
+    whatever the row holds (a hand edit, a half-run migration), and a silently coerced 0 would
+    understate how often a statement ran and distort every ranking built on it.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"mined query column {what} holds a non-numeric value") from exc
+
+
 def watermark(store: Store, source: str) -> datetime | None:
     """The next pull's starting point for ``source``: the newest ``last_seen`` ever mined."""
     row = store.connect().execute(_SELECT_WATERMARK, (source,)).fetchone()
@@ -433,8 +446,8 @@ def _merge_rows(
     first_seen = _earliest(_parse_iso(existing["first_seen"]), query.first_seen)
     last_seen = _latest(_parse_iso(existing["last_seen"]), query.last_seen)
     return (
-        int(existing["calls"]) + query.calls,
-        int(existing["statements"]) + query.statements,
+        _count(existing["calls"], "calls") + query.calls,
+        _count(existing["statements"], "statements") + query.statements,
         json.dumps(users),
         _iso(first_seen),
         _iso(last_seen),
@@ -569,8 +582,8 @@ def read(
             source=str(row["source"]),
             fingerprint=str(row["fingerprint"]),
             dialect=str(row["dialect"]),
-            calls=int(row["calls"]),
-            statements=int(row["statements"]),
+            calls=_count(row["calls"], "calls"),
+            statements=_count(row["statements"], "statements"),
             users=_stored_users(row["users"]),
             first_seen=_parse_iso(row["first_seen"]),
             last_seen=_parse_iso(row["last_seen"]),

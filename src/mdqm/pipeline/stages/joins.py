@@ -205,7 +205,12 @@ def _numeric_text(value: str) -> str:
     A value that is not digits is returned unchanged: conversions are only offered for digit sets,
     and a caller that gets here anyway sees "not matched" rather than an exception.
     """
-    return str(int(value)) if _DIGITS.match(value) is not None else value
+    if _DIGITS.match(value) is None:
+        return value
+    try:
+        return str(int(value))
+    except ValueError:  # more digits than int() will parse: compare it as the text it is
+        return value
 
 
 # --- one measured column ----------------------------------------------------------------------
@@ -968,7 +973,10 @@ class JoinStage:
         truncated = len(rows) > self._value_cap
         rows = rows[: self._value_cap]
         values = tuple(str(row["value"]) for row in rows)
-        counts = tuple(int(row["rows"]) for row in rows)
+        try:
+            counts = tuple(int(row["rows"]) for row in rows)
+        except (TypeError, ValueError) as exc:
+            return None, f"{label}: a row count is not a number ({exc})"
         return (
             ValueSet(
                 source=source,

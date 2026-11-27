@@ -209,10 +209,12 @@ class Stage(Protocol):
 
     name: str
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub: pyright requires an ellipsis body
     def inputs_hash(self, ctx: PipelineContext) -> str:
         """sha256 over everything this stage's output depends on."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub: pyright requires an ellipsis body
     def run(self, ctx: PipelineContext) -> StageReport:
         """Do the work and report it. Raising is allowed: the runner records the failure."""
         ...
@@ -285,8 +287,7 @@ def _describe_instant(instant: datetime, window: QuietWindow) -> str:
 
 def _describe_delay(now: datetime, instant: datetime) -> str:
     """``in 2h 5m``: how long an operator waits, rounded down to a minute."""
-    seconds = max(0.0, (instant - now).total_seconds())
-    minutes = int(seconds // 60)
+    minutes = max(timedelta(0), instant - now) // timedelta(minutes=1)
     hours, minutes = divmod(minutes, 60)
     return f"in {hours}h {minutes}m" if hours else f"in {minutes}m"
 

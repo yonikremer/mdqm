@@ -358,7 +358,7 @@ def _table_of(qualified: str) -> str:
 
 def _span(duration: timedelta) -> str:
     """A duration as a person writes it: ``6h``, ``30m``, ``7d``, ``45s``."""
-    seconds = int(duration.total_seconds())
+    seconds = duration // timedelta(seconds=1)
     for unit, size in (("d", 86_400), ("h", 3_600), ("m", 60)):
         if seconds and seconds % size == 0:
             return f"{seconds // size}{unit}"

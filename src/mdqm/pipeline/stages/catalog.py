@@ -41,10 +41,12 @@ class CatalogReader(Protocol):
     not have to implement `execute` to prove what the stage writes.
     """
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub: pyright requires an ellipsis body
     def extract_catalog(self) -> CatalogSnapshot:
         """Tables, columns, keys and indexes as the source reports them."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub: pyright requires an ellipsis body
     def extract_partitions(self) -> list[Partitioning]:
         """Partition metadata, or raise :class:`NotSupported` when the source has none to give."""
         ...

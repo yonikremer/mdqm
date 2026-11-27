@@ -32,6 +32,7 @@ exact integer fractions, so the detector and the emitted SQL agree at the ``.5``
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -384,7 +385,7 @@ def _decimal(value: object) -> Decimal | None:
     if isinstance(value, int):
         return Decimal(value)
     if isinstance(value, float):
-        if value != value or value in (float("inf"), float("-inf")):  # NaN / +-Inf
+        if not math.isfinite(value):  # NaN / +-Inf carry no exact decimal
             return None
         return Decimal(repr(value))
     if isinstance(value, str):
@@ -1002,10 +1003,23 @@ def _entity_key(value: object) -> object | None:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value) if value.is_integer() else str(value)
+        try:
+            number = int(value)
+        except (ValueError, OverflowError):  # NaN / +-Inf: no integer identity to join on
+            return str(value)
+        return number if number == value else str(value)
     if isinstance(value, Decimal):
-        return int(value) if value == value.to_integral_value() else str(value)
+        try:
+            number = int(value)
+        except (ArithmeticError, ValueError):  # NaN / +-Inf: no integer identity to join on
+            return str(value)
+        return number if number == value else str(value)
     text = str(value).strip()
     if not text:
         return None
-    return int(text) if text.isdigit() else text
+    if not text.isdigit():
+        return text
+    try:
+        return int(text)
+    except ValueError:  # a digit int() cannot read (a superscript, or more digits than it parses)
+        return text

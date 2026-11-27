@@ -183,12 +183,12 @@ class GuardOutcome(Protocol):
     sqlglot in through the guard.
     """
 
-    @property
+    @property  # pi-lens-ignore: no-ellipsis-body -- Protocol stub: pyright needs the ellipsis
     def ok(self) -> bool:
         """True when the statement passed the guard."""
         ...
 
-    @property
+    @property  # pi-lens-ignore: no-ellipsis-body -- Protocol stub: pyright needs the ellipsis
     def error(self) -> ErrorResponse | None:
         """The rejection for a blocked statement, ``None`` when ``ok``."""
         ...

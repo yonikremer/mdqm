@@ -41,6 +41,7 @@ DEFAULT_MAX_TTL = timedelta(days=7)
 class Clock(Protocol):
     """Time source, injected so tests never sleep and callers never read the wall clock."""
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub: pyright requires an ellipsis body
     def now(self) -> datetime:
         """Current instant, timezone-aware (UTC in production)."""
         ...
