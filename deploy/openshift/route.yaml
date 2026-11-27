@@ -1,0 +1,40 @@
+# OpenShift Route: the normal edge for a cluster that has the OpenShift
+# router. Use ingress.yaml instead on plain Kubernetes; a cluster accepts one
+# of the two, so kustomization.yaml ships this one by default.
+#
+# `host` is deliberately absent. A guessed hostname never resolves, and the
+# router will not serve a Route whose host is not in the org's DNS zone. The
+# router therefore derives mdqm-<namespace>.apps.<cluster>; read it back with
+#   oc get route mdqm -n <namespace> -o jsonpath='{.spec.host}'
+# and, once the org's DNS name is agreed, set it here explicitly:
+#   spec.host: mdqm.data.example.internal
+#
+# TLS is terminated at the router (edge) and re-encrypted never: the Service
+# speaks plain HTTP on the pod network. `Redirect` makes the plain-HTTP
+# entrypoint bounce to HTTPS instead of refusing, which is friendlier to a
+# client that guesses http:// first.
+#
+# MCP streamable HTTP holds a response stream open longer than the router's
+# 30s default idle timeout, so the annotation raises it. Without it a slow
+# tool call is cut at the edge with an empty response, which looks like a
+# server bug.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mdqm
+  labels:
+    app.kubernetes.io/name: mdqm
+    app.kubernetes.io/component: mcp-server
+  annotations:
+    haproxy.router.openshift.io/timeout: 600s
+spec:
+  to:
+    kind: Service
+    name: mdqm
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

@@ -1,0 +1,21 @@
+# Internal ClusterIP in front of the single pod. The edge (Route or Ingress)
+# terminates TLS; the Service speaks plain HTTP inside the namespace.
+#
+# `targetPort: http` names the container port, so the number lives in one
+# place (deployment.yaml) and a port change cannot silently miss the Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mdqm
+  labels:
+    app.kubernetes.io/name: mdqm
+    app.kubernetes.io/component: mcp-server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mdqm
+  ports:
+    - name: http
+      port: 8765
+      targetPort: http
+      protocol: TCP

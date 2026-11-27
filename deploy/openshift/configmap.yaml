@@ -1,0 +1,54 @@
+# Non-secret runtime settings, injected whole through envFrom.
+#
+# Every name below is a Settings field with the `MDQM_` prefix and `__`
+# between sections (src/mdqm/config/settings.py). Nothing here is a
+# credential: a password, an API key or a token lives in the Secret
+# (secret.example.yaml) and reaches the process by reference.
+#
+# Paths: the image's defaults point at /data, /cache and /semantic. The pod
+# keeps all durable state on the one claim, so cache and semantic move under
+# /data. /cache is then unused; nothing writes to it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mdqm-config
+  labels:
+    app.kubernetes.io/name: mdqm
+    app.kubernetes.io/component: mcp-server
+data:
+  # Bind on all interfaces: the Service reaches the pod, not loopback.
+  MDQM_SERVER__HOST: "0.0.0.0"
+  MDQM_SERVER__PORT: "8765"
+  # SQLite metadata DB + audit chain. Back this up.
+  MDQM_PATHS__METADATA_DB: /data/mdqm.sqlite
+  # DuckDB segment cache and LLM response cache.
+  MDQM_PATHS__CACHE_DIR: /data/cache
+  # Semantic layer; `mdqm review approve` writes here, so it must persist.
+  MDQM_PATHS__SEMANTIC_DIR: /data/semantic
+  # Secret files: the mounted Secret, one file per reference, plus the token
+  # file MDQM_TOKENS_FILE. Change these two together with the mount in
+  # deployment.yaml.
+  MDQM_SECRETS__DIR: /run/secrets
+  MDQM_TOKENS_FILE: /run/secrets/tokens.json
+  # DuckDB spills into TMPDIR, the emptyDir mount. Scratch only.
+  TMPDIR: /tmp
+  # Governor limits. Conservative: primary databases have no replicas.
+  MDQM_LIMITS__MAX_ROWS: "1000"
+  MDQM_LIMITS__MAX_CONCURRENCY: "8"
+  MDQM_LIMITS__PER_SOURCE_CONCURRENCY: "3"
+  MDQM_LIMITS__QUERY_TIMEOUT_S: "60"
+  MDQM_LIMITS__MAX_PARTITIONS_SCANNED: "8"
+  # The on-prem, OpenAI-compatible model endpoint used by the bootstrap
+  # pipeline. Not a secret: replace host and model name with yours. The key
+  # arrives separately as MDQM_MODEL__API_KEY from the Secret.
+  MDQM_MODEL__BASE_URL: http://model.PLACEHOLDER.internal/v1
+  MDQM_MODEL__MODEL: MODEL_NAME_PLACEHOLDER
+  MDQM_MODEL__TIMEOUT_S: "120"
+  # Data sources as a JSON list of SourceConfig objects, because the server
+  # reads settings before any YAML file. Each `secret` value is a *name* that
+  # resolves to a file under MDQM_SECRETS__DIR, never a credential.
+  # Example (one line, no wrapping):
+  #   [{"name":"crm","adapter":"postgresql","secret":"crm_ro",
+  #     "options":{"dsn":"postgresql://mdqm_ro@pg.internal:5432/crm"}}]
+  # The DSN holds no password: the password is the secret reference.
+  MDQM_SOURCES: "[]"

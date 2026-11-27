@@ -1,0 +1,38 @@
+# One `oc apply -k deploy/openshift` creates everything the server needs.
+#
+# secret.example.yaml is deliberately NOT a resource: it is a template with
+# placeholder values. Create the real Secret once, before the first apply
+# (docs/deploy.md section 5); applying the template would put a public token
+# in the cluster and the server would happily serve it.
+#
+# route.yaml is the OpenShift edge. On plain Kubernetes, comment it out and
+# uncomment ingress.yaml.
+#
+# Replace the image once, here, instead of editing deployment.yaml:
+#   images:
+#     - name: IMAGE_PLACEHOLDER
+#       newName: image-registry.openshift-image-registry.svc:5000/mdqm/mdqm
+#       newTag: "0.1.0"
+# The tag below is a deliberate stop sign: a cluster that pulls it fails with
+# ImagePullBackOff rather than silently running an old build.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccount.yaml
+  - pvc.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - route.yaml
+  # - ingress.yaml
+
+images:
+  - name: IMAGE_PLACEHOLDER
+    newName: image-registry.openshift-image-registry.svc:5000/mdqm/mdqm
+    newTag: "changeme"
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: mdqm

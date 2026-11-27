@@ -1,0 +1,40 @@
+# Plain-Kubernetes alternative to route.yaml. Apply exactly one of the two:
+# an OpenShift cluster normally wants the Route, a vanilla cluster needs this
+# Ingress (and an ingress controller, e.g. ingress-nginx).
+#
+# The TLS Secret mdqm-tls is created by the operator, not by these manifests:
+#   oc create secret tls mdqm-tls --cert=server.crt --key=server.key
+#
+# The controller default of 60s read timeout is shorter than an MCP stream
+# may live, so the timeouts are raised here for the same reason the Route
+# raises haproxy's. Request bodies are small; responses are streamed, so
+# buffering is off.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mdqm
+  labels:
+    app.kubernetes.io/name: mdqm
+    app.kubernetes.io/component: mcp-server
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  # Change when the cluster's controller class is not nginx.
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - mdqm.PLACEHOLDER.internal
+      secretName: mdqm-tls
+  rules:
+    - host: mdqm.PLACEHOLDER.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mdqm
+                port:
+                  name: http

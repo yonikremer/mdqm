@@ -1,0 +1,162 @@
+# mdqm MCP server on OpenShift/Kubernetes. Guide: docs/deploy.md.
+#
+# `replicas: 1` and `strategy: Recreate` are a correctness requirement, not
+# a capacity choice: all durable state is a SQLite file in WAL mode on a
+# ReadWriteOnce claim. Two pods sharing that file fight over the WAL lock
+# and the audit hash chain, and a rolling update would briefly run two
+# writers. Scale by giving each organisation its own instance, never by
+# adding replicas here.
+#
+# The image is a placeholder: replace it with your internal registry
+# reference, or set it once in kustomization.yaml under `images:`.
+# Never `:latest`.
+#
+# Security: no UID or GID is pinned here on purpose. `restricted-v2` (the
+# OpenShift default) then assigns a namespace UID with GID 0, which works
+# because the image makes /data and /tmp group-writable for group 0 rather
+# than owned by one fixed user. An image that still hard-codes 10001:10001
+# also schedules, once the operator grants it the `nonroot-v2` SCC and pins
+# runAsUser: 10001 here. Both choices, and the exact `oc` commands: see
+# serviceaccount.yaml and docs/deploy.md section 3.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mdqm
+  labels:
+    app.kubernetes.io/name: mdqm
+    app.kubernetes.io/component: mcp-server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mdqm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mdqm
+        app.kubernetes.io/component: mcp-server
+    spec:
+      serviceAccountName: mdqm
+      # The server never calls the Kubernetes API: no token in the pod.
+      automountServiceAccountToken: false
+      # runAsUser / runAsGroup / fsGroup are omitted: the platform assigns
+      # them. Every writable path is a volume and the image makes it
+      # group-writable, so neither a fixed UID nor a fixed GID is needed.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mdqm
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          # DuckDB spills relative to the working directory when TMPDIR is not
+          # honoured, and the root filesystem is read-only. /tmp is an emptyDir.
+          workingDir: /tmp
+          ports:
+            - name: http
+              containerPort: 8765
+              protocol: TCP
+          # Every non-secret setting, and nothing else: see configmap.yaml.
+          envFrom:
+            - configMapRef:
+                name: mdqm-config
+          # Credentials go reference-first: the value comes from the Secret,
+          # never from this file. `optional: true` keeps the server startable
+          # without a model endpoint; the bootstrap pipeline then fails with
+          # a precise error instead of the pod crash-looping.
+          env:
+            - name: MDQM_MODEL__API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mdqm-secrets
+                  key: MDQM_MODEL__API_KEY
+                  optional: true
+            - name: MDQM_SMTP__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mdqm-secrets
+                  key: MDQM_SMTP__PASSWORD
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            # The image writes nothing outside /data and /tmp, so the rest of
+            # the filesystem stays read-only.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              # DuckDB's own ceiling is 512MB (src/mdqm/cache/segments.py), so
+              # the process needs headroom above it, not a multiple of it.
+              cpu: "2"
+              memory: 2Gi
+          # /healthz is public on purpose (src/mdqm/server/app.py), so a probe
+          # needs no token and no Secret. It answers from the same process
+          # that serves /mcp.
+          #
+          # The startup probe absorbs a slow first start (store migrations, a
+          # large claim) without the liveness probe restarting the pod in the
+          # middle of it.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: HTTP
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: HTTP
+            # No initialDelaySeconds: the startup probe owns the slow start.
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            # SQLite metadata DB, audit chain, segment/LLM cache and the
+            # semantic layer. The only data to back up.
+            - name: data
+              mountPath: /data
+            # DuckDB spills here when a join outgrows memory. It is set through
+            # TMPDIR, because the spill directory is a constructor argument
+            # today, not a setting. Scratch, so an emptyDir is the right home:
+            # losing it costs a refetch, never data.
+            - name: tmp
+              mountPath: /tmp
+            # tokens.json (MDQM_TOKENS_FILE) plus one file per secret reference,
+            # which is what FileSecretProvider reads (MDQM_SECRETS__DIR).
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mdqm-data
+        - name: tmp
+          emptyDir: {}
+        - name: secrets
+          secret:
+            secretName: mdqm-secrets
+            # Required, not optional: the server refuses to serve without a
+            # token file, so a missing Secret must fail here, not inside the
+            # process.
+            defaultMode: 0440

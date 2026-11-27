@@ -1,0 +1,39 @@
+# The only stateful object in the deployment.
+#
+# It holds, under the paths the container uses (see configmap.yaml):
+#   /data/mdqm.sqlite   SQLite metadata DB in WAL mode + audit hash chain
+#   /data/cache         DuckDB segment cache, LLM cache, digest pages
+#                       (regenerable)
+#   /data/semantic      the semantic layer, which `mdqm review approve`
+#                       writes to
+#
+# ReadWriteOnce is enough because the Deployment runs one replica
+# (deployment.yaml explains why). No other pod shares this claim: the
+# governor and the cache live in that one process.
+#
+# `storageClassName` is pinned to a placeholder on purpose: an air-gapped
+# cluster's default class is often not the one the operator wants, and a
+# silently different class can mean a different reclaim policy after a
+# delete. Replace the value before the first apply; the PVC does not bind
+# until it names a class that exists.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mdqm-data
+  labels:
+    app.kubernetes.io/name: mdqm
+    app.kubernetes.io/component: mcp-server
+spec:
+  # CHANGE_ME: the storage class your cluster actually provisions, e.g.
+  # ocs-storagecluster-ceph-rbd or thin-csi. Pin the real name.
+  storageClassName: CHANGE_ME_STORAGE_CLASS
+  accessModes:
+    - ReadWriteOnce
+  volumeMode: Filesystem
+  resources:
+    requests:
+      # SQLite metadata + audit + a bounded segment cache (1 GiB default
+      # ceiling in src/mdqm/cache/segments.py). 10Gi leaves room for the
+      # semantic layer and years of audit; grow it by editing this file,
+      # never by adding a second replica.
+      storage: 10Gi
