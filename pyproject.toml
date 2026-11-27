@@ -106,7 +106,6 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["oracledb", "oracledb.*"]
 ignore_missing_imports = true
-ignore_missing_imports = true
 
 # Typing scope for editors and the LSP, matching what CI enforces ([tool.mypy]: strict on "src").
 # pyright is not part of scripts/check.py, so it must not report against rules this project does

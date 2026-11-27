@@ -11,7 +11,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-import pyarrow as pa
+# pyarrow ships no stubs; mypy already overrides it in pyproject, pyright needs the same note.
+import pyarrow as pa  # pyright: ignore[reportMissingTypeStubs]
 import pytest
 
 pytest.importorskip("oracledb", reason="the `oracle` extra is not installed")

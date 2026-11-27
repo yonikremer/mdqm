@@ -482,10 +482,10 @@ def test_max_bytes_stops_the_stream(adapter: OracleAdapter) -> None:
 @pytest.mark.xfail(
     reason=(
         "Unverified on this Oracle Free instance: with a 1 s call_timeout the thin driver reports "
-        "DPY-4011 (connection closed) instead of DPY-4024, so the adapter raises a DatabaseError and "
-        "the connection is gone. Either the driver needs a different timeout knob or the adapter must "
-        "map DPY-4011 to OracleTimeout -- that is a code decision, not a test detail. Recorded in "
-        "progress/A07.md as the one unproven acceptance item."
+        "DPY-4011 (connection closed) instead of DPY-4024, so the adapter raises a DatabaseError "
+        "and the connection is gone. Either the driver needs a different timeout knob or the "
+        "adapter must map DPY-4011 to OracleTimeout -- a code decision, not a test detail. "
+        "Recorded in progress/A07.md as the one unproven acceptance item."
     ),
     strict=True,
 )
