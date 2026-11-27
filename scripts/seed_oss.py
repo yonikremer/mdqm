@@ -472,7 +472,16 @@ def write_all(seed: OssSeed, out_dir: Path) -> list[Path]:
 def load_seed(seed_number: int, small: bool, world_path: Path | None) -> OssSeed:
     """A world JSON when one is given, otherwise a world built in process from the seed."""
     if world_path is not None:
-        document: dict[str, Any] = json.loads(world_path.read_text(encoding="utf-8"))
+        try:
+            text = world_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise SystemExit(f"--world {world_path}: {exc.strerror or exc}") from None
+        try:
+            document: dict[str, Any] = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f"--world {world_path}: not valid JSON at line {exc.lineno}: {exc.msg}"
+            ) from None
         return OssSeed.from_json(document)
     config = WorldConfig.small(seed=seed_number) if small else WorldConfig(seed=seed_number)
     return OssSeed.from_world(build_world(config))
