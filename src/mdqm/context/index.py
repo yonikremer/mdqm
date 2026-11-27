@@ -53,6 +53,7 @@ from pydantic import Field
 from mdqm.models import CatalogSnapshot, MDQMModel, UtcDatetime
 from mdqm.semantic.models import ApprovedJoin, Measure, SemanticLayer, TableSemantics, ValueMap
 from mdqm.semantic.text import normalize_label
+from mdqm.sql.execution import run_local
 from mdqm.store.db import Store, StoreError, check_fts5
 
 __all__ = [
@@ -77,8 +78,15 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-#: One row per indexed entity, always present (the ``LIKE`` fallback reads it).
+#: One row per indexed entity, always present (the ``LIKE`` fallback reads it). The table names are
+#: public because tests and tooling name them; every statement below spells the name out, so the SQL
+#: at each call site is one literal a reviewer can read.
 DOC_TABLE: Final[str] = "context_document"
+#: The ``LIKE`` fallback's statement, which cannot be one literal: it carries a predicate per
+#: synonym group, and the group count varies. The halves stay literals, and the assembled text goes
+#: through the chokepoint (``sql.execution.run_local``).
+_SEARCH_PREFIX: Final[str] = "SELECT doc_id, kind, ref FROM context_document WHERE "
+_SEARCH_SUFFIX: Final[str] = " ORDER BY doc_id LIMIT ?"
 #: The FTS5 index over :data:`DOC_TABLE`'s four ranked fields, created lazily when FTS5 works.
 FTS_TABLE: Final[str] = "context_document_fts"
 #: The label groups both sides expand (see :func:`_synonym_groups`).
@@ -87,26 +95,6 @@ SYNONYM_TABLE: Final[str] = "context_synonym"
 STATE_TABLE: Final[str] = "context_index_state"
 #: Questions that found nothing, for the data team.
 EMPTY_SEARCH_TABLE: Final[str] = "empty_searches"
-
-# The statements that name a table, built here once from the constants above: a call site that
-# interpolates its own SQL is unreadable to a reviewer, and a module constant makes it obvious that
-# nothing dynamic reaches the statement. Values are always bound with `?`.
-_DELETE_DOCS: Final[str] = f"DELETE FROM {DOC_TABLE}"  # noqa: S608 - module constants
-_DELETE_SYNONYMS: Final[str] = f"DELETE FROM {SYNONYM_TABLE}"  # noqa: S608 - module constants
-_DELETE_FTS: Final[str] = f"DELETE FROM {FTS_TABLE}"  # noqa: S608 - module constants
-_INSERT_DOC: Final[str] = (
-    f"INSERT INTO {DOC_TABLE} (doc_id, kind, ref, title, names, labels, body) "  # noqa: S608
-    "VALUES (?, ?, ?, ?, ?, ?, ?)"
-)
-_INSERT_FTS: Final[str] = (
-    f"INSERT INTO {FTS_TABLE} (rowid, title, names, labels, body) "  # noqa: S608
-    "VALUES (?, ?, ?, ?, ?)"
-)
-_INSERT_SYNONYM: Final[str] = f"INSERT OR IGNORE INTO {SYNONYM_TABLE} (label, grp) VALUES (?, ?)"  # noqa: S608
-_SELECT_STATE: Final[str] = f"SELECT version_hash, documents, fts5 FROM {STATE_TABLE} WHERE id = 1"  # noqa: S608
-_COUNT_DOCS: Final[str] = f"SELECT COUNT(*) FROM {DOC_TABLE}"  # noqa: S608 - module constants
-_SEARCH_PREFIX: Final[str] = f"SELECT doc_id, kind, ref FROM {DOC_TABLE} WHERE "  # noqa: S608 - module constant
-_SEARCH_SUFFIX: Final[str] = " ORDER BY doc_id LIMIT ?"
 
 #: bm25 weights for (title, names, labels, body): a name is worth more than prose, and the title
 #: more than the name it repeats, so "credit limit" ranks the measure above the table mentioning it.
@@ -123,12 +111,6 @@ MAX_LOGGED_QUERY: Final[int] = 500
 _QUOTE: Final[str] = '"'
 _STAR: Final[str] = "*"
 
-# `remove_diacritics 2` folds Latin accents; Hebrew niqqud are folded by normalize_label on both
-# sides, because unicode61 does not remove them (see the module docstring).
-_FTS_CREATE: Final[str] = (
-    f"CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE} "
-    'USING fts5(title, names, labels, body, tokenize="unicode61 remove_diacritics 2")'
-)
 #: A clock, injected so a logged search has a timestamp a test can predict without sleeping.
 Clock = Callable[[], datetime]
 
@@ -705,29 +687,31 @@ class ContextIndex:
         indexed: bool,
     ) -> None:
         """Replace every document, synonym group and FTS row, then record the version."""
-        # pi-lens-ignore: python-sql-injection
-        conn.execute(_DELETE_DOCS)
-        # pi-lens-ignore: python-sql-injection
-        conn.execute(_DELETE_SYNONYMS)
+        conn.execute("DELETE FROM context_document")
+        conn.execute("DELETE FROM context_synonym")
         if indexed:
-            # pi-lens-ignore: python-sql-injection
-            conn.execute(_DELETE_FTS)
+            conn.execute("DELETE FROM context_document_fts")
         for doc in documents:
             fields = doc.fields()
-            # pi-lens-ignore: python-sql-injection
-            cursor = conn.execute(_INSERT_DOC, (doc.doc_id, doc.kind.value, doc.ref, *fields))
+            cursor = conn.execute(
+                "INSERT INTO context_document (doc_id, kind, ref, title, names, labels, body)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (doc.doc_id, doc.kind.value, doc.ref, *fields),
+            )
             if indexed:
-                # pi-lens-ignore: python-sql-injection
-                conn.execute(_INSERT_FTS, (cursor.lastrowid, *fields))
+                conn.execute(
+                    "INSERT INTO context_document_fts (rowid, title, names, labels, body)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (cursor.lastrowid, *fields),
+                )
         for group_id, labels in groups:
-            # pi-lens-ignore: python-sql-injection
             conn.executemany(
-                _INSERT_SYNONYM,
+                "INSERT OR IGNORE INTO context_synonym (label, grp) VALUES (?, ?)",
                 [(label, group_id) for label in labels],
             )
         conn.execute(
-            f"INSERT OR REPLACE INTO {STATE_TABLE} "  # noqa: S608 - module constants
-            "(id, version_hash, documents, fts5, indexed_at) VALUES (1, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO context_index_state"
+            " (id, version_hash, documents, fts5, indexed_at) VALUES (1, ?, ?, ?, ?)",
             (
                 version_hash,
                 len(documents),
@@ -752,16 +736,21 @@ class ContextIndex:
             if not self._fts5:
                 logger.info("FTS5 unavailable: context search falls back to a LIKE scan")
         if self._fts5:
-            # pi-lens-ignore: python-sql-injection
-            conn.execute(_FTS_CREATE)
+            # `remove_diacritics 2` folds Latin accents; Hebrew niqqud are folded by normalize_label
+            # on both sides, because unicode61 does not remove them (see the module docstring).
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS context_document_fts"
+                ' USING fts5(title, names, labels, body, tokenize="unicode61 remove_diacritics 2")'
+            )
         return self._fts5
 
     def _is_current(
         self, conn: sqlite3.Connection, version_hash: str, documents: int, indexed: bool
     ) -> bool:
         """True when this exact semantic version, document count and search path were indexed."""
-        # pi-lens-ignore: python-sql-injection
-        row = conn.execute(_SELECT_STATE).fetchone()
+        row = conn.execute(
+            "SELECT version_hash, documents, fts5 FROM context_index_state WHERE id = 1"
+        ).fetchone()
         if row is None:
             return False
         return (
@@ -820,8 +809,8 @@ class ContextIndex:
         found: list[tuple[str, ...]] = []
         for term in terms:
             rows = conn.execute(
-                f"SELECT label FROM {SYNONYM_TABLE} WHERE grp IN "  # noqa: S608 - module constant
-                f"(SELECT grp FROM {SYNONYM_TABLE} WHERE label = ?) ORDER BY label",
+                "SELECT label FROM context_synonym WHERE grp IN"
+                " (SELECT grp FROM context_synonym WHERE label = ?) ORDER BY label",
                 (term,),
             ).fetchall()
             labels = tuple(str(row[0]) for row in rows)
@@ -843,8 +832,10 @@ class ContextIndex:
             f"JOIN {DOC_TABLE} AS d ON d.id = s.id "
             "ORDER BY s.score, d.doc_id LIMIT ?"
         )
-        # pi-lens-ignore: python-sql-injection
-        rows = conn.execute(sql, (_match_expression(groups), limit)).fetchall()
+        # Through the chokepoint: FTS5 needs the bm25 weights as constants in the statement, so the
+        # text is assembled from this module's own tables and already-validated finite weights. The
+        # one value-shaped argument (the MATCH expression) and the limit are bound.
+        rows = run_local(conn, sql, (_match_expression(groups), limit)).fetchall()
         return tuple(
             ContextHit(
                 doc_id=str(row["doc_id"]),
@@ -874,10 +865,11 @@ class ContextIndex:
                 )
                 params.extend([pattern, pattern, pattern, pattern])
             clauses.append("(" + " OR ".join(alternatives) + ")")
-        # Every clause is a fixed predicate with a `?`; only the number of clauses varies.
+        # Every clause is a fixed predicate with a `?`; only the number of clauses varies, so the
+        # text is this module's own fragments (kept as literals in _SEARCH_PREFIX/_SEARCH_SUFFIX)
+        # and every pattern, plus the limit, is bound.
         statement = _SEARCH_PREFIX + " AND ".join(clauses) + _SEARCH_SUFFIX
-        # pi-lens-ignore: python-sql-injection
-        rows = conn.execute(statement, [*params, limit]).fetchall()
+        rows = run_local(conn, statement, [*params, limit]).fetchall()
         return tuple(
             ContextHit(
                 doc_id=str(row["doc_id"]), kind=DocKind(str(row["kind"])), ref=str(row["ref"])
@@ -900,8 +892,8 @@ class ContextIndex:
         documents = self._document_count()
         with self._store.writing() as conn:
             conn.execute(
-                f"INSERT INTO {EMPTY_SEARCH_TABLE} "  # noqa: S608 - module constant
-                "(searched_at, query, user_id, documents) VALUES (?, ?, ?, ?)",
+                "INSERT INTO empty_searches"
+                " (searched_at, query, user_id, documents) VALUES (?, ?, ?, ?)",
                 (self._now().isoformat(), query, user_id, documents),
             )
         logger.info(
@@ -913,8 +905,7 @@ class ContextIndex:
         conn = self._store.connect()
         if not _has_table(conn, DOC_TABLE):
             return 0
-        # pi-lens-ignore: python-sql-injection
-        row = conn.execute(_COUNT_DOCS).fetchone()
+        row = conn.execute("SELECT COUNT(*) FROM context_document").fetchone()
         return int(row[0])
 
     # -- what the data team reads ---------------------------------------------------------
@@ -925,8 +916,8 @@ class ContextIndex:
             raise ContextIndexError(f"limit must be at least 1, got {limit}")
         conn = self._store.connect()
         rows = conn.execute(
-            f"SELECT id, searched_at, query, user_id, documents "  # noqa: S608 - module constant
-            f"FROM {EMPTY_SEARCH_TABLE} ORDER BY id DESC LIMIT ?",
+            "SELECT id, searched_at, query, user_id, documents"
+            " FROM empty_searches ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return tuple(

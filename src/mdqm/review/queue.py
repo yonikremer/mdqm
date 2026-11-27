@@ -32,7 +32,7 @@ import tempfile
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final
+from typing import Any
 
 from pydantic import Field
 from ruamel.yaml import YAML
@@ -58,11 +58,9 @@ __all__ = [
     "proposal_id",
 ]
 
-#: The table holding every proposal and every decision.
+#: The table holding every proposal and every decision. Public because tests and tooling name it;
+#: every statement below spells the name out, so the SQL at each call site is a literal.
 PROPOSALS_TABLE: str = "review_proposals"
-
-# The statements that name a table, built once from the constant above; values are bound.
-_SELECT_PROPOSAL: Final[str] = f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?"  # noqa: S608 - module constant
 
 #: A section name is a file stem, never a path: the same rule as ``semantic.writer``.
 _ALLOWED_SECTION_CHARS: frozenset[str] = frozenset(
@@ -269,10 +267,11 @@ class ReviewQueue:
 
     def get(self, proposal: str) -> Proposal:
         """The proposal with this id, or :class:`ReviewError` if no such row exists."""
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, values bound.
-        # pi-lens-ignore: python-sql-injection
-        row = self._store.connect().execute(_SELECT_PROPOSAL, (proposal,)).fetchone()
+        row = (
+            self._store.connect()
+            .execute("SELECT * FROM review_proposals WHERE id = ?", (proposal,))
+            .fetchone()
+        )
         if row is None:
             raise ReviewError(f"no proposal with id {proposal!r}")
         return _row_to_proposal(row)
@@ -282,9 +281,7 @@ class ReviewQueue:
         rows = (
             self._store.connect()
             .execute(
-                # S608: the table name is a module constant; the status value is bound.
-                f"SELECT * FROM {PROPOSALS_TABLE} WHERE status = ?"  # noqa: S608
-                " ORDER BY confidence DESC, id ASC",
+                "SELECT * FROM review_proposals WHERE status = ? ORDER BY confidence DESC, id ASC",
                 (ProposalStatus.PENDING.value,),
             )
             .fetchall()
@@ -296,8 +293,7 @@ class ReviewQueue:
         rows = (
             self._store.connect()
             .execute(
-                f"SELECT * FROM {PROPOSALS_TABLE} WHERE status != ?"  # noqa: S608
-                " ORDER BY decided_at ASC, id ASC",
+                "SELECT * FROM review_proposals WHERE status != ? ORDER BY decided_at ASC, id ASC",
                 (ProposalStatus.PENDING.value,),
             )
             .fetchall()
@@ -468,16 +464,17 @@ class ReviewQueue:
         return now.astimezone(UTC)
 
     def _find(self, proposal: str) -> Proposal | None:
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, values bound.
-        # pi-lens-ignore: python-sql-injection
-        row = self._store.connect().execute(_SELECT_PROPOSAL, (proposal,)).fetchone()
+        row = (
+            self._store.connect()
+            .execute("SELECT * FROM review_proposals WHERE id = ?", (proposal,))
+            .fetchone()
+        )
         return None if row is None else _row_to_proposal(row)
 
     def _insert(self, proposal: Proposal) -> None:
         with self._store.writing() as conn:
             conn.execute(
-                f"INSERT INTO {PROPOSALS_TABLE} (id, kind, section, 'key', field, collection,"  # noqa: S608
+                "INSERT INTO review_proposals (id, kind, section, 'key', field, collection,"
                 " patch, evidence, evidence_hash, confidence, status, proposed_by, proposed_at,"
                 " decided_by, decided_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -503,7 +500,7 @@ class ReviewQueue:
     def _replace(self, proposal: Proposal) -> None:
         with self._store.writing() as conn:
             conn.execute(
-                f"UPDATE {PROPOSALS_TABLE} SET evidence = ?, evidence_hash = ?, confidence = ?,"  # noqa: S608
+                "UPDATE review_proposals SET evidence = ?, evidence_hash = ?, confidence = ?,"
                 " status = ?, proposed_by = ?, proposed_at = ?, decided_by = ?, decided_at = ?"
                 " WHERE id = ?",
                 (

@@ -48,7 +48,7 @@ import json
 import logging
 import re
 import sqlite3
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, cast
 
@@ -72,6 +72,7 @@ from mdqm.sql.exec_ts import (
     rewrite_es_query,
     rewrite_sql,
 )
+from mdqm.sql.execution import run_local
 from mdqm.store.audit import _SECRET_SHAPES, DEFAULT_RETENTION_DAYS
 from mdqm.store.db import Store, StoreError
 
@@ -92,7 +93,8 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-#: The history table (see ``0003_history.sql``). A constant because the SQL below names it.
+#: The history table (see ``0003_history.sql``). Public because tests and tooling name it; every
+#: statement below spells the name out, so the SQL at each call site is a literal.
 HISTORY_TABLE: Final[str] = "query_history"
 #: The lazily created FTS5 index over ``query_history.search_text``.
 HISTORY_FTS_TABLE: Final[str] = "query_history_fts"
@@ -105,22 +107,11 @@ Clock = Callable[[], datetime]
 
 _MAX_TOKEN: Final[int] = 200
 
-# FTS5 index: `remove_diacritics 2` so Hebrew niqqud and Latin accents fold (the text is also
-# normalised before it is stored, so the LIKE fallback matches the same way).
-_FTS_CREATE: Final[str] = (
-    f"CREATE VIRTUAL TABLE IF NOT EXISTS {HISTORY_FTS_TABLE} "
-    'USING fts5(search_text, tokenize="unicode61 remove_diacritics 2")'
-)
-# Backfill, so a row written while FTS5 was unavailable is still findable once it is available.
-_FTS_BACKFILL: Final[str] = (
-    f"INSERT INTO {HISTORY_FTS_TABLE} (rowid, search_text) "  # noqa: S608 - module constants
-    f"SELECT id, search_text FROM {HISTORY_TABLE} "
-    f"WHERE id NOT IN (SELECT rowid FROM {HISTORY_FTS_TABLE})"
-)
-_FTS_PRUNE: Final[str] = (
-    f"DELETE FROM {HISTORY_FTS_TABLE} "  # noqa: S608 - module constants
-    f"WHERE rowid NOT IN (SELECT id FROM {HISTORY_TABLE})"
-)
+# The LIKE fallback's statement is the one that cannot be one literal: it carries a predicate per
+# search word, and the count varies. The halves stay literals (and out of the concatenation, so no
+# SQL text is assembled from string literals) and the whole thing goes through the chokepoint.
+_LIKE_SELECT: Final[str] = "SELECT * FROM query_history WHERE "
+_LIKE_SUFFIX: Final[str] = " AND COALESCE(?, user_id) = user_id ORDER BY id DESC LIMIT ?"
 
 #: FTS5's string delimiter: a word in a MATCH query is quoted so it is never read as an operator.
 _FTS_QUOTE: Final[str] = '"'
@@ -323,7 +314,7 @@ class HistoryStore:
         with self._store.writing() as conn:
             indexed = self._ensure_fts(conn)
             cursor = conn.execute(
-                f"INSERT INTO {HISTORY_TABLE} (created_at, user_id, tool, mode, exec_ts,"  # noqa: S608
+                "INSERT INTO query_history (created_at, user_id, tool, mode, exec_ts,"
                 " spec_json, original_sql, frozen_sql, dialect, fragments, applied_fixes,"
                 " plan_json, cache_json, duration_ms, error_json, redactions, search_text)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -349,10 +340,8 @@ class HistoryStore:
             )
             run_id = int(cursor.lastrowid or 0)
             if indexed:
-                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-                # Module-constant SQL, values bound.
                 conn.execute(
-                    f"INSERT INTO {HISTORY_FTS_TABLE} (rowid, search_text) VALUES (?, ?)",  # noqa: S608
+                    "INSERT INTO query_history_fts (rowid, search_text) VALUES (?, ?)",
                     (run_id, search_text),
                 )
         stored = self.get(run_id)
@@ -388,14 +377,9 @@ class HistoryStore:
         Raises:
             HistoryError: no such run, or the row no longer parses as a history record.
         """
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, values bound.
         row = (
             self._store.connect()
-            .execute(
-                f"SELECT * FROM {HISTORY_TABLE} WHERE id = ?",  # noqa: S608 - module constant
-                (run_id,),
-            )
+            .execute("SELECT * FROM query_history WHERE id = ?", (run_id,))
             .fetchone()
         )
         if row is None:
@@ -404,16 +388,16 @@ class HistoryStore:
 
     def recent(self, *, user_id: str | None = None, limit: int = 20) -> tuple[HistoryRecord, ...]:
         """The newest runs first, optionally only one user's."""
-        sql = f"SELECT * FROM {HISTORY_TABLE}"  # noqa: S608 - module constant
-        params: list[object] = []
-        if user_id is not None:
-            sql += " WHERE user_id = ?"
-            params.append(user_id)
-        sql += " ORDER BY id DESC LIMIT ?"
-        params.append(_limit(limit))
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Literal fragments over a module-constant table name; every value is bound.
-        return tuple(_to_record(row) for row in self._store.connect().execute(sql, params))
+        # One statement, not a statement with an appended clause: a NULL user makes the predicate
+        # true for every row, so "every user" needs no second SQL text.
+        return tuple(
+            _to_record(row)
+            for row in self._store.connect().execute(
+                "SELECT * FROM query_history WHERE COALESCE(?, user_id) = user_id"
+                " ORDER BY id DESC LIMIT ?",
+                (user_id, _limit(limit)),
+            )
+        )
 
     def search(
         self, text: str, *, user_id: str | None = None, limit: int = 20
@@ -433,27 +417,23 @@ class HistoryStore:
                 self._ensure_fts(writer)
         conn = self._store.connect()
         if self._fts:
-            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-            # Module-constant SQL and literal fragments; every value is bound.
             rows = conn.execute(
-                f"SELECT * FROM {HISTORY_TABLE} WHERE id IN (SELECT rowid FROM "  # noqa: S608
-                f"{HISTORY_FTS_TABLE} WHERE {HISTORY_FTS_TABLE} MATCH ?)"
-                + _user_clause(user_id)
-                + " ORDER BY id DESC LIMIT ?",
-                [_match_query(terms), *_user_params(user_id), _limit(limit)],
+                "SELECT * FROM query_history WHERE id IN (SELECT rowid FROM query_history_fts"
+                " WHERE query_history_fts MATCH ?) AND COALESCE(?, user_id) = user_id"
+                " ORDER BY id DESC LIMIT ?",
+                (_match_query(terms), user_id, _limit(limit)),
             ).fetchall()
         else:
             clause = " AND ".join("search_text LIKE ? ESCAPE '\\'" for _ in terms)
-            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-            # Module-constant SQL and literal clauses; every term is bound.
-            rows = conn.execute(
-                f"SELECT * FROM {HISTORY_TABLE} WHERE "  # noqa: S608 - module constant
-                + clause
-                + _user_clause(user_id)
-                + " ORDER BY id DESC LIMIT ?",
+            # Through the chokepoint: one LIKE predicate per search word, joined -- the only way to
+            # keep "every word must match" with any number of words. Every word and the user are
+            # bound; no word reaches the SQL text.
+            rows = run_local(
+                conn,
+                _LIKE_SELECT + clause + _LIKE_SUFFIX,
                 [
                     *(f"%{_like_escape(term)}%" for term in terms),
-                    *_user_params(user_id),
+                    user_id,
                     _limit(limit),
                 ],
             ).fetchall()
@@ -461,15 +441,7 @@ class HistoryStore:
 
     def count(self) -> int:
         """How many runs the history holds."""
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, no values.
-        row = (
-            self._store.connect()
-            .execute(
-                f"SELECT COUNT(*) FROM {HISTORY_TABLE}"  # noqa: S608 - module constant
-            )
-            .fetchone()
-        )
+        row = self._store.connect().execute("SELECT COUNT(*) FROM query_history").fetchone()
         return int(row[0])
 
     # -- re-running ----------------------------------------------------------------------
@@ -532,22 +504,16 @@ class HistoryStore:
             self._ensure_fts(conn)
             expired = [
                 int(row["id"])
-                for row in conn.execute(
-                    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-                    # Module-constant SQL, no values.
-                    f"SELECT id, created_at FROM {HISTORY_TABLE}"  # noqa: S608 - module constant
-                ).fetchall()
+                for row in conn.execute("SELECT id, created_at FROM query_history").fetchall()
                 if _parse_ts(str(row["created_at"])) < cutoff
             ]
-            for chunk in _chunks(expired):
-                marks = ",".join("?" * len(chunk))
-                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-                # The placeholders are generated per chunk; every id is bound.
-                conn.execute(
-                    f"DELETE FROM {HISTORY_TABLE} WHERE id IN ({marks})",  # noqa: S608 - ints
-                    chunk,
-                )
-            conn.execute(_FTS_PRUNE)
+            # One bound id per statement: an ``IN (...)`` list would need a generated number of
+            # placeholders, and a purge is rare enough that the extra round trips do not matter.
+            for run_id in expired:
+                conn.execute("DELETE FROM query_history WHERE id = ?", (run_id,))
+            conn.execute(
+                "DELETE FROM query_history_fts WHERE rowid NOT IN (SELECT id FROM query_history)"
+            )
             kept = _count(conn)
         if expired:
             logger.info(
@@ -571,8 +537,19 @@ class HistoryStore:
                 logger.info("FTS5 unavailable: history search falls back to a LIKE scan")
                 self._fts = False
             else:
-                conn.execute(_FTS_CREATE)
-                conn.execute(_FTS_BACKFILL)
+                # `remove_diacritics 2` so Hebrew niqqud and Latin accents fold (the text is also
+                # normalised before it is stored, so the LIKE fallback matches the same way).
+                conn.execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS query_history_fts "
+                    'USING fts5(search_text, tokenize="unicode61 remove_diacritics 2")'
+                )
+                # Backfill, so a row written while FTS5 was unavailable is still findable once it
+                # is available.
+                conn.execute(
+                    "INSERT INTO query_history_fts (rowid, search_text)"
+                    " SELECT id, search_text FROM query_history"
+                    " WHERE id NOT IN (SELECT rowid FROM query_history_fts)"
+                )
                 self._fts = True
         return self._fts
 
@@ -801,32 +778,14 @@ def _parse_ts(text: str) -> datetime:
 
 
 def _count(conn: sqlite3.Connection) -> int:
-    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-    # Module-constant SQL, no values.
-    row = conn.execute(
-        f"SELECT COUNT(*) FROM {HISTORY_TABLE}"  # noqa: S608 - module constant
-    ).fetchone()
+    row = conn.execute("SELECT COUNT(*) FROM query_history").fetchone()
     return int(row[0])
-
-
-def _chunks(ids: Sequence[int], size: int = 500) -> Iterator[list[int]]:
-    """Split ids into lists SQLite can bind in one statement."""
-    for start in range(0, len(ids), size):
-        yield list(ids[start : start + size])
 
 
 def _limit(limit: int) -> int:
     if limit < 1:
         raise HistoryError(f"limit must be at least 1, got {limit}")
     return limit
-
-
-def _user_clause(user_id: str | None) -> str:
-    return " AND user_id = ?" if user_id is not None else ""
-
-
-def _user_params(user_id: str | None) -> list[object]:
-    return [] if user_id is None else [user_id]
 
 
 def _match_query(terms: Sequence[str]) -> str:

@@ -44,6 +44,7 @@ from pydantic import Field, model_validator
 from mdqm.errors import ErrorCode
 from mdqm.models import MDQMModel, UtcDatetime
 from mdqm.models.errors import ErrorResponse
+from mdqm.sql.execution import run_local
 from mdqm.store.db import Store, StoreError
 
 __all__ = [
@@ -64,7 +65,8 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-#: The audit table. Named as a constant because the SQL below interpolates it (no caller input).
+#: The audit table (see ``0002_audit.sql``). Public because tests and tooling name it; every
+#: statement below spells the name out, so the SQL at each call site is a literal.
 AUDIT_LOG_TABLE: Final[str] = "audit_log"
 #: Holds the ``(id, hash)`` of the last row a purge removed, so the chain resumes there.
 AUDIT_CHECKPOINT_TABLE: Final[str] = "audit_checkpoint"
@@ -334,8 +336,9 @@ class AuditLog:
         )
         digest = _digest(record.payload())
         conn.execute(
-            # S608: the table name is a module constant, not caller input; values are bound.
-            f"INSERT INTO {AUDIT_LOG_TABLE} (id, ts, user_id, tool, version_hash, sources,"  # noqa: S608
+            # The table name is written out here: a lint rule cannot tell a constant's value from a
+            # caller's, and spelling it keeps the statement reviewable as one literal.
+            "INSERT INTO audit_log (id, ts, user_id, tool, version_hash, sources,"
             " row_count, blocked_attempts, outcome, error_code, prev_hash, hash)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -362,12 +365,7 @@ class AuditLog:
         Falls back to the checkpoint when a purge emptied the table, so the chain continues across
         a legal prefix deletion instead of restarting at the genesis hash.
         """
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, values bound.
-        row = conn.execute(
-            # S608: constant table name.
-            f"SELECT id, hash FROM {AUDIT_LOG_TABLE} ORDER BY id DESC LIMIT 1"  # noqa: S608
-        ).fetchone()
+        row = conn.execute("SELECT id, hash FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
         if row is not None:
             return str(row["hash"]), int(row["id"]) + 1
         checkpoint = self._checkpoint(conn)
@@ -390,42 +388,25 @@ class AuditLog:
         self, *, limit: int | None = None, since_id: int | None = None
     ) -> tuple[AuditRecord, ...]:
         """Committed rows in id order, optionally after ``since_id`` and capped at ``limit``."""
-        sql = (
-            f"SELECT * FROM {AUDIT_LOG_TABLE}"  # noqa: S608 - constant table name
-            + (" WHERE id > ?" if since_id is not None else "")
-            + " ORDER BY id"
-            + (" LIMIT ?" if limit is not None else "")
+        # One statement instead of four across SQL fragments: SQLite reads a negative LIMIT as "no
+        # limit", so an absent ``limit`` needs no second SQL text and no concatenation.
+        return tuple(
+            _to_record(row)
+            for row in self._store.connect().execute(
+                "SELECT * FROM audit_log WHERE id > COALESCE(?, 0) ORDER BY id LIMIT COALESCE(?, -1)",
+                (since_id, limit),
+            )
         )
-        params: list[object] = []
-        if since_id is not None:
-            params.append(since_id)
-        if limit is not None:
-            params.append(limit)
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Literal fragments over a module-constant table name; both values are bound.
-        # pi-lens-ignore: python-sql-injection
-        return tuple(_to_record(row) for row in self._store.connect().execute(sql, params))
 
     def count(self) -> int:
         """How many audit rows the log holds."""
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, no values.
-        row = (
-            self._store.connect()
-            .execute(
-                f"SELECT COUNT(*) FROM {AUDIT_LOG_TABLE}"  # noqa: S608 - constant table name
-            )
-            .fetchone()
-        )
+        row = self._store.connect().execute("SELECT COUNT(*) FROM audit_log").fetchone()
         return int(row[0])
 
     def _checkpoint(self, conn: sqlite3.Connection) -> tuple[int, str] | None:
         """``(last_purged_id, last_purged_hash)``, or ``None`` when nothing was ever purged."""
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, no values.
         row = conn.execute(
-            # S608: constant table name.
-            f"SELECT last_purged_id, last_purged_hash FROM {AUDIT_CHECKPOINT_TABLE} WHERE id = 1"  # noqa: S608
+            "SELECT last_purged_id, last_purged_hash FROM audit_checkpoint WHERE id = 1"
         ).fetchone()
         if row is None:
             return None
@@ -447,11 +428,7 @@ class AuditLog:
             expected_prev, expected_id = GENESIS_HASH, 1
         else:
             expected_prev, expected_id = checkpoint[1], checkpoint[0] + 1
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, no values.
-        rows = conn.execute(
-            f"SELECT * FROM {AUDIT_LOG_TABLE} ORDER BY id"  # noqa: S608 - constant table name
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM audit_log ORDER BY id").fetchall()
         checked = 0
         for row in rows:
             record = _to_record(row)
@@ -537,12 +514,7 @@ class AuditLog:
             days=self.retention_days
         )
         with self._store.writing() as conn:
-            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-            # Module-constant SQL, no values.
-            stale = conn.execute(
-                # S608: constant table name.
-                f"SELECT id, ts, hash FROM {AUDIT_LOG_TABLE} ORDER BY id"  # noqa: S608
-            ).fetchall()
+            stale = conn.execute("SELECT id, ts, hash FROM audit_log ORDER BY id").fetchall()
             purge_upto: int | None = None
             checkpoint_hash = GENESIS_HASH
             for row in stale:
@@ -554,20 +526,17 @@ class AuditLog:
                 return self._no_op(conn)
             trigger = self._drop_delete_trigger(conn)
             try:
-                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-                # Module-constant SQL; the only value is the integer id, bound.
                 conn.execute(
-                    # S608: constant table name; the bound value is an integer id.
-                    f"DELETE FROM {AUDIT_LOG_TABLE} WHERE id <= ?",  # noqa: S608
+                    "DELETE FROM audit_log WHERE id <= ?",  # the bound value is an integer id
                     (purge_upto,),
                 )
             finally:
                 if trigger is not None:
-                    # pi-lens-ignore: python-sql-injection
-                    conn.execute(trigger)
+                    # Through the chokepoint: the text is the trigger read back from SQLite's own
+                    # ``sqlite_master`` above, not anything a caller supplied.
+                    run_local(conn, trigger, ())
             conn.execute(
-                # S608: constant table name.
-                f"INSERT INTO {AUDIT_CHECKPOINT_TABLE}"  # noqa: S608
+                "INSERT INTO audit_checkpoint"
                 " (id, last_purged_id, last_purged_hash, purged_at, purged_rows)"
                 " VALUES (1, ?, ?, ?, ?)"
                 " ON CONFLICT(id) DO UPDATE SET last_purged_id = excluded.last_purged_id,"
@@ -606,11 +575,7 @@ class AuditLog:
 
     @staticmethod
     def _count(conn: sqlite3.Connection) -> int:
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, no values.
-        row = conn.execute(
-            f"SELECT COUNT(*) FROM {AUDIT_LOG_TABLE}"  # noqa: S608 - constant table name
-        ).fetchone()
+        row = conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()
         return int(row[0])
 
     @staticmethod

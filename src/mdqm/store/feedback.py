@@ -46,7 +46,8 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-#: The table (see ``0007_feedback.sql``). A constant because the SQL below names it.
+#: The table (see ``0007_feedback.sql``). Public because tests and tooling name it; every
+#: statement below spells the name out, so the SQL at each call site is a literal.
 FEEDBACK_TABLE: Final[str] = "query_feedback"
 
 #: Longest ``corrected`` sentence kept. A rating is one line, not a report; the rest is dropped.
@@ -116,7 +117,7 @@ class FeedbackStore:
         created_at = self._now()
         with self._store.writing() as conn:
             cursor = conn.execute(
-                f"INSERT INTO {FEEDBACK_TABLE}"  # noqa: S608 - module constant
+                "INSERT INTO query_feedback"
                 " (created_at, user_id, query_id, run_id, ok, corrected) VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     created_at.isoformat(),
@@ -144,27 +145,22 @@ class FeedbackStore:
 
     def recent(self, *, user_id: str | None = None, limit: int = 20) -> tuple[FeedbackRecord, ...]:
         """The newest ratings first, optionally only one caller's: the queue's read path."""
-        sql = f"SELECT * FROM {FEEDBACK_TABLE}"  # noqa: S608 - module constant
-        params: list[object] = []
-        if user_id is not None:
-            sql += " WHERE user_id = ?"
-            params.append(user_id)
-        sql += " ORDER BY id DESC LIMIT ?"
-        params.append(_bounded(limit))
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, values bound.
-        rows = self._store.connect().execute(sql, params).fetchall()
+        # One statement, not a statement and an appended clause: a NULL ``user_id`` makes the
+        # predicate true for every row, so "every user" needs no second SQL text.
+        rows = (
+            self._store.connect()
+            .execute(
+                "SELECT * FROM query_feedback WHERE COALESCE(?, user_id) = user_id"
+                " ORDER BY id DESC LIMIT ?",
+                (user_id, _bounded(limit)),
+            )
+            .fetchall()
+        )
         return tuple(_to_record(row) for row in rows)
 
     def count(self) -> int:
         """How many ratings the queue holds."""
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, no values.
-        row = (
-            self._store.connect()
-            .execute(f"SELECT COUNT(*) FROM {FEEDBACK_TABLE}")  # noqa: S608 - module constant
-            .fetchone()
-        )
+        row = self._store.connect().execute("SELECT COUNT(*) FROM query_feedback").fetchone()
         return int(row[0])
 
     def _now(self) -> datetime:

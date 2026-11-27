@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Final
 
 from mdqm.models.capabilities import Capability
+from mdqm.sql.execution import run_local
 
 __all__ = [
     "FTS5_PROBE_TABLE",
@@ -74,40 +75,9 @@ FTS5_PROBE_TABLE: Final[str] = "mdqm_fts5_probe"
 #: Busy timeout for cross-process writers; the in-process writer lock queues our own threads.
 _BUSY_TIMEOUT_MS: Final[int] = 5000
 
-#: A PRAGMA cannot bind a value, so its one substitution happens here, at import time.
-_PRAGMA_BUSY_TIMEOUT: Final[str] = f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}"
-
 _MIGRATION_FILE: Final[re.Pattern[str]] = re.compile(
     r"^(?P<version>\d{4})_(?P<name>[a-z0-9_]+)\.sql$"
 )
-
-_CREATE_MIGRATION_TABLE: Final[str] = (
-    "CREATE TABLE IF NOT EXISTS schema_migrations ("
-    " version INTEGER PRIMARY KEY,"
-    " name TEXT NOT NULL,"
-    " applied_at TEXT NOT NULL)"
-)
-
-#: One row per applied migration, keyed by version; values are bound by the caller.
-# S608: the only substitution is the module constant above, never caller input.
-_INSERT_MIGRATION: Final[str] = (
-    f"INSERT INTO {MIGRATION_TABLE} (version, name, applied_at) VALUES (?, ?, ?)"  # noqa: S608
-)
-
-# S608: same reason.
-_SELECT_MIGRATION_VERSIONS: Final[str] = f"SELECT version FROM {MIGRATION_TABLE} ORDER BY version"  # noqa: S608
-
-
-# FTS5 probe statements. The only substitution anywhere in this module is the probe table's own
-# constant name (S608 is about caller input, and this module takes none into SQL).
-def _fts5_sql(template: str) -> str:
-    return template.format(table=FTS5_PROBE_TABLE)
-
-
-_FTS5_CREATE: Final[str] = _fts5_sql("CREATE VIRTUAL TABLE temp.{table} USING fts5(body)")
-_FTS5_INSERT: Final[str] = _fts5_sql("INSERT INTO temp.{table}(body) VALUES (?)")
-_FTS5_SEARCH: Final[str] = _fts5_sql("SELECT body FROM temp.{table} WHERE {table} MATCH ?")
-_FTS5_DROP: Final[str] = _fts5_sql("DROP TABLE IF EXISTS temp.{table}")
 
 # Hebrew and English both matter (AGENTS.md section 5), so the probe indexes one of each: a build
 # whose SQLite lacks the unicode61 tokenizer fails here instead of in the Context Pack.
@@ -138,9 +108,9 @@ def _new_connection(target: str) -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode=WAL")  # WAL on a file DB; ":memory:" stays "memory"
         conn.execute("PRAGMA synchronous=NORMAL")  # the pairing recommended for WAL
         conn.execute("PRAGMA foreign_keys=ON")
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # A PRAGMA cannot bind a value; the substituted value is a module constant.
-        conn.execute(_PRAGMA_BUSY_TIMEOUT)
+        # A PRAGMA cannot bind a value, so 5000 is written out; it must stay equal to
+        # _BUSY_TIMEOUT_MS (the connect() timeout above).
+        conn.execute("PRAGMA busy_timeout=5000")
     except sqlite3.Error:
         conn.close()
         raise
@@ -347,7 +317,12 @@ class Store:
         with self._write_lock:
             conn = self.connect()
             with self._transaction() as tx:
-                tx.execute(_CREATE_MIGRATION_TABLE)
+                tx.execute(
+                    "CREATE TABLE IF NOT EXISTS schema_migrations ("
+                    " version INTEGER PRIMARY KEY,"
+                    " name TEXT NOT NULL,"
+                    " applied_at TEXT NOT NULL)"
+                )
             applied = self.applied_versions()
             current = max(applied, default=0)
             if current > self.target_version:
@@ -372,11 +347,14 @@ class Store:
         try:
             with self._transaction() as tx:
                 for statement in migration.statements:
-                    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-                    # The statements come from this package's own migration files, not a caller.
-                    tx.execute(statement)
+                    # Through the chokepoint: the text comes from this package's own migration
+                    # files, and the audit trail for dynamic SQL is `sql.execution.run_local`.
+                    # shortcut: `params` must be given as () -- run_local's None default reaches
+                    # sqlite3 as a parameter list and raises ProgrammingError; upgrade when
+                    # sql.execution.run_local normalises None to ().
+                    run_local(tx, statement, ())
                 tx.execute(
-                    _INSERT_MIGRATION,
+                    "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
                     (migration.version, migration.name, datetime.now(UTC).isoformat()),
                 )
         except sqlite3.Error as exc:
@@ -390,9 +368,8 @@ class Store:
         conn = self.connect()
         if not self._has_migration_table(conn):
             return ()
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-        # Module-constant SQL, values bound.
-        rows = conn.execute(_SELECT_MIGRATION_VERSIONS).fetchall()
+        # literal statement, the table name spelled out.
+        rows = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
         return tuple(int(row["version"]) for row in rows)
 
     def schema_version(self) -> int:
@@ -452,10 +429,12 @@ def check_fts5(conn: sqlite3.Connection | None = None) -> Fts5Status:
     own = conn is None
     target = sqlite3.connect(":memory:") if conn is None else conn
     try:
-        target.execute(_FTS5_CREATE)
+        target.execute("CREATE VIRTUAL TABLE temp.mdqm_fts5_probe USING fts5(body)")
         for row in _FTS5_ROWS:
-            target.execute(_FTS5_INSERT, (row,))
-        hits = target.execute(_FTS5_SEARCH, ("credit",)).fetchall()
+            target.execute("INSERT INTO temp.mdqm_fts5_probe(body) VALUES (?)", (row,))
+        hits = target.execute(
+            "SELECT body FROM temp.mdqm_fts5_probe WHERE mdqm_fts5_probe MATCH ?", ("credit",)
+        ).fetchall()
         if len(hits) != 1:
             return _fts5_missing(
                 RuntimeError(f"an FTS5 search for 'credit' returned {len(hits)} rows, expected 1")
@@ -466,7 +445,7 @@ def check_fts5(conn: sqlite3.Connection | None = None) -> Fts5Status:
     finally:
         if not own:
             try:
-                target.execute(_FTS5_DROP)
+                target.execute("DROP TABLE IF EXISTS temp.mdqm_fts5_probe")
             except sqlite3.Error:  # the create may have failed: nothing to drop
                 logger.debug("dropping the FTS5 probe table failed", exc_info=True)
         else:
