@@ -87,6 +87,15 @@ DOC_TABLE: Final[str] = "context_document"
 #: through the chokepoint (``sql.execution.run_local``).
 _SEARCH_PREFIX: Final[str] = "SELECT doc_id, kind, ref FROM context_document WHERE "
 _SEARCH_SUFFIX: Final[str] = " ORDER BY doc_id LIMIT ?"
+#: The bm25 query, split around the weights: FTS5 needs them as constants in the statement (they
+#: cannot be bound), and they are rendered from already-validated finite numbers, so the halves stay
+#: literals and only the weights vary.
+_FTS_HITS_HEAD: Final[str] = "SELECT d.doc_id, d.kind, d.ref, s.score FROM (SELECT rowid AS id, "
+_FTS_HITS_TAIL: Final[str] = (
+    " AS score FROM context_document_fts WHERE context_document_fts MATCH ?) AS s"
+    " JOIN context_document AS d ON d.id = s.id"
+    " ORDER BY s.score, d.doc_id LIMIT ?"
+)
 #: The FTS5 index over :data:`DOC_TABLE`'s four ranked fields, created lazily when FTS5 works.
 FTS_TABLE: Final[str] = "context_document_fts"
 #: The label groups both sides expand (see :func:`_synonym_groups`).
@@ -825,13 +834,7 @@ class ContextIndex:
         limit: int,
     ) -> tuple[ContextHit, ...]:
         """bm25-ranked hits: ranked by the FTS table, joined to the documents for their identity."""
-        sql = (
-            f"SELECT d.doc_id, d.kind, d.ref, s.score FROM ("  # noqa: S608 - module constants
-            f"SELECT rowid AS id, {self._bm25()} AS score FROM {FTS_TABLE} "
-            f"WHERE {FTS_TABLE} MATCH ?) AS s "
-            f"JOIN {DOC_TABLE} AS d ON d.id = s.id "
-            "ORDER BY s.score, d.doc_id LIMIT ?"
-        )
+        sql = _FTS_HITS_HEAD + self._bm25() + _FTS_HITS_TAIL
         # Through the chokepoint: FTS5 needs the bm25 weights as constants in the statement, so the
         # text is assembled from this module's own tables and already-validated finite weights. The
         # one value-shaped argument (the MATCH expression) and the limit are bound.
