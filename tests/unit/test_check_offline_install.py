@@ -70,6 +70,186 @@ def test_requirement_name(offline: ModuleType, requirement: str, expected: str) 
     assert offline.requirement_name(requirement) == expected
 
 
+# --- B1: the build backend is a dependency of the build -------------------------------
+
+
+def test_the_build_backend_is_in_the_closure(offline: ModuleType) -> None:
+    """`pip install .[pg]` builds this project, so the build backend has to be staged too.
+
+    The reviewer's reproduction: `pip install --no-index --find-links /wheelhouse ".[pg]"` ->
+    "ERROR: Could not find a version that satisfies the requirement hatchling". A wheelhouse check
+    that does not look for `hatchling` reports success for a build that cannot succeed.
+    """
+    names = {
+        offline.canonical(offline.requirement_name(item)) for item in offline.runtime_requirements()
+    }
+
+    assert {"hatchling", "mcp", "psycopg"} <= names
+    assert offline.canonical("mdqm") not in names, "the project cannot build itself"
+
+
+def test_build_requirements_come_from_build_system(offline: ModuleType, tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "demo"\ndependencies = ["duckdb"]\n'
+        '[build-system]\nrequires = ["hatchling", "demo"]\n',
+        encoding="utf-8",
+    )
+
+    # The self-reference is dropped; every other backend requirement is kept.
+    assert offline.build_requirements(pyproject) == ["hatchling"]
+    assert offline.runtime_requirements(pyproject, extras=()) == ["duckdb", "hatchling"]
+
+
+def test_missing_hatchling_is_reported_as_missing(offline: ModuleType, tmp_path: Path) -> None:
+    """The wheelhouse path must fail on it, not print "offline install check passed"."""
+    (tmp_path / "mcp-2.0.0-py3-none-any.whl").write_text("", encoding="utf-8")
+    staged = offline.scan_wheelhouse(tmp_path, target_platform="manylinux2014_x86_64")
+
+    missing = staged.missing(["mcp>=2,<3", "hatchling"])
+
+    assert missing == ["hatchling"]
+
+
+# --- B2: staged wheels are for the image's platform, not the developer's --------------
+
+
+def test_the_default_target_platform_is_the_images(offline: ModuleType) -> None:
+    assert offline.DEFAULT_TARGET_PLATFORM == "manylinux2014_x86_64"
+
+
+@pytest.mark.parametrize(
+    ("platform_tag", "installable"),
+    [
+        ("manylinux2014_x86_64", True),
+        ("manylinux_2_17_x86_64", True),
+        ("linux_x86_64", True),
+        ("any", True),
+        # The bug: this is what a wheelhouse staged on a Windows dev box holds.
+        ("win_amd64", False),
+        ("macosx_11_0_arm64", False),
+        ("manylinux2014_aarch64", False),
+        ("musllinux_1_2_x86_64", False),
+    ],
+)
+def test_platform_families_for_a_manylinux_image(
+    offline: ModuleType, platform_tag: str, installable: bool
+) -> None:
+    assert offline.satisfies_platform(platform_tag, "manylinux2014_x86_64") is installable, (
+        platform_tag
+    )
+
+
+def test_win_amd64_is_accepted_when_explicitly_asked_for(offline: ModuleType) -> None:
+    """Staging for a Windows target stays possible; it just is not the default."""
+    assert offline.satisfies_platform("win_amd64", "win_amd64") is True
+    assert offline.satisfies_platform("manylinux2014_x86_64", "win_amd64") is False
+
+
+@pytest.mark.parametrize(
+    ("filename", "tags"),
+    [
+        ("duckdb-1.1.0-cp312-cp312-manylinux_2_17_x86_64.whl", ("manylinux_2_17_x86_64",)),
+        ("ruamel_yaml-0.19.1-py3-none-any.whl", ("any",)),
+        (
+            "duckdb-1.1.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            ("manylinux2014_x86_64", "manylinux_2_17_x86_64"),
+        ),
+    ],
+)
+def test_wheel_platform_tags(offline: ModuleType, filename: str, tags: tuple[str, ...]) -> None:
+    assert offline.wheel_platform_tags(filename) == tags
+
+
+def test_a_windows_wheelhouse_fails_the_linux_requirement(
+    offline: ModuleType, tmp_path: Path
+) -> None:
+    """The proven bug: a `win_amd64` wheel must not "satisfy" a manylinux requirement."""
+    binary = "psycopg_binary-3.3.9-cp312-cp312-win_amd64.whl"
+    (tmp_path / binary).write_text("", encoding="utf-8")
+    (tmp_path / "ruamel_yaml-0.19.1-py3-none-any.whl").write_text("", encoding="utf-8")
+
+    staged = offline.scan_wheelhouse(tmp_path, target_platform="manylinux2014_x86_64")
+
+    assert staged.wheels == {"ruamel-yaml": "ruamel_yaml-0.19.1-py3-none-any.whl"}
+    assert staged.incompatible == (f"{binary} (not manylinux2014_x86_64)",)
+    assert staged.missing(["psycopg[binary]>=3.2"]) == ["psycopg[binary]>=3.2"]
+
+
+def test_the_download_asks_pip_for_the_image_platform(offline: ModuleType, tmp_path: Path) -> None:
+    """Without these, pip stages wheels for the running interpreter (cp312-win_amd64 here)."""
+    argv = offline.download_argv(tmp_path, tmp_path / "requirements.txt", "manylinux2014_x86_64")
+
+    def value_of(flag: str) -> str:
+        return argv[argv.index(flag) + 1]
+
+    assert value_of("--platform") == "manylinux2014_x86_64"
+    assert value_of("--implementation") == "cp"
+    assert value_of("--python-version") == "3.12"
+    assert value_of("--abi") == "cp312"
+    # pip rejects --platform without it, and it is the wheels-only contract anyway.
+    assert "--only-binary=:all:" in argv
+
+
+# --- H4: the no-download path never reaches an index ----------------------------------
+
+
+def test_building_the_project_wheel_uses_no_index(offline: ModuleType, tmp_path: Path) -> None:
+    """`pip wheel` creates an isolated build env, so without --no-index it resolves hatchling
+    from the configured index even when the operator asked for the air-gapped path."""
+    argv = offline.wheel_argv(tmp_path)
+
+    assert "--no-index" in argv
+    assert argv[argv.index("--find-links") + 1] == str(tmp_path)
+    assert argv[argv.index("--wheel-dir") + 1] == str(tmp_path)
+    assert str(offline.REPO_ROOT) == argv[-1]
+
+
+# --- the recipe: two install modes, group-writable trees, a small build context -------
+
+
+def test_the_recipe_supports_a_mirror_and_a_wheelhouse(offline: ModuleType) -> None:
+    """The target network has internal mirrors; a fully disconnected site has none."""
+    text = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "ARG INSTALL_MODE=mirror" in text
+    assert "--no-index --find-links /wheelhouse" in text
+    assert "--index-url" in text
+    assert "PIP_TRUSTED_HOST" in text
+    # Neither mode may need a compiler: an sdist would be built next to the index.
+    assert text.count("--only-binary=:all:") >= 2
+
+
+def test_writable_trees_are_group_owned_not_chowned_to_a_fixed_uid(offline: ModuleType) -> None:
+    """OpenShift's restricted-v2 SCC runs an arbitrary namespace UID in GID 0."""
+    text = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "chgrp -R 0 /data /cache /semantic" in text
+    assert "chmod -R g=u /data /cache /semantic" in text
+    assert "chown 10001" not in text
+
+
+def test_dockerignore_keeps_transcripts_and_secrets_out_of_the_context(
+    offline: ModuleType,
+) -> None:
+    """Every COPY is explicit today, but the context is uploaded to an in-cluster builder."""
+    entries = {
+        line.strip()
+        for line in (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+
+    assert {".pi", "deploy", ".env", ".env.*", "AGENTS.md", "CLAUDE.md"} <= entries
+    assert {"data", "*.duckdb", "*.sqlite"} <= entries
+    # The wheelhouse install mode reads it, so it must stay in the context.
+    assert "wheelhouse" not in entries
+
+
+def test_the_wheelhouse_directory_ships_a_placeholder(offline: ModuleType) -> None:
+    """`COPY wheelhouse/` fails the build outright when the directory is absent."""
+    assert (REPO_ROOT / "wheelhouse" / ".gitkeep").is_file()
+
+
 class TestWheelhouse:
     def test_classifies_wheels_and_source_archives(
         self, offline: ModuleType, tmp_path: Path
@@ -80,14 +260,16 @@ class TestWheelhouse:
         (tmp_path / "legacy-0.1.tar.gz").write_text("", encoding="utf-8")
         (tmp_path / "requirements.txt").write_text("", encoding="utf-8")
 
-        staged = offline.scan_wheelhouse(tmp_path)
+        # Staged for Windows on purpose: a win_amd64 wheel is installable only when asked for.
+        staged = offline.scan_wheelhouse(tmp_path, target_platform="win_amd64")
 
         assert set(staged.wheels) == {"django-pkg", "psycopg-binary"}
         assert staged.source_archives == ("legacy-0.1.tar.gz",)
+        assert staged.incompatible == ()
 
     def test_missing_is_canonical_and_sorted(self, offline: ModuleType, tmp_path: Path) -> None:
         (tmp_path / "ruamel_yaml-0.19.1-py3-none-any.whl").write_text("", encoding="utf-8")
-        staged = offline.scan_wheelhouse(tmp_path)
+        staged = offline.scan_wheelhouse(tmp_path, target_platform="manylinux2014_x86_64")
 
         missing = staged.missing(["ruamel.yaml>=0.18", "psycopg[binary]>=3.2", "duckdb>=1.1"])
 
@@ -96,9 +278,10 @@ class TestWheelhouse:
     def test_absent_directory_is_empty_not_an_error(
         self, offline: ModuleType, tmp_path: Path
     ) -> None:
-        staged = offline.scan_wheelhouse(tmp_path / "nope")
+        staged = offline.scan_wheelhouse(tmp_path / "nope", target_platform="win_amd64")
         assert staged.wheels == {}
         assert staged.source_archives == ()
+        assert staged.incompatible == ()
 
 
 class TestDockerfile:

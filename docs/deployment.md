@@ -1,21 +1,31 @@
-# Deploying `mdqm`: container image, air-gapped build, offline install
+# Deploying `mdqm`: container image, package sources, cluster readiness
 
-The target network has no internet (AGENTS.md principle 7) and takes packages only as wheels from an
-internal PyPI mirror (principle 8). This note covers the one container image in DESIGN section 14 and
-the two things that must exist before it can be built there: a **staged wheelhouse** and the
-**secret files** the server reads at startup.
+The target network is air-gapped but **not mirror-less**: it runs internal PyPI mirrors that carry
+most popular libraries, and adding a package to one is easy. Fully disconnected sites also exist.
+So there are two supported ways to get packages into the builder, one build argument apart:
 
-Files: `Dockerfile` (multi-stage, task M08), `.dockerignore`, `scripts/check_offline_install.py`.
+| Mode | When | Command |
+|---|---|---|
+| **mirror** (default) | The normal case: the builder can reach an internal mirror or PyPI | `docker build --build-arg PIP_INDEX_URL=https://pypi.internal/simple .` |
+| **wheelhouse** | The builder has no index at all | stage `wheelhouse/`, then `docker build --build-arg INSTALL_MODE=wheelhouse .` |
+
+Nothing may be downloaded at runtime either way (AGENTS.md principle 7), and every dependency must
+arrive as a **wheel**: the target has no compiler (principle 8).
+
+Files: `Dockerfile` (multi-stage, task M08), `.dockerignore`, `wheelhouse/`,
+`scripts/check_offline_install.py`.
 
 ## 1. What the image is
 
 | Concern | Choice |
 |---|---|
 | Base | `python:3.12-slim-bookworm` in both stages, pinned by minor + Debian codename, no `latest` |
-| Builder stage | creates `/opt/venv` and installs `.[pg]` from `/wheelhouse` with `--no-index --only-binary=:all:` |
+| Builder stage | creates `/opt/venv` and installs `.[pg]` with `--only-binary=:all:`, from the index or from `/wheelhouse` |
 | Runtime stage | copies `/opt/venv` only: no compiler, no build tools, no `pip`, no wheel files |
 | User | `10001:10001` (`mdqm`), no home, no login shell: the container never runs as root |
+| Writable trees | `/data`, `/cache`, `/semantic`: group-owned by GID `0` and group-writable, **not** `chown`ed to a fixed uid |
 | Entrypoint | `mdqm serve`; host and port come from `MDQM_SERVER__HOST` / `MDQM_SERVER__PORT` (`0.0.0.0:8765` in the image) |
+| Advertised URL | `MDQM_SERVER__PUBLIC_URL`; see section 4 |
 | Healthcheck | `GET /healthz` on the configured port, answered with the image's own `python` (no `curl` needed) |
 | Volumes | `/data` (SQLite metadata DB + audit chain: the only state to back up), `/cache` (DuckDB spill + query cache, disposable) |
 | Secrets | files under `/run/secrets`; `MDQM_SECRETS__DIR=/run/secrets` and `MDQM_TOKENS_FILE=/run/secrets/tokens.json` |
@@ -23,62 +33,73 @@ Files: `Dockerfile` (multi-stage, task M08), `.dockerignore`, `scripts/check_off
 The `pg` extra is the only extra installed. `oracle` and `mssql` join the image only after their
 driver verdicts (task A08); a driver nobody chose must never ride along.
 
-## 2. Build on the air-gapped network
+## 2. Mode A: build against an internal mirror (the normal case)
 
-Pre-stage these on a connected machine, carry them in, and keep them under version control of the
-deployment (not of this repo):
+```
+docker build \
+  --build-arg PIP_INDEX_URL=https://pypi.internal/simple \
+  --build-arg PIP_TRUSTED_HOST=pypi.internal \
+  --tag mdqm:local .
+```
 
-1. **The wheelhouse** - every wheel for the target platform:
+- Leave `PIP_INDEX_URL` empty on a connected machine and pip uses whatever it is configured with
+  (PyPI, or a `pip.conf` baked into the base image). `PIP_TRUSTED_HOST` is only for a mirror served
+  over **plain HTTP**, which an internal address may well be.
+- Both are ordinary pip environment variables, so a mirror that authenticates with a URL-embedded
+  credential works — but then the credential is in the build argument, visible in `docker history`
+  of a local build. Prefer an unauthenticated in-network mirror or a `pip.conf` in a derived base
+  image.
 
-   ```
-   python scripts/check_offline_install.py --wheelhouse wheelhouse
-   ```
+**What this mode needs confirmed by you, not by this repository:** that the mirror actually carries
+wheels for these distributions at the pinned versions. There is no container runtime in the
+development environment, so no command here can see the mirror's contents:
 
-   That builds the `mdqm` wheel, downloads the whole dependency closure with
-   `--only-binary=:all:` into `wheelhouse/`, installs `mdqm[pg]` from it into a fresh virtual
-   environment with `--no-index`, and runs a smoke import plus a real store migration. It fails on a
-   source archive: an sdist would need a compiler the target does not have. Print the current list
-   with that same command; do not trust a number written in a document.
+```
+hatchling  pyarrow  duckdb  psycopg  psycopg-binary  psycopg-pool
+mcp  sqlglot  pydantic  pydantic-settings  ruamel.yaml  httpx  typer  tzdata
+```
 
-   Build the wheelhouse **for the target platform**, not for the machine that stages it: wheels are
-   platform specific (`cp312-manylinux` for the image, `cp312-win_amd64` for a Windows dev box). On
-   the connected machine use a Linux container or a matching interpreter, or stage on the target OS.
+`hatchling` is on that list for a reason that is easy to miss: `.[pg]` is a **local directory**, so
+pip builds this project and creates an isolated build environment, resolving `build-system.requires`
+from the index. A mirror without `hatchling` fails the image build with
+`Could not find a version that satisfies the requirement hatchling`.
 
-2. **The build backend wheels** - a container build installs nothing from the network *except* what
-   `hatchling` needs to build this project's own wheel. Either stage `hatchling` and its
-   dependencies in the wheelhouse too, or build the `mdqm` wheel on the connected machine and let
-   the builder stage install wheels only. The second path is what the current `Dockerfile` does: it
-   installs `.[pg]` with `--no-index`, and pip builds the project wheel from the copied `src/`.
+`scripts/check_offline_install.py` verifies that the *source set* includes the build backend. It
+cannot verify a mirror. Section 5 says exactly what it does prove.
 
-3. **The base image** - `docker save python:3.12-slim-bookworm -o python-slim.tar` on the connected
-   machine, `docker load` on the target. Pin the digest (`FROM image@sha256:...`) once the staging
-   step has produced it; the tag alone only pins the Python minor and the Debian release.
+## 3. Mode B: build with no index at all (fully disconnected)
 
-Then, on the air-gapped machine:
+Stage the wheels on a Linux host of the image's platform — `manylinux2014_x86_64`, `cp312`:
+
+```
+python scripts/check_offline_install.py --wheelhouse wheelhouse
+```
+
+That builds the `mdqm` wheel, downloads the whole closure for the **image's** platform (not the
+staging machine's: a `win_amd64` wheel cannot install in a `manylinux` image and is reported as
+missing), installs `mdqm[pg]` from the wheelhouse into a fresh virtual environment with `--no-index`,
+and runs a smoke import plus a real store migration. It fails on a source archive, because an sdist
+would need a compiler the target does not have.
+
+`--no-download` is the air-gapped re-run: it uses the staged wheels and never touches a package
+index — including for the build backend, which is why `hatchling` has to be in the wheelhouse.
+
+Then carry `wheelhouse/` in and build:
 
 ```
 python scripts/check_offline_install.py --no-download
-docker build --tag mdqm:local .
+docker build --build-arg INSTALL_MODE=wheelhouse --tag mdqm:local .
 ```
 
-`--no-download` proves the staged wheelhouse is complete without touching any package index.
-
-## 3. What must be pre-staged (and what must not happen)
-
-- **Model endpoint**: an on-prem, OpenAI-compatible API. Configure `MDQM_MODEL__BASE_URL` and
-  `MDQM_MODEL__MODEL`; the key comes from a secret file. Nothing downloads model files.
-- **DuckDB extensions**: never installed. No `INSTALL`/`LOAD` at runtime: the local engine runs with
-  the bundled build only. A wheelhouse that expects an extension download is a bug.
-- **SQLite FTS5**: comes from the Python build inside the image; the probe checks it and reports it.
-  A build without FTS5 degrades name search, it does not crash.
-- **Oracle**: Thin mode only, no Oracle client library in the image.
-- **Timezone data**: `tzdata` is a declared dependency, so `zoneinfo` works inside the slim image.
-- **TLS**: terminated at the edge, per DESIGN section 14. The image serves plain HTTP on its port.
+`wheelhouse/` is committed as a directory with a placeholder `.gitkeep`, because `COPY wheelhouse/`
+fails outright when the directory is absent; the wheels themselves are deployment artefacts and
+`.gitignore` keeps them out of the repository (mirror mode never reads their contents).
 
 ## 4. Running it
 
 ```
 docker run --rm -p 8765:8765 \
+  -e MDQM_SERVER__PUBLIC_URL=https://mdqm.internal \
   --mount type=volume,src=mdqm-data,dst=/data \
   --mount type=bind,src=/etc/mdqm/tokens.json,dst=/run/secrets/tokens.json,readonly \
   mdqm:local
@@ -87,31 +108,71 @@ docker run --rm -p 8765:8765 \
 Notes that cost time if missed:
 
 - **The token file is required.** `mdqm serve` refuses to start without it (a server with no auth is
-  never served). It is a deployment secret, never a repository file; see `.env.example` in the repo
-  for its shape.
-- **File permissions on secrets**: the process runs as uid `10001`, so a bind-mounted secret must be
-  readable by that uid or gid (`0440`, group `10001`). Docker Compose `secrets` accept `uid`, `gid`
-  and `mode` for exactly this.
-- **Read-only root filesystem** works: `/data` and `/cache` are the only writable trees. Run with
-  `--read-only --tmpfs /tmp` if the platform prefers it.
-- **Config**: `mdqm.yaml` is read from the working directory (`/app`) or nowhere; environment
-  variables win over the file (see `mdqm.config.settings`). Mount the organisation's YAML as a
-  read-only file if it is used at all; it holds names and locations, never a credential.
+  never served). It is a deployment secret, never a repository file; see `.env.example` for its
+  shape.
+- **`MDQM_SERVER__PUBLIC_URL` is what clients are told.** The image binds `0.0.0.0` and the edge
+  terminates TLS, so a URL derived from the bind address would advertise `http://0.0.0.0:8765` as
+  the auth issuer — unroutable, and the wrong scheme. Set it to the URL clients actually use; it
+  must be an absolute `http://` or `https://` URL with a host, and the server refuses to start
+  otherwise. It is deliberately not baked into the image: every deployment has its own hostname.
+- **Config**: `mdqm.yaml` is read from the working directory (`/app`), or wherever `--config` points.
+  Environment variables win over the file. Every command reads it (`serve`, `audit`, `bootstrap`,
+  `probe`, `review`), so a mounted config cannot be silently ignored. It holds names and locations,
+  never a credential.
+- **File permissions on secrets**: a fixed `uid 10001` is *not* the access path. See section 6.
+- **Read-only root filesystem** works: `/data`, `/cache` and `/semantic` are the only writable trees.
+  DuckDB spills into `<MDQM_PATHS__CACHE_DIR>/spill` — set explicitly by the cache and the executor,
+  never DuckDB's default `.tmp` in the working directory, which is read-only here. Run with
+  `--read-only` if the platform prefers it.
 - **Backup** = the `/data` volume plus the semantic YAML repository in git. `/cache` is disposable.
 
 ## 5. Verification status (read this before trusting the image)
 
-The dependency and recipe checks run anywhere:
+Runs anywhere, no container needed:
 
 ```
-python scripts/check_offline_install.py     # wheelhouse, fresh install, smoke test, recipe checks
+python scripts/check_offline_install.py     # wheelhouse closure, fresh install, smoke, recipe
 python scripts/check_offline_install.py --help
 ```
 
-They inspect `pyproject.toml` and the `Dockerfile` (pinned base image, `HEALTHCHECK`, non-root
-`USER`, no literal credential, no `pip install` in the runtime stage) and prove an offline install
-into a clean virtual environment. They do **not** build the image.
+What it proves: the dependency closure (including the `hatchling` build backend) can be installed
+into a clean virtual environment with `--no-index`; every staged artefact is an installable wheel for
+the requested platform; the `Dockerfile` pins its base image, runs non-root, has a `HEALTHCHECK`,
+carries no literal credential and installs nothing in the runtime stage.
 
-`docker build`, the resulting image size and a run inside the image (`GET /healthz` as the non-root
-user) are unverified in this repository's development environment: it has no container runtime. See
-`progress/M08.md`.
+What it does **not** prove: that `docker build` works, that the image starts, that a pod schedules,
+or that a mirror carries a package. There is no container runtime in the development environment, so
+none of those has been run here. See `progress/DEPLOY-review-1.md`.
+
+**Pin the base image by digest when you mirror it.** A tag is not reproducible on an air gap:
+`python:3.12-slim-bookworm` can be re-pushed, and a rebuilt image would then differ from the one that
+was reviewed. Copy the mirror to an internal registry, take its digest, and use it in the `FROM`
+lines:
+
+```
+FROM python@sha256:<64 hex characters> AS builder
+```
+
+`check_offline_install.py` accepts either a tag that is not `latest` or a `@sha256:` digest; the
+digest is the stronger form and the only one that survives being mirrored.
+
+## 6. OpenShift: why the writable trees are group-owned, not chowned
+
+The default `restricted-v2` SCC uses `MustRunAsRange`: it **rejects an explicit out-of-range uid at
+admission**, then runs the container as a random namespace uid. That uid is always in **GID 0**, and
+the same SCC mounts Secrets as `root:<namespace-gid> 0440`.
+
+So the image must not depend on uid `10001` owning anything:
+
+```
+chgrp -R 0 /data /cache /semantic && chmod -R g=u /data /cache /semantic
+```
+
+Group 0 is the access path; the user is whatever the namespace chooses. `USER 10001:10001` stays in
+the `Dockerfile` because plain Docker and Podman honour it, and an OpenShift namespace overrides it.
+
+Consequences for the manifests (they live in `deploy/`, owned by another task):
+
+- do **not** hard-set `runAsUser: 10001` — admission rejects it under `restricted-v2`;
+- `fsGroup` is unnecessary for the same reason: GID 0 already has the group bits;
+- a mounted Secret must be readable by group 0, which the SCC's `0440 root:<ns-gid>` already is.

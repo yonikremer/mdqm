@@ -1,0 +1,12 @@
+Placeholder so `wheelhouse/` exists in every checkout: the Dockerfile COPYs it unconditionally so a
+disconnected site can stage wheels into it, and `COPY` of a missing directory fails the build.
+
+Stage the wheels here with
+
+    python scripts/check_offline_install.py --wheelhouse wheelhouse
+
+then build with
+
+    docker build --build-arg INSTALL_MODE=wheelhouse --tag mdqm:local .
+
+The wheels themselves are deployment artefacts; `.gitignore` keeps them out of the repository.

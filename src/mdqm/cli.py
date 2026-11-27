@@ -1,9 +1,21 @@
-"""Command line entry point: ``mdqm serve``, ``mdqm audit`` and the version flag."""
+"""Command line entry point: ``mdqm serve``, ``mdqm audit`` and the version flag.
+
+Every command resolves its settings through :func:`_settings`, which reads ``mdqm.yaml`` (from
+``--config``, else the working directory) as well as the environment. A bare ``Settings()`` would
+ignore the file: only :meth:`Settings.load` wires it in. The operator's file is also pinned in the
+process, so a command that reaches a module which builds ``Settings()`` itself (the probe, the
+bootstrap pipeline, the context endpoint) reads the same YAML instead of silently reading none of
+it. A mounted config that no command reads is the worst failure mode here: every ``query`` fails
+with "unknown table" while ``mdqm probe`` looks green.
+"""
+
+from pathlib import Path
+from typing import Annotated
 
 import typer
 
 from mdqm import __version__
-from mdqm.config.settings import Settings
+from mdqm.config.settings import ConfigError, Settings, pin_yaml_file
 from mdqm.pipeline.cli import bootstrap_app
 from mdqm.probe.cli import probe as probe_command
 from mdqm.review.queue import ReviewError, ReviewQueue
@@ -30,17 +42,43 @@ app.add_typer(review_app, name="review")
 app.add_typer(bootstrap_app, name="bootstrap")
 
 
+def _settings() -> Settings:
+    """The settings this command runs with: ``--config``/``./mdqm.yaml`` plus the environment.
+
+    Raises:
+        typer.Exit: the file or the environment is invalid. Reported with the file and key path,
+            never a value, and with exit code 1 so a nightly job notices.
+    """
+    try:
+        return Settings.load()
+    except ConfigError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
 def _review_queue(opened: Store) -> ReviewQueue:
     """The queue over one store, with the settings' semantic root."""
-    settings = Settings()
+    settings = _settings()
     return ReviewQueue(opened, settings.paths.semantic_dir, audit=AuditLog(opened))
 
 
 @app.callback(invoke_without_command=True)
-def main(version: bool = typer.Option(False, "--version", help="Print version and exit.")) -> None:
+def main(
+    version: bool = typer.Option(False, "--version", help="Print version and exit."),
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            help="Settings file (default: mdqm.yaml in the working directory, when it exists).",
+        ),
+    ] = None,
+) -> None:
     if version:
         typer.echo(__version__)
         raise typer.Exit()
+    # Pin the file for the whole process before any command body reads settings. A path that does
+    # not exist is not swallowed: the first `Settings.load()` reports it with the file name.
+    pin_yaml_file(config)
 
 
 @app.command()
@@ -51,9 +89,14 @@ def serve(
     port: int | None = typer.Option(None, help="Bind port (default: mdqm.yaml/env server.port)."),
 ) -> None:
     """Run the MCP server over streamable HTTP on /mcp, plus /healthz and /context."""
-    bound = Settings().server
+    settings = _settings()
+    bound = settings.server
     try:
-        serve_mcp(host=host or bound.host, port=port or bound.port)
+        serve_mcp(
+            host=host or bound.host,
+            port=port or bound.port,
+            public_url=bound.public_url,
+        )
     except AuthConfigError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -62,7 +105,7 @@ def serve(
 @audit_app.command("verify")
 def audit_verify() -> None:
     """Verify the audit hash chain. Exit 0 when intact, 1 when a link does not hold."""
-    opened = Store(Settings().paths.metadata_db)
+    opened = Store(_settings().paths.metadata_db)
     try:
         opened.initialize()  # idempotent: a fresh file is migrated, a current one is only read
         verdict = AuditLog(opened).verify_chain()
@@ -81,7 +124,7 @@ def audit_purge(
     ),
 ) -> None:
     """Remove audit rows past retention as a whole prefix and checkpoint the chain."""
-    opened = Store(Settings().paths.metadata_db)
+    opened = Store(_settings().paths.metadata_db)
     try:
         opened.initialize()
         log = AuditLog(
@@ -99,7 +142,7 @@ def review_list(
     all_: bool = typer.Option(False, "--all", help="Include proposals a human already decided."),
 ) -> None:
     """Show what waits for a human, highest confidence first."""
-    opened = Store(Settings().paths.metadata_db)
+    opened = Store(_settings().paths.metadata_db)
     try:
         queue = _review_queue(opened)
         rows = queue.decided() if all_ else queue.pending()
@@ -122,7 +165,7 @@ def review_approve(
     by: str = typer.Option(..., help="Who approves it; recorded in curated YAML and the audit."),
 ) -> None:
     """Write an approved proposal into curated/*.yaml, with provenance."""
-    opened = Store(Settings().paths.metadata_db)
+    opened = Store(_settings().paths.metadata_db)
     try:
         queue = _review_queue(opened)
         target = _resolve(queue, proposal)
@@ -142,7 +185,7 @@ def review_reject(
     by: str = typer.Option(..., help="Who rejects it; the rejection is remembered."),
 ) -> None:
     """Record a rejection. Curated YAML is untouched; the row stays as negative memory."""
-    opened = Store(Settings().paths.metadata_db)
+    opened = Store(_settings().paths.metadata_db)
     try:
         queue = _review_queue(opened)
         target = _resolve(queue, proposal)
@@ -157,7 +200,7 @@ def review_export_patch(
     proposal: str = typer.Argument(..., help="Proposal id (or its unique prefix)."),
 ) -> None:
     """Print the approval as a unified diff, for the pull-request flow."""
-    opened = Store(Settings().paths.metadata_db)
+    opened = Store(_settings().paths.metadata_db)
     try:
         queue = _review_queue(opened)
         try:

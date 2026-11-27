@@ -1,12 +1,13 @@
 # Build context for the mdqm images: the server image (./Dockerfile, task M08) and the mock API image
 # (docker/api.Dockerfile, task D01). Keep it small: the server build copies pyproject.toml,
-# README.md, src/ and wheelhouse/, so nothing else needs to travel to the daemon.
-# `wheelhouse/` is deliberately NOT ignored: the server builder installs from it (air-gapped build).
+# README.md, src/ and wheelhouse/, so nothing else needs to travel to the daemon — which matters
+# twice over here, because on a cluster the whole context is uploaded to an in-cluster builder.
+# `wheelhouse/` is deliberately NOT ignored: the wheelhouse install mode reads it (air-gapped build).
 
 .git
+.gitignore
 .gitattributes
 .github
-.gitignore
 
 # local environments and per-session worktrees
 .venv
@@ -34,17 +35,25 @@ cache
 *.sqlite-shm
 *.duckdb
 *.duckdb.wal
+*.log
 
 # secrets and dev tokens
 .env
+.env.*
 tokens.json
 *.pem
+
+# agent transcripts, plans and deployment manifests: irrelevant to the build and not ours to ship
+.pi
+AGENTS.md
+CLAUDE.md
 
 # not needed at build time (the images ship the package, the CLI, and nothing else)
 tests
 progress
 plugin
 docs
+deploy
 examples
 TASKS.md
 tasks.json

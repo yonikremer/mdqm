@@ -1,10 +1,21 @@
 # mdqm server image (task M08). Deployment notes: docs/deployment.md, DESIGN section 14.
 #
-# Air-gapped first: the builder installs from a wheelhouse staged in the build context, so the
-# build needs no package index and nothing is downloaded at runtime. Produce the wheelhouse with
-#   python scripts/check_offline_install.py --wheelhouse wheelhouse
-# then
-#   docker build --tag mdqm:local .
+# Two supported ways to get packages into the builder. They are one build arg apart, because the
+# target network is not uniformly disconnected: it has internal PyPI mirrors, and a fully offline
+# site does not.
+#
+#   mirror (default)  install from the configured index -- PyPI, or the internal mirror named by
+#                     PIP_INDEX_URL / a pip.conf baked into the base image. Nothing extra to stage.
+#       docker build --build-arg PIP_INDEX_URL=https://pypi.internal/simple --tag mdqm:local .
+#
+#   wheelhouse        no index at all: install only from ./wheelhouse, for a disconnected builder.
+#       python scripts/check_offline_install.py --wheelhouse wheelhouse
+#       docker build --build-arg INSTALL_MODE=wheelhouse --tag mdqm:local .
+#
+# Whichever mode is used, nothing may be downloaded at runtime, and every dependency must arrive as
+# a wheel: the target has no compiler. `check_offline_install.py` proves the wheelhouse closure
+# (build backend included) and the recipe; it cannot prove anything about a mirror's contents.
+#
 # Pinned base images (no `latest`): a Python minor and a Debian codename, never a moving tag.
 # Pin the digest too once the image is staged: docker build --build-arg is deliberately unused for
 # the base image so a reviewer sees the exact tag in this file.
@@ -22,17 +33,35 @@ WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
-# Layer cache: the wheelhouse changes rarely, resolve against it without a network at all.
+# Always copied, even in mirror mode: an absent directory fails `COPY`, and `wheelhouse/` holds only
+# a placeholder until a disconnected site stages real wheels into it (`.dockerignore` keeps it in
+# the context on purpose).
 COPY wheelhouse/ /wheelhouse/
 
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# `mirror` uses the index pip is configured with; leave PIP_INDEX_URL empty on a connected build.
+# `PIP_TRUSTED_HOST` is for a mirror served over plain HTTP (an internal, air-gapped address).
 # `pg` is the only extra that ships today. `oracle`/`mssql` stay out until their driver verdicts
 # (task A08) land, so an image never carries a driver nobody chose.
-# `--only-binary=:all:`: every dependency must be a wheel. A source tarball needs a compiler and
+# `--only-binary=:all:`: every dependency must be a wheel. A source tarball needs a compiler, and
 # an sdist means the internal mirror is incomplete.
-RUN pip install --no-index --find-links /wheelhouse --only-binary=:all: ".[pg]"
+# A local directory (`.[pg]`) is built from source, so pip installs the build backend from
+# `build-system.requires` into an isolated environment: `hatchling` is a real dependency of this
+# build, and the wheelhouse mode has to stage it like any other wheel.
+ARG INSTALL_MODE=mirror
+ARG PIP_INDEX_URL=""
+ARG PIP_TRUSTED_HOST=""
+RUN set -eu; \
+    if [ "$INSTALL_MODE" = "wheelhouse" ]; then \
+        pip install --no-index --find-links /wheelhouse --only-binary=:all: ".[pg]"; \
+    else \
+        set -- --only-binary=:all:; \
+        if [ -n "$PIP_INDEX_URL" ]; then set -- "$@" --index-url "$PIP_INDEX_URL"; fi; \
+        if [ -n "$PIP_TRUSTED_HOST" ]; then set -- "$@" --trusted-host "$PIP_TRUSTED_HOST"; fi; \
+        pip install "$@" ".[pg]"; \
+    fi
 
 # No installer in the runtime image: nothing may `pip install` once the image exists (principle 7).
 RUN pip uninstall --yes pip setuptools wheel
@@ -42,6 +71,9 @@ FROM python:3.12-slim-bookworm AS runtime
 
 # PATH first so `python` and `mdqm` are the venv's. Every other value is a location or a bind
 # default from mdqm.config.settings -- no organisation fact is hard-coded here.
+# MDQM_SERVER__PUBLIC_URL is NOT set here on purpose: it depends on the deployment's hostname, so
+# the platform supplies it (an unset value advertises http://<host>:<port>, which behind an edge
+# TLS proxy is the wrong scheme and, on 0.0.0.0, an unroutable host).
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
@@ -53,21 +85,34 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MDQM_SECRETS__DIR=/run/secrets \
     MDQM_TOKENS_FILE=/run/secrets/tokens.json
 
-# Non-root, no home, no shell. The uid/gid are fixed so a mounted volume can be chowned to them.
+# Non-root, no home, no shell, fixed uid/gid so a plain Docker volume has a known owner.
+#
+# The writable trees are group-owned by GID 0 and group-writable via `chmod g=u`, which is what
+# makes the same image run under an arbitrary UID:
+#   * OpenShift's `restricted-v2` SCC admits a container only if it does not demand a specific
+#     uid (`MustRunAsRange`), then runs it as a random namespace UID that always sits in GID 0;
+#   * the same SCC mounts Secrets as `root:<namespace-gid> 0440`, so a fixed uid 10001 could not
+#     read /run/secrets/tokens.json, while a process in GID 0 can.
+# So the group is the access path here, not the user. Never `chown` these trees to one uid.
 RUN groupadd --gid 10001 mdqm \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent \
         --shell /usr/sbin/nologin mdqm \
     && mkdir -p /data /cache /semantic \
-    && chown 10001:10001 /data /cache /semantic
+    && chgrp -R 0 /data /cache /semantic \
+    && chmod -R g=u /data /cache /semantic
 
 # The venv only: no compiler, no build tools, no wheels, no pip in the runtime layer.
 COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
+# Docker and Podman run as this uid; an OpenShift namespace overrides it with its own range, and
+# the GID 0 ownership above is what keeps the writable trees usable when it does.
 USER 10001:10001
 
 # Metadata DB and DuckDB spill/cache are the two writable trees. Mount /data on a volume: it holds
-# the SQLite metadata DB and the audit chain, the only state that must be backed up.
+# the SQLite metadata DB and the audit chain, the only state that must be backed up. DuckDB spills
+# into /cache/spill (mdqm.cache / mdqm.executor set `temp_directory`), never into the working
+# directory, so a read-only root filesystem is enough.
 VOLUME ["/data", "/cache"]
 
 EXPOSE 8765

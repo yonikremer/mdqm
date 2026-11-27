@@ -6,6 +6,9 @@
   "author": {
     "name": "mdqm maintainers"
   },
+  "requires": {
+    "claudeCode": ">=2.1.139"
+  },
   "keywords": ["data", "sql", "mcp", "semantic-layer", "mdqm"],
   "userConfig": {
     "mdqm_python": {

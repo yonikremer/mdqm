@@ -57,6 +57,7 @@ from mdqm.cache.freshness import (
     is_fresh,
     ttl_for,
 )
+from mdqm.config.settings import Settings
 from mdqm.models import PartitionGranularity
 from mdqm.planner.partitions import Range, align_to_partitions
 
@@ -399,7 +400,9 @@ class SegmentCache:
         Args:
             path: the DuckDB file, or ``None`` for in-memory. Its parent directory is created.
             memory_limit: DuckDB's memory ceiling; a bigger cache spills instead of dying.
-            spill_dir: DuckDB's temp directory for that spill. ``None`` keeps DuckDB's default.
+            spill_dir: DuckDB's temp directory for that spill. ``None`` means
+                ``<paths.cache_dir>/spill`` from the settings, never DuckDB's default: that is
+                ``.tmp`` relative to the process CWD, which is read-only in the image.
             clock: time source, injected so tests pin "the tail moved" instead of sleeping.
             theta: the ratio in the freshness rule (fraction of the window a TTL may be).
             min_ttl: the floor TTL, which is also what a still-filling segment gets.
@@ -429,10 +432,11 @@ class SegmentCache:
         # DuckDB cannot bind a SET value as a parameter; _require_size has already restricted it to
         # <number><unit>, so nothing but a size can reach this statement.
         self._con.execute(f"SET memory_limit='{memory_limit}'")  # nosemgrep
-        if spill_dir is not None:
-            spill = Path(spill_dir)
-            spill.mkdir(parents=True, exist_ok=True)
-            self._con.execute(f"SET temp_directory='{spill.as_posix()}'")  # nosemgrep
+        # DuckDB's default temp_directory is `.tmp` relative to the process CWD (/app in the image,
+        # read-only there), and TMPDIR does not move it, so this is always set explicitly.
+        spill = Path(spill_dir) if spill_dir is not None else Settings().paths.spill_dir
+        spill.mkdir(parents=True, exist_ok=True)
+        self._con.execute(f"SET temp_directory='{spill.as_posix()}'")  # nosemgrep
         self._con.execute(_METADATA_DDL)
 
     # --- lifecycle ------------------------------------------------------------------------

@@ -14,5 +14,9 @@ build/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
-wheelhouse/
+# Staged wheels are deployment artefacts, never repository files. The directory itself is kept
+# (with a placeholder) because the Dockerfile COPYs it: an absent directory fails the build even
+# in mirror mode, which never reads its contents.
+wheelhouse/*
+!wheelhouse/.gitkeep
 .worktrees/

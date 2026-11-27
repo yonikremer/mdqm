@@ -43,6 +43,7 @@ __all__ = [
     "DEFAULT_TOKENS_FILE",
     "SERVER_INSTRUCTIONS",
     "TOKENS_FILE_ENV",
+    "advertised_url",
     "create_server",
     "serve",
     "tokens_file_path",
@@ -71,6 +72,19 @@ SERVER_INSTRUCTIONS = (
 def tokens_file_path() -> Path:
     """Where the dev token file lives: ``MDQM_TOKENS_FILE``, else ``tokens.json`` in the cwd."""
     return Path(os.environ.get(TOKENS_FILE_ENV) or DEFAULT_TOKENS_FILE)
+
+
+def advertised_url(*, host: str, port: int, public_url: str | None = None) -> str:
+    """The base URL the auth metadata advertises: the configured one, else ``http://host:port``.
+
+    ``public_url`` exists because the derived URL is wrong for a proxied deployment, which is the
+    normal one: the image binds ``0.0.0.0``, an edge Route or Ingress terminates TLS, and a client
+    that reads ``http://0.0.0.0:8765`` as its issuer cannot follow it. See
+    ``MDQM_SERVER__PUBLIC_URL``.
+    """
+    if public_url:
+        return public_url.rstrip("/")
+    return f"http://{host}:{port}"
 
 
 async def _bearer_identity(
@@ -146,8 +160,14 @@ def create_server(
     return server
 
 
-def serve(*, host: str, port: int) -> None:
+def serve(*, host: str, port: int, public_url: str | None = None) -> None:
     """Run over streamable HTTP until interrupted (``mdqm serve``).
+
+    Args:
+        host: bind address.
+        port: bind port.
+        public_url: URL clients reach this server on, advertised as the auth issuer. ``None``
+            derives it from ``host``/``port``, which is only right when nothing proxies the server.
 
     Raises:
         AuthConfigError: the token file is missing or unreadable. Serving without auth is not an
@@ -156,12 +176,18 @@ def serve(*, host: str, port: int) -> None:
             guesses, so the server refuses to start instead.
     """
     verifier = StaticTokenVerifier.from_file(tokens_file_path())
+    base_url = advertised_url(host=host, port=port, public_url=public_url)
     logger.info(
-        "serving mdqm %s on %s:%d for %d token(s)", __version__, host, port, len(verifier.users)
+        "serving mdqm %s on %s:%d, advertised as %s for %d token(s)",
+        __version__,
+        host,
+        port,
+        base_url,
+        len(verifier.users),
     )
     server = create_server(
         verifier=verifier,
-        public_url=f"http://{host}:{port}",
+        public_url=base_url,
         context_source=context_source_from_settings(),
     )
     server.run("streamable-http", host=host, port=port)

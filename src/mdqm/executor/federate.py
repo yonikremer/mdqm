@@ -63,6 +63,7 @@ from mdqm.cache.freshness import (
     SystemClock,
 )
 from mdqm.compiler.resolve import find_join, join_tables
+from mdqm.config.settings import Settings
 from mdqm.errors import cost_too_high, from_exception
 from mdqm.executor.cache import FragmentCache, fragment_key
 from mdqm.executor.models import (
@@ -165,7 +166,9 @@ class FederatedExecutor:
         clock: injected time source for cache freshness; tests drive staleness instead of sleeping.
         path: the DuckDB file for the cache and the join, or ``None`` for in-memory.
         memory_limit: DuckDB's memory ceiling, so a big join spills instead of dying.
-        spill_dir: DuckDB's temp directory for that spill.
+        spill_dir: DuckDB's temp directory for that spill. ``None`` means
+            ``<paths.cache_dir>/spill`` from the settings, never DuckDB's default: that is
+            ``.tmp`` relative to the process CWD, which is read-only in the image.
         min_ttl: cache floor TTL, also the TTL of a whole-fragment read.
         max_ttl: cache ceiling TTL.
 
@@ -200,10 +203,11 @@ class FederatedExecutor:
         self._con.execute("SET TimeZone='UTC'").fetchall()
         # A SET value cannot be bound as a parameter; the regex above restricts it to <size><unit>.
         self._con.execute(f"SET memory_limit='{memory_limit}'").fetchall()  # nosemgrep
-        if spill_dir is not None:
-            spill = Path(spill_dir)
-            spill.mkdir(parents=True, exist_ok=True)
-            self._con.execute(f"SET temp_directory='{spill.as_posix()}'").fetchall()  # nosemgrep
+        # DuckDB's default temp_directory is `.tmp` relative to the process CWD (/app in the image,
+        # read-only there), and TMPDIR does not move it, so this is always set explicitly.
+        spill = Path(spill_dir) if spill_dir is not None else Settings().paths.spill_dir
+        spill.mkdir(parents=True, exist_ok=True)
+        self._con.execute(f"SET temp_directory='{spill.as_posix()}'").fetchall()  # nosemgrep
         self._cache = FragmentCache(self._con, clock=self._clock, min_ttl=min_ttl, max_ttl=max_ttl)
 
     # --- lifecycle ------------------------------------------------------------------------

@@ -14,7 +14,14 @@ checkout installs anywhere.
 
 ## Before you install
 
-You need:
+**Claude Code 2.1.139 or newer is required.** `hooks/hooks.json` uses the exec form
+(`{"command": ..., "args": [...]}`), which older CLIs do not understand: they run `command` and
+drop `args`, so on every prompt the interpreter starts with no script and sits in a REPL instead of
+injecting context. That failure is confusing and expensive. The minimum is declared in
+`.claude-plugin/plugin.json` (`requires.claudeCode`) and repeated here so it is visible before
+installing; check yours with `claude --version`.
+
+You also need:
 
 1. **Network access to the `mdqm` server** from the desktop.
 2. **A personal bearer token** issued by whoever runs the server. Never share one; the server's
@@ -86,7 +93,6 @@ with no bash anywhere. The value is editable later under `/config`.
 The hook cannot be run for you: if the interpreter is wrong, the hook fails to start, which is
 logged but not fatal. You lose the injected context and everything else keeps working. Confirm with
 `claude --debug-file <path>` and search for `Hooks: UserPromptSubmit`.
-
 ## Check it works
 
 1. `/mcp` — the server appears as `plugin:mdqm:mdqm` with five tools: `find_data`, `query`,
@@ -96,9 +102,15 @@ logged but not fatal. You lose the injected context and everything else keeps wo
 3. If the server is up, the prompt arrives with the matching measures and value maps already in
    context. `claude --debug-file <path>` shows a `Hooks: UserPromptSubmit` line with a duration.
 
-Failures are quiet by design: the hook prints nothing and exits `0` when the server is down, the
-token is rejected, or the network times out, so a broken server never blocks a prompt. If context
-stops appearing, the hook is the thing to check, not the prompt.
+Failures never block a prompt but they are no longer silent: when the hook tried and could not
+inject, it writes **one line to stderr** — `mdqm: no context injected: <reason>` — which the CLI
+shows next to the prompt. stdout stays clean, because stdout is the model's context. A path that is
+simply not configured (`MDQM_URL` or `MDQM_TOKEN` unset) prints nothing: that is not an error. If
+context stops appearing, the line names the cause; the hook is the thing to check, not the prompt.
+
+The hook has a 2.0 s budget for the HTTP call and `hooks/hooks.json` a 3 s hard timeout. Off a
+loopback that matters: behind a Route a prompt pays DNS, TCP, TLS, the bearer check, the full-text
+search and the pack render.
 
 ## How the pieces talk to each other
 

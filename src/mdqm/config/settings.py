@@ -21,6 +21,7 @@ from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -59,6 +60,8 @@ __all__ = [
     "SmtpSettings",
     "SourceConfig",
     "find_literal_secrets",
+    "pin_yaml_file",
+    "resolve_yaml_file",
 ]
 
 DEFAULT_YAML_FILE = "mdqm.yaml"
@@ -129,10 +132,28 @@ class _Section(BaseModel):
 
 
 class ServerSettings(_Section):
-    """Where the MCP server binds. Loopback by default: the edge terminates TLS."""
+    """Where the MCP server binds, and the URL clients are told to use. Loopback by default.
+
+    ``public_url`` is separate from ``host``/``port`` on purpose: the image binds ``0.0.0.0`` and an
+    edge proxy terminates TLS, so a derived ``http://0.0.0.0:8765`` is both unroutable and the
+    wrong scheme. It is what ``/mcp``'s auth metadata advertises as the issuer.
+    """
 
     host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=1, le=65535)
+    public_url: str | None = None
+
+    @field_validator("public_url")
+    @classmethod
+    def _public_url(cls, value: str | None) -> str | None:
+        """An absolute http(s) URL with a host, or nothing (the derived URL is used then)."""
+        if value is None or not value.strip():
+            return None
+        candidate = value.strip().rstrip("/")
+        parsed = urlsplit(candidate)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("public_url must be an absolute http:// or https:// URL with a host")
+        return candidate
 
 
 class PathsSettings(_Section):
@@ -141,6 +162,15 @@ class PathsSettings(_Section):
     metadata_db: Path = Path("data") / "mdqm.sqlite"
     semantic_dir: Path = Path("semantic")
     cache_dir: Path = Path("cache")
+
+    @property
+    def spill_dir(self) -> Path:
+        """DuckDB's ``temp_directory``: inside the cache tree, never the working directory.
+
+        DuckDB's default is ``.tmp`` relative to the process CWD, which is ``/app`` in the image
+        and read-only there, so a query that spills would fail. ``TMPDIR`` does not move it.
+        """
+        return self.cache_dir / "spill"
 
 
 class ModelSettings(_Section):
@@ -292,6 +322,42 @@ class _YamlSettingsSource(PydanticBaseSettingsSource):
         return {} if path is None else _read_yaml_mapping(path)
 
 
+def resolve_yaml_file(yaml_file: Path | str | None = None) -> Path | None:
+    """Which YAML file to read: the argument, else the pinned file, else ``./mdqm.yaml``.
+
+    Returns ``None`` when there is none, which means "read the environment only". The order matters:
+    a CLI entry point pins the operator's file once (:func:`pin_yaml_file`), and every later
+    ``Settings.load()`` in that process must resolve to the same file rather than re-guessing from
+    the working directory.
+    """
+    if yaml_file is not None:
+        return Path(yaml_file)
+    pinned = _YAML_FILE.get()
+    if pinned is not None:
+        return pinned
+    return Path(DEFAULT_YAML_FILE) if Path(DEFAULT_YAML_FILE).is_file() else None
+
+
+def pin_yaml_file(yaml_file: Path | str | None = None) -> Path | None:
+    """Pin the YAML file for the rest of the process, and return it.
+
+    :meth:`Settings.load` scopes the file to one call, which is what a test wants. A CLI entry
+    point wants the opposite: one operator config, honoured by every module the command reaches,
+    including the ones that build ``Settings()`` themselves. Pinning is not a global mutable
+    setting -- it is still a ContextVar, so a second thread or test can load a different file.
+
+    ``None`` means "the file in the working directory, if there is one", never "keep the current
+    pin": that is what makes ``pin_yaml_file(None)`` a reset.
+    """
+    path = (
+        Path(yaml_file)
+        if yaml_file is not None
+        else (Path(DEFAULT_YAML_FILE) if Path(DEFAULT_YAML_FILE).is_file() else None)
+    )
+    _YAML_FILE.set(path)
+    return path
+
+
 def _format_problems(exc: ValidationError) -> list[str]:
     problems: list[str] = []
     for error in exc.errors():
@@ -370,9 +436,7 @@ class Settings(BaseSettings):
         ``yaml_file=None`` uses ``mdqm.yaml`` in the working directory when it exists and
         behaves as if it were absent otherwise. Environment variables still win over the file.
         """
-        path = Path(yaml_file) if yaml_file is not None else None
-        if path is None and Path(DEFAULT_YAML_FILE).is_file():
-            path = Path(DEFAULT_YAML_FILE)
+        path = resolve_yaml_file(yaml_file)
         token = _YAML_FILE.set(path)
         try:
             return cls()
