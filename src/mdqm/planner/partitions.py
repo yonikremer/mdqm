@@ -32,6 +32,7 @@ from enum import StrEnum
 from typing import Final
 
 import sqlglot
+from sqlglot import errors as sqlglot_errors
 from sqlglot import exp
 
 from mdqm.errors import cost_too_high, partition_scan_all
@@ -605,18 +606,25 @@ def _plan_range(
     default_window: Duration | None,
 ) -> PartitionPlan:
     """Range partitioning on a time column: a window on the key is exactly a set of partitions."""
-    if len(partitioning.key) > 1:
+    # Bind the key once, explicitly typed: pyright narrows the pydantic field to an empty tuple
+    # from its `= ()` default and then reports the index below, which is a false positive.
+    keys: tuple[str, ...] = partitioning.key
+    if len(keys) == 0:
+        # Declared range partitioning with no key column: there is nothing to window on, and a
+        # partition count would be invented. Refuse to derive rather than index an empty tuple.
+        return _no_filter(partitioning, exec_ts=exec_ts, table=table, default_window=default_window)
+    if len(keys) > 1:
         # A multi-column range scheme gives no one-dimensional window: a count would be a guess.
-        keys = frozenset(partitioning.key)
+        key_set = frozenset(keys)
         if all(
-            any(_mentions(conjunct, frozenset({key})) for conjunct in conjuncts) for key in keys
+            any(_mentions(conjunct, frozenset({key})) for conjunct in conjuncts) for key in key_set
         ):
             return _unproven(partitioning, note=PartitionNote.ESTIMATE_UNPROVEN)
         return _no_filter(partitioning, exec_ts=exec_ts, table=table, default_window=default_window)
     return _plan_key_range(
         partitioning,
         conjuncts,
-        column=partitioning.key[0],
+        column=keys[0],
         granularity=partitioning.granularity,
         exec_ts=exec_ts,
         table=table,
@@ -878,5 +886,5 @@ def _parse(text: str) -> exp.Expr | None:
     """Parse a declared partition expression, or ``None`` when it is not one this module reads."""
     try:
         return sqlglot.parse_one(text, read="duckdb")
-    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError, ValueError):
+    except (sqlglot_errors.ParseError, sqlglot_errors.TokenError, ValueError):
         return None
