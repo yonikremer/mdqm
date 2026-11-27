@@ -36,10 +36,10 @@ from datetime import datetime
 from typing import Any, Final, NamedTuple
 
 import psycopg
-from psycopg import sql
 
 from mdqm.adapters.base import OPTIONAL_METHODS, NotSupported
 from mdqm.models import RawQuery, TableStats
+from mdqm.sql.execution import prepare, run
 
 __all__ = [
     "MASKED_QUERY",
@@ -113,6 +113,13 @@ WHERE dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_dat
   AND query NOT LIKE '%%pg_stat_statements%%'
 ORDER BY 1, 5
 """
+
+#: The mining statement per detected time column. A column name cannot be a bind parameter, so the
+#: name is chosen from the closed set above and the statement is that choice's fixed text: no
+#: identifier is composed at run time, and the guard sees the final statement before it runs.
+_MINE_SQL_BY_COLUMN: Final[dict[str, str]] = {
+    column: _MINE_SQL.format(total=column) for column in _TOTAL_COLUMNS
+}
 
 
 class Statement(NamedTuple):
@@ -248,14 +255,10 @@ def statements(cursor: psycopg.Cursor[Any], state: QueryStoreState) -> list[Stat
     SQL). A ``DECLARE ... CURSOR FOR <query>`` row *is* a query: the text is unwrapped to the
     statement inside and summed with every other row for the same statement.
     """
-    total = sql.Identifier(state.total_column)
-    # The statement is a module constant and the only interpolation is an identifier psycopg
-    # quotes, so there is no value to bind; marked for the scanner, not hidden from the reader.
-    # Compose first, execute second: the statement is a module constant with one psycopg-quoted
-    # identifier, so the composition is not a place a value can enter.
-    _q = sql.SQL(_MINE_SQL).format(total=total)
-    # pi-lens-ignore: python-sql-injection
-    cursor.execute(_q)  # nosemgrep
+    # `state.total_column` is detected from `_TOTAL_COLUMNS` and nothing else, so this is a lookup
+    # in a closed set rather than a composition: the statement text is a constant of this file, and
+    # the guard sees the final statement immediately before it runs.
+    run(cursor, prepare(_MINE_SQL_BY_COLUMN[state.total_column], dialect="postgres"))
     totals: dict[str, Statement] = {}
     users: dict[str, set[str]] = {}
     dropped = 0

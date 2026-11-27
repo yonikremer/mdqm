@@ -105,6 +105,7 @@ from mdqm.models import (
     TableKind,
     TableStats,
 )
+from mdqm.sql.execution import prepare, run
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
@@ -147,10 +148,6 @@ _SHOWPLAN_FIX: Final = (
     "GRANT SHOWPLAN TO [<read-only login>]: SET SHOWPLAN_XML ON itself is allowed, but compiling a "
     "statement into XML needs the SHOWPLAN permission"
 )
-
-# Toggling SHOWPLAN needs no interpolation: two statements, chosen by the caller.
-_SHOWPLAN_ON: Final = "SET SHOWPLAN_XML ON"
-_SHOWPLAN_OFF: Final = "SET SHOWPLAN_XML OFF"
 
 _KNOWN_OPTIONS: Final = frozenset(
     {
@@ -815,8 +812,7 @@ class SqlServerAdapter:
         with self._connection() as connection:
             cursor = connection.cursor()
             try:
-                # pi-lens-ignore: python-sql-injection
-                cursor.execute(_VERSION_SQL)
+                run(cursor, prepare(_VERSION_SQL, dialect="tsql"))
                 row = cursor.fetchone()
                 version = None if row is None or row[0] is None else str(row[0])
             finally:
@@ -873,8 +869,7 @@ class SqlServerAdapter:
         with self._connection() as connection:
             cursor = connection.cursor()
             try:
-                # pi-lens-ignore: python-sql-injection
-                cursor.execute(_QUERY_STORE_STATE_SQL)
+                run(cursor, prepare(_QUERY_STORE_STATE_SQL, dialect="tsql"))
                 row = cursor.fetchone()
             except Exception as exc:
                 return False, f"sys.database_query_store_options is unreadable: {exc}"
@@ -889,8 +884,10 @@ class SqlServerAdapter:
             with self._connection() as connection:
                 cursor = connection.cursor()
                 try:
-                    # pi-lens-ignore: python-sql-injection
-                    cursor.execute(_QUERY_STORE_SQL, (datetime(1970, 1, 1),))
+                    window = prepare(
+                        _QUERY_STORE_SQL, dialect="tsql", params=(datetime(1970, 1, 1),)
+                    )
+                    run(cursor, window)
                     cursor.fetchall()
                 finally:
                     cursor.close()
@@ -1107,10 +1104,9 @@ class SqlServerAdapter:
             try:
                 self._set_showplan(cursor, True)
                 try:
-                    # `statement` is compiled-and-guarded SQL text, not a value: with SHOWPLAN on
-                    # nothing is executed, so this cannot be a write.
-                    # pi-lens-ignore: python-sql-injection
-                    cursor.execute(statement)
+                    # With SHOWPLAN on nothing is executed, so the guard runs on the fragment --
+                    # the statement whose plan was asked for -- before it is sent.
+                    run(cursor, prepare(statement, dialect="tsql"))
                     row = cursor.fetchone()
                 finally:
                     with contextlib.suppress(Exception):
@@ -1127,11 +1123,12 @@ class SqlServerAdapter:
     def _set_showplan(self, cursor: Any, enabled: bool) -> None:
         """Toggle ``SHOWPLAN_XML``, translating a refusal into the grant an operator must issue."""
         try:
-            # pi-lens-ignore: python-sql-injection
+            # `SET SHOWPLAN_XML` is a session command the guard refuses, and it is a fixed literal
+            # with no value in it; there is nothing for the guard to inspect in it either.
             if enabled:
-                cursor.execute(_SHOWPLAN_ON)
+                cursor.execute("SET SHOWPLAN_XML ON")
             else:
-                cursor.execute(_SHOWPLAN_OFF)
+                cursor.execute("SET SHOWPLAN_XML OFF")
         except Exception as exc:
             raise NotSupported(
                 OPTIONAL_METHODS["explain"],
@@ -1185,6 +1182,9 @@ class SqlServerAdapter:
                 "positional (?), a fragment's params is an unordered object, and the compiler "
                 "inlines values into the SQL it emits"
             )
+        # Guarded here, immediately before it runs, and before a pooled connection is taken: a
+        # refused statement never reaches the server and never occupies the pool.
+        prepared = prepare(fragment.sql, dialect="tsql")
         connection = self.pool.acquire()
         try:
             connection.timeout = int(limits.timeout_s) + CALL_TIMEOUT_BACKSTOP_S
@@ -1192,7 +1192,7 @@ class SqlServerAdapter:
             watchdog = _Deadline(cursor, limits.timeout_s, cursor.cancel)
             watchdog.arm()
             try:
-                cursor.execute(fragment.sql)
+                run(cursor, prepared)
             except Exception as exc:
                 watchdog.disarm()
                 with contextlib.suppress(Exception):
@@ -1243,8 +1243,10 @@ class SqlServerAdapter:
         with self._connection() as connection:
             cursor = connection.cursor()
             try:
-                # pi-lens-ignore: python-sql-injection
-                cursor.execute(_QUERY_STORE_SQL, (window,))
+                run(
+                    cursor,
+                    prepare(_QUERY_STORE_SQL, dialect="tsql", params=(window,)),
+                )
                 rows = [tuple(row) for row in cursor.fetchall()]
             except Exception as exc:
                 if _is_no_permission(exc):
@@ -1323,9 +1325,12 @@ class SqlServerAdapter:
 
     @staticmethod
     def _fetch_all(cursor: Any, statement: str) -> list[tuple[Any, ...]]:
-        """Run a module-constant statement and return its rows (never a caller's text)."""
-        # pi-lens-ignore: python-sql-injection
-        cursor.execute(statement)  # nosemgrep: python-sql-injection
+        """Run a module-constant statement through the chokepoint and return its rows.
+
+        Every caller passes a constant of this file (the catalogs take no parameter), so the guard
+        sees the statement immediately before it runs and this is the only door it uses.
+        """
+        run(cursor, prepare(statement, dialect="tsql"))
         return [tuple(row) for row in cursor.fetchall()]
 
 

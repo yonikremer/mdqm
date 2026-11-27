@@ -93,7 +93,7 @@ from mdqm.models import (
     TableKind,
     TableStats,
 )
-from mdqm.sql.execution import PreparedStatement, execute_one, prepare
+from mdqm.sql.execution import execute_one, prepare, wrapped
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
@@ -767,14 +767,17 @@ class PostgresAdapter:
         ``usage_events`` and ``usage_events_p2025_12`` is a way to scan one month and call it a
         year. :meth:`extract_partitions` reports the children where the planner needs them.
         """
+        # The catalogs take no parameter: the four statements are module constants, and each one
+        # goes through the chokepoint so the guard sees it immediately before it runs.
+        dialect = self.dialect()
         with self._connection() as connection, connection.cursor() as cur:
-            cur.execute(_CATALOG_TABLES_SQL)  # pi-lens-ignore: module-constant SQL
+            execute_one(cur, prepare(_CATALOG_TABLES_SQL, dialect=dialect))
             table_rows = cur.fetchall()
-            cur.execute(_CATALOG_COLUMNS_SQL)
+            execute_one(cur, prepare(_CATALOG_COLUMNS_SQL, dialect=dialect))
             column_rows = cur.fetchall()
-            cur.execute(_CATALOG_INDEXES_SQL)
+            execute_one(cur, prepare(_CATALOG_INDEXES_SQL, dialect=dialect))
             index_rows = cur.fetchall()
-            cur.execute(_CATALOG_FOREIGN_KEYS_SQL)
+            execute_one(cur, prepare(_CATALOG_FOREIGN_KEYS_SQL, dialect=dialect))
             foreign_key_rows = cur.fetchall()
 
         columns: dict[tuple[str, str], list[Column]] = {}
@@ -873,16 +876,12 @@ class PostgresAdapter:
         if text is None:
             raise NotSupported(OPTIONAL_METHODS["explain"], "this fragment carries no SQL")
         with self._connection() as connection, connection.cursor() as cur:
-            # `text` is a fragment the compiler built through the AST and the guard inspected, so it
-            # is code, not data: `as_query` marks that (see mdqm.sql.text). Its bound values travel
-            # with it -- explaining a parameterised statement without them fails outright.
-            # The inner statement is what can carry an injection; it is guarded before it is wrapped.
-            inner = prepare(text, dialect=self.dialect(), params=fragment.params or ())
-            execute_one(cur, PreparedStatement(
-                text="EXPLAIN (FORMAT JSON) " + inner.text,
-                params=inner.params,
-                dialect=inner.dialect,
-            ))
+            # `text` is a fragment the compiler built through the AST; it is guarded again here, at
+            # the moment it reaches the driver. Its bound values travel with it -- explaining a
+            # parameterised statement without them fails outright. `wrapped` adds the `EXPLAIN`
+            # command word to an already-guarded statement, because the guard refuses the wrapper.
+            inner = prepare(text, dialect=self.dialect(), params=fragment.params or None)
+            execute_one(cur, wrapped(inner, template="EXPLAIN (FORMAT JSON) {sql}"))
             row = cur.fetchone()
             document = row[0] if row else None
             children = _partition_children(cur)
@@ -911,7 +910,7 @@ class PostgresAdapter:
         ``mutable_critical`` (S05). They are counters, not deltas: two readings give the change.
         """
         with self._connection() as connection, connection.cursor() as cur:
-            cur.execute(MUTABILITY_SQL)
+            execute_one(cur, prepare(MUTABILITY_SQL, dialect=self.dialect()))
             rows = cur.fetchall()
         return mutability_from_rows(self._source, rows, self._clock())
 
@@ -1006,7 +1005,7 @@ class PostgresAdapter:
         worth testing without a server; this method only runs the query.
         """
         with self._connection() as connection, connection.cursor() as cur:
-            cur.execute(PARTITIONS_SQL)
+            execute_one(cur, prepare(PARTITIONS_SQL, dialect=self.dialect()))
             rows = cur.fetchall()
         return list(parse_partitions(rows))
 

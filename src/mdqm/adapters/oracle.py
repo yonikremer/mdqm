@@ -91,6 +91,7 @@ from mdqm.models import (
     TableKind,
     TableStats,
 )
+from mdqm.sql.execution import prepare, run
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
@@ -462,16 +463,14 @@ SELECT p.table_owner, p.table_name, p.partition_name, p.partition_position,
  ORDER BY p.table_owner, p.table_name, p.partition_position
 """
 
-_XPLAN_SQL: Final = """
-SELECT plan_table_output
-  FROM table(dbms_xplan.display('PLAN_TABLE', :1, 'BASIC +PARTITION'))
-"""
-
 _PLAN_SQL: Final = """
+/* Named binds, not `:1`: the guard parses this statement with sqlglot, whose Oracle dialect
+   rejects a positional bind, and routing the statement through the guard is worth more than the
+   positional spelling. */
 SELECT id, parent_id, operation, options, object_name, cardinality, cost,
        partition_start, partition_stop
   FROM plan_table
- WHERE statement_id = :1
+ WHERE statement_id = :sid
  ORDER BY id
 """
 
@@ -480,7 +479,7 @@ _VERSION_SQL: Final = "SELECT banner_full FROM v$version WHERE rownum = 1"
 _QUERY_STORE_SQL: Final = """
 SELECT sql_fulltext, executions, elapsed_time, rows_processed, last_active_time
   FROM v$sql
- WHERE last_active_time >= :1
+ WHERE last_active_time >= :since
    AND executions > 0
  ORDER BY elapsed_time DESC
 """
@@ -821,8 +820,7 @@ class OracleAdapter:
         for statement in (_VERSION_SQL, "SELECT version_full FROM product_component_version"):
             try:
                 # `statement` is one of the two module constants above, never a value.
-                # pi-lens-ignore: python-sql-injection
-                cur.execute(statement)  # nosemgrep: python-sql-injection
+                run(cur, prepare(statement, dialect=self.dialect()))
                 row = cur.fetchone()
             except oracledb.DatabaseError:
                 continue
@@ -869,28 +867,23 @@ class OracleAdapter:
         :meth:`extract_partitions` reports them where the planner needs them, and the parent stays
         the only name an agent can choose.
         """
-        # Every statement below is a module-level constant: the catalogs take no parameter.
+        # Every statement below is a module-level constant: the catalogs take no parameter. Each
+        # one goes through the chokepoint, so the guard sees it immediately before it runs.
+        dialect = self.dialect()
         with self._connection() as connection, connection.cursor() as cur:
-            # pi-lens-ignore: python-sql-injection
-            cur.execute(_CATALOG_TABLES_SQL)  # nosemgrep: python-sql-injection
+            run(cur, prepare(_CATALOG_TABLES_SQL, dialect=dialect))
             table_rows = cur.fetchall()
-            # pi-lens-ignore: python-sql-injection
-            cur.execute(_CATALOG_VIEWS_SQL)  # nosemgrep: python-sql-injection
+            run(cur, prepare(_CATALOG_VIEWS_SQL, dialect=dialect))
             view_rows = cur.fetchall()
-            # pi-lens-ignore: python-sql-injection
-            cur.execute(_CATALOG_COLUMNS_SQL)  # nosemgrep: python-sql-injection
+            run(cur, prepare(_CATALOG_COLUMNS_SQL, dialect=dialect))
             column_rows = cur.fetchall()
-            # pi-lens-ignore: python-sql-injection
-            cur.execute(_CATALOG_INDEXES_SQL)  # nosemgrep: python-sql-injection
+            run(cur, prepare(_CATALOG_INDEXES_SQL, dialect=dialect))
             index_rows = cur.fetchall()
-            # pi-lens-ignore: python-sql-injection
-            cur.execute(_CATALOG_CONSTRAINTS_SQL)  # nosemgrep: python-sql-injection
+            run(cur, prepare(_CATALOG_CONSTRAINTS_SQL, dialect=dialect))
             constraint_rows = cur.fetchall()
-            # pi-lens-ignore: python-sql-injection
-            cur.execute(_CATALOG_CONSTRAINT_COLUMNS_SQL)  # nosemgrep: python-sql-injection
+            run(cur, prepare(_CATALOG_CONSTRAINT_COLUMNS_SQL, dialect=dialect))
             constraint_column_rows = cur.fetchall()
-            # pi-lens-ignore: python-sql-injection
-            cur.execute(_PARTITIONED_TABLES_SQL)  # nosemgrep: python-sql-injection
+            run(cur, prepare(_PARTITIONED_TABLES_SQL, dialect=dialect))
             partitioned = {(str(row[0]), str(row[1])) for row in cur.fetchall()}
 
         columns: dict[tuple[str, str], list[Column]] = {}
@@ -1040,14 +1033,13 @@ class OracleAdapter:
         bounds, and the lower bound is the previous partition's ``HIGH_VALUE`` -- which is exactly
         what a range partition means.
         """
+        dialect = self.dialect()
         with self._connection() as connection, connection.cursor() as cur:
-            # pi-lens-ignore: python-sql-injection
-            cur.execute(_PARTITIONED_TABLES_SQL)
+            run(cur, prepare(_PARTITIONED_TABLES_SQL, dialect=dialect))
             table_rows = cur.fetchall()
-            # pi-lens-ignore: python-sql-injection
-            cur.execute(_PARTITION_KEYS_SQL)
+            run(cur, prepare(_PARTITION_KEYS_SQL, dialect=dialect))
             key_rows = cur.fetchall()
-            cur.execute(_PARTITIONS_SQL)
+            run(cur, prepare(_PARTITIONS_SQL, dialect=dialect))
             partition_rows = cur.fetchall()
 
         keys: dict[tuple[str, str], list[str]] = {}
@@ -1112,14 +1104,18 @@ class OracleAdapter:
         self._statement_seq += 1
         statement_id = f"mdqm_plan_{self._statement_seq}"
         raw: str | None = None
+        # `EXPLAIN PLAN` is a server command the guard refuses, so the statement it inspects is the
+        # fragment -- the query the optimizer is asked about -- and the prefix is our own constant.
+        # The statement id is this adapter's own counter, never anything a caller supplied.
+        explained = prepare(
+            statement,
+            dialect=self.dialect(),
+            params=dict(params) if params else None,
+            prefix=f"EXPLAIN PLAN SET STATEMENT_ID = '{statement_id}' FOR ",
+        )
         with self._connection() as connection, connection.cursor() as cur:
             try:
-                # `statement` is compiled-and-guarded SQL text, not a value; binds stay binds.
-                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-                cur.execute(  # nosemgrep: python-sql-injection
-                    f"EXPLAIN PLAN SET STATEMENT_ID = '{statement_id}' FOR {statement}",
-                    dict(params) if params else None,  # pyright: ignore[reportArgumentType]
-                )
+                run(cur, explained)
             except oracledb.DatabaseError as exc:
                 if _is_no_privilege(exc):
                     raise NotSupported(
@@ -1129,10 +1125,20 @@ class OracleAdapter:
                     ) from exc
                 raise
             try:
-                cur.execute(_PLAN_SQL, [statement_id])
+                run(cur, prepare(_PLAN_SQL, dialect="oracle", params={"sid": statement_id}))
                 rows = [tuple(row) for row in cur.fetchall()]
                 with contextlib.suppress(oracledb.DatabaseError):
-                    cur.execute(_XPLAN_SQL, [statement_id])
+                    # `DBMS_XPLAN` is on the guard's denylist (a `DBMS_*` package), so this one
+                    # statement is a literal here rather than a guarded constant. It reads the plan
+                    # rows this call just wrote, takes one bound value, and runs inside the same
+                    # read-only transaction as everything else.
+                    cur.execute(
+                        """
+                        SELECT plan_table_output
+                          FROM table(dbms_xplan.display('PLAN_TABLE', :1, 'BASIC +PARTITION'))
+                        """,
+                        [statement_id],
+                    )
                     raw = "\n".join(str(row[0]) for row in cur.fetchall())
                 cur.execute("DELETE FROM plan_table WHERE statement_id = :1", [statement_id])
             finally:
@@ -1169,6 +1175,13 @@ class OracleAdapter:
             raise ValueError(
                 f"the oracle adapter runs SQL; fragment kind {fragment.kind!r} is not supported"
             )
+        # Guarded here, immediately before it runs, and before a pooled connection is taken: a
+        # refused statement never reaches the server and never occupies the pool.
+        prepared = prepare(
+            fragment.sql,
+            dialect=self.dialect(),
+            params=dict(fragment.params) if fragment.params else None,
+        )
         pool = self.pool
         connection = pool.acquire()
         try:
@@ -1178,7 +1191,7 @@ class OracleAdapter:
             watchdog = _Deadline(connection, limits.timeout_s, connection.cancel)
             watchdog.arm()
             try:
-                cursor.execute(fragment.sql, dict(fragment.params) if fragment.params else None)
+                run(cursor, prepared)
             except oracledb.DatabaseError as exc:
                 watchdog.disarm()
                 raise _stream_error(
@@ -1236,7 +1249,10 @@ class OracleAdapter:
         window = since.astimezone(UTC).replace(tzinfo=None)
         with self._connection() as connection, connection.cursor() as cur:
             try:
-                cur.execute(_QUERY_STORE_SQL, [window])
+                run(
+                    cur,
+                    prepare(_QUERY_STORE_SQL, dialect="oracle", params={"since": window}),
+                )
                 rows = cur.fetchall()
             except oracledb.DatabaseError as exc:
                 if _is_no_privilege(exc):
