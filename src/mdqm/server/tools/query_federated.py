@@ -59,6 +59,7 @@ from mdqm.executor.models import (
     FederatedPlan,
     FragmentStep,
     GroupColumn,
+    JoinHow,
     JoinStep,
     LocalAggregate,
     QualityReport,
@@ -290,7 +291,7 @@ def federated_plan(
     return FederatedQuery(plan=plan, fixes=tuple(fixes))
 
 
-def _how(*, partner_step: str, used: set[str], partner_is_many: bool) -> str:
+def _how(*, partner_step: str, used: set[str], partner_is_many: bool) -> JoinHow:
     """Which join shape a step gets; see the module docstring for the rule and its reasons."""
     if partner_step in used:
         return "inner"
