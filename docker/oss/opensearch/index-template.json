@@ -1,0 +1,47 @@
+{
+  "_meta": {
+    "generator": "scripts/seed_oss.py",
+    "note": "one index per event month; query through the alias, never a bare index name",
+    "seed": 1,
+    "source": "src/mdqm/testing/world.py"
+  },
+  "index_patterns": [
+    "mdqm-usage-events-*"
+  ],
+  "priority": 100,
+  "template": {
+    "aliases": {
+      "mdqm-usage-events": {
+        "is_write_index": false
+      }
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "client_no": {
+          "type": "keyword"
+        },
+        "corrects_event_id": {
+          "type": "long"
+        },
+        "event_id": {
+          "type": "long"
+        },
+        "insertion_time": {
+          "type": "date"
+        },
+        "start_time": {
+          "type": "date"
+        },
+        "units": {
+          "type": "integer"
+        }
+      }
+    },
+    "settings": {
+      "index.refresh_interval": "1s",
+      "number_of_replicas": 0,
+      "number_of_shards": 1
+    }
+  }
+}

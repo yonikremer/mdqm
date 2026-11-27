@@ -5,6 +5,16 @@
 #     python scripts/dev.py up pg          # the MVP target, ~1 GB of RAM
 #     python scripts/dev.py down           # stops everything and removes the volumes
 #
+# The `oss` profile is the open-source-only stack (Postgres + MariaDB + OpenSearch + the mock API)
+# for machines with no Oracle/SQL Server/Elasticsearch licence:
+#
+#     docker compose --profile oss up -d   # or: python scripts/dev.py up oss
+#
+# A service may belong to several profiles (Compose spec, `services.<name>.profiles`; assumed
+# Compose file format: the spec, no top-level `version:` key, Docker Compose v2.20 or newer as
+# docs/dev-env.md requires). `pg` and `api` therefore belong to their own profile *and* to `oss`.
+# Nothing proprietary is in `oss`: Oracle, SQL Server and Elasticsearch keep their own profiles.
+#
 # Conventions this file keeps, because integration tests and adapters rely on them:
 #   * no `latest` tag: every image is pinned to a major (or an exact patch) version;
 #   * every published port is bound to 127.0.0.1 on a non-default host port, so a locally
@@ -18,7 +28,7 @@ services:
   # PostgreSQL 16: the MVP target. crm/billing/erp are three databases in one server, so the
   # cross-source conversions are testable with Postgres alone.
   pg:
-    profiles: ["pg"]
+    profiles: ["pg", "oss"]
     image: postgres:16
     command:
       - postgres
@@ -118,7 +128,7 @@ services:
   # endpoints with an API key, filters, cursor paging and a 429. Also runs in process in unit tests;
   # this service exists for the cases that need a real port.
   api:
-    profiles: ["api"]
+    profiles: ["api", "oss"]
     build:
       context: .
       dockerfile: docker/api.Dockerfile
@@ -137,8 +147,85 @@ services:
       retries: 20
       start_period: 5s
 
+  # --- the open-source-only stack (`oss`) ------------------------------------------------
+
+  # MariaDB 11 (GPL) as a *second SQL dialect*: MySQL-style quoting, DATETIME and DECIMAL, and one
+  # InnoDB table for the mutable/hist dataset. It is NOT Oracle and NOT T-SQL: it proves the
+  # compiler can emit a second dialect and the loader can push the world through it, nothing more.
+  # The seed is generated from src/mdqm/testing/world.py by scripts/seed_oss.py.
+  mariadb:
+    profiles: ["oss"]
+    image: mariadb:11.4.4
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MDQM_MARIADB_ROOT_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      MARIADB_DATABASE: mdqm
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${MDQM_MARIADB_PORT:-53306}:3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ./docker/oss/maria:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # The password is read inside the container, so it never appears in this file. `$$` is a
+      # literal `$` for Compose.
+      test: ["CMD-SHELL", "mariadb-admin ping --protocol=tcp -h 127.0.0.1 -u root -p$$MARIADB_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+
+  # OpenSearch 2.x (Apache-2.0): the open-source stand-in for Elasticsearch. It serves the same
+  # REST API the repo's httpx-based search adapter speaks, so the adapter has something to run
+  # against without the Elastic licence. Single node, security off, 512 MB heap on purpose.
+  opensearch:
+    profiles: ["oss"]
+    image: opensearchproject/opensearch:2.17.1
+    environment:
+      cluster.name: mdqm-oss
+      node.name: mdqm-opensearch
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${MDQM_OPENSEARCH_PORT:-59201}:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    ulimits:
+      # bootstrap.memory_lock needs an unlimited memlock limit, else the node refuses to start.
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      # `yellow` is enough: one node with one index is never green.
+      test: ["CMD-SHELL", "curl -fsS 'http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=1s'"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  # One-shot loader: puts the index template (with its alias), bulk-loads the generated NDJSON and
+  # then prints what exists. `restart: "no"` and no ports: it runs, reports, exits.
+  opensearch-init:
+    profiles: ["oss"]
+    image: curlimages/curl:8.11.1
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      MDQM_OPENSEARCH_URL: http://opensearch:9200
+      TZ: UTC
+    volumes:
+      - ./docker/oss/opensearch:/seeds:ro
+    entrypoint: ["sh", "/seeds/load.sh"]
+    restart: "no"
+
 volumes:
   pg-data:
   oracle-data:
   mssql-data:
   es-data:
+  mariadb-data:
+  opensearch-data:

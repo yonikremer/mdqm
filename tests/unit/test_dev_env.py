@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import types
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,14 +26,35 @@ COMPOSE_PATH = REPO_ROOT / "docker-compose.yml"
 ENV_EXAMPLE_PATH = REPO_ROOT / ".env.example"
 GITIGNORE_PATH = REPO_ROOT / ".gitignore"
 
-# profile -> (container port, image prefix)
-SERVICES: dict[str, tuple[int, str]] = {
-    "pg": (5432, "postgres:"),
-    "oracle": (1521, "gvenzl/oracle-free:"),
-    "mssql": (1433, "mcr.microsoft.com/mssql/server:"),
-    "es": (9200, "docker.elastic.co/elasticsearch/elasticsearch:"),
-    "api": (8000, "mdqm/mock-api:"),
+@dataclass(frozen=True)
+class ServiceSpec:
+    """What the tests claim about one compose service.
+
+    ``container_port is None`` marks a one-shot service that publishes nothing (it runs, reports and
+    exits), so the loopback/healthcheck rules below do not apply to it; the one-shot rules do.
+    """
+
+    profiles: tuple[str, ...]
+    image_prefix: str
+    container_port: int | None = None
+    healthcheck: bool = True
+
+
+# service -> spec. `pg` and `api` also belong to `oss`: the open-source-only stack is those two plus
+# MariaDB and OpenSearch (owner request, see progress/OSS-mocks.md).
+SERVICES: dict[str, ServiceSpec] = {
+    "pg": ServiceSpec(("pg", "oss"), "postgres:", 5432),
+    "oracle": ServiceSpec(("oracle",), "gvenzl/oracle-free:", 1521),
+    "mssql": ServiceSpec(("mssql",), "mcr.microsoft.com/mssql/server:", 1433),
+    "es": ServiceSpec(("es",), "docker.elastic.co/elasticsearch/elasticsearch:", 9200),
+    "api": ServiceSpec(("api", "oss"), "mdqm/mock-api:", 8000),
+    "mariadb": ServiceSpec(("oss",), "mariadb:", 3306),
+    "opensearch": ServiceSpec(("oss",), "opensearchproject/opensearch:", 9200),
+    "opensearch-init": ServiceSpec(("oss",), "curlimages/curl:", None, healthcheck=False),
 }
+
+OSS_PROFILE = {"pg", "mariadb", "opensearch", "opensearch-init", "api"}
+"""What `docker compose --profile oss up -d` starts: no Oracle, no SQL Server, no Elasticsearch."""
 
 VAR_REFERENCE = re.compile(r"\$\{([A-Z0-9_]+)")
 
@@ -77,12 +99,30 @@ def test_compose_parses_and_declares_the_five_profiles() -> None:
     document = load_yaml(COMPOSE_PATH)
     assert document["name"] == "mdqm", "the project name keeps container/volume names in mdqm_*"
     assert set(document["services"]) == set(SERVICES)
-    assert set(document["volumes"]) >= {"pg-data", "oracle-data", "mssql-data", "es-data"}
+    assert set(document["volumes"]) >= {
+        "pg-data",
+        "oracle-data",
+        "mssql-data",
+        "es-data",
+        "mariadb-data",
+        "opensearch-data",
+    }
 
 
 @pytest.mark.parametrize("service", sorted(SERVICES))
-def test_each_service_has_exactly_its_own_profile(service: str) -> None:
-    assert services()[service]["profiles"] == [service]
+def test_each_service_declares_the_profiles_we_claim(service: str) -> None:
+    assert services()[service]["profiles"] == list(SERVICES[service].profiles)
+
+
+def test_oss_profile_is_the_open_source_stack_only() -> None:
+    claimed = {
+        name for name, definition in services().items() if "oss" in definition["profiles"]
+    }
+    assert claimed == OSS_PROFILE
+    for name, spec in SERVICES.items():
+        if name in OSS_PROFILE:
+            continue
+        assert "oss" not in spec.profiles, f"{name} must stay out of the open-source-only stack"
 
 
 @pytest.mark.parametrize("service", sorted(SERVICES))
@@ -93,7 +133,7 @@ def test_each_image_is_pinned_and_never_latest(service: str) -> None:
         assert service == "api"
         assert (REPO_ROOT / definition["build"]["dockerfile"]).is_file()
     image = definition["image"]
-    assert image.startswith(SERVICES[service][1]), f"{service}: unexpected image {image}"
+    assert image.startswith(SERVICES[service].image_prefix), f"{service}: unexpected image {image}"
     tag = image.rsplit(":", 1)[1]
     assert tag not in {"latest", "stable", "main"}, f"{service}: floating tag {tag}"
     if "build" not in definition:
@@ -104,7 +144,13 @@ def test_each_image_is_pinned_and_never_latest(service: str) -> None:
 
 @pytest.mark.parametrize("service", sorted(SERVICES))
 def test_each_service_has_a_healthcheck(service: str) -> None:
-    healthcheck = services()[service]["healthcheck"]
+    definition = services()[service]
+    if not SERVICES[service].healthcheck:
+        # A one-shot loader has nothing to poll; it must instead not restart and publish nothing.
+        assert definition["restart"] == "no"
+        assert "ports" not in definition
+        return
+    healthcheck = definition["healthcheck"]
     assert healthcheck["test"], "an empty healthcheck is not a healthcheck"
     assert healthcheck["retries"] > 0
     assert int(str(healthcheck["interval"]).rstrip("s")) > 0
@@ -116,11 +162,15 @@ def test_ports_are_loopback_only_and_not_the_engine_default(service: str) -> Non
     pattern = re.compile(
         r"^127\.0\.0\.1:\$\{(?P<var>[A-Z0-9_]+)(?::-\d+)?\}:(?P<container>\d+)$"
     )
-    published = services()[service]["ports"]
-    assert len(published) == 1
+    published = services()[service].get("ports")
+    if SERVICES[service].container_port is None:
+        # A one-shot service publishes nothing, which the healthcheck test already asserts.
+        assert published is None
+        return
+    assert published is not None and len(published) == 1
     match = pattern.match(str(published[0]))
     assert match is not None, f"{service}: {published[0]!r} is not loopback+variable+non-default"
-    assert match.group("container") == str(SERVICES[service][0])
+    assert match.group("container") == str(SERVICES[service].container_port)
     assert match.group("var") in env_example_values(), "the host port is overridable from .env"
 
 
@@ -140,6 +190,7 @@ def test_env_example_holds_only_throwaway_dev_credentials() -> None:
         "MDQM_ORACLE_PASSWORD",
         "MDQM_MSSQL_PASSWORD",
         "MDQM_MOCK_API_KEY",
+        "MDQM_MARIADB_ROOT_PASSWORD",
     }
     for key, value in secrets.items():
         assert value.startswith("MqmDev"), f"{key} does not look like a throwaway dev value"
@@ -166,6 +217,11 @@ def test_no_windows_specific_paths_in_the_compose_file() -> None:
             )
 
 
+def declared_profiles() -> set[str]:
+    """Every profile name the compose file actually uses, in a stable order for assertions."""
+    return {profile for spec in SERVICES.values() for profile in spec.profiles}
+
+
 def test_dev_py_help_lists_every_profile() -> None:
     """`--help` must tell a reader which profiles exist, without reading the compose file."""
     up_help = subprocess.run(  # noqa: S603 - fixed argv, no shell
@@ -176,7 +232,7 @@ def test_dev_py_help_lists_every_profile() -> None:
         check=False,
     )
     assert up_help.returncode == 0, up_help.stderr
-    for profile in SERVICES:
+    for profile in declared_profiles():
         assert profile in up_help.stdout
     top_help = subprocess.run(  # noqa: S603 - fixed argv, no shell
         [sys.executable, str(REPO_ROOT / "scripts" / "dev.py"), "--help"],
@@ -223,8 +279,9 @@ def test_up_waits_for_health_and_down_removes_volumes() -> None:
     assert dev.profile_args(["pg", "es"]) == ["--profile", "pg", "--profile", "es"]
     down = dev.compose(*dev.profile_args(dev.PROFILES), "down", "--volumes", "--remove-orphans")
     assert "--volumes" in down
-    for profile in SERVICES:
-        assert profile in down
+    assert declared_profiles() <= set(dev.PROFILES), (
+        "dev.py down must name every profile, or a started service survives it"
+    )
 
 
 @pytest.mark.parametrize(
