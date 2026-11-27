@@ -1,0 +1,47 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Aggregate",
+      "Strategy": "Sorted",
+      "Partial Mode": "Simple",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 66.76,
+      "Total Cost": 67.0,
+      "Plan Rows": 14,
+      "Plan Width": 31,
+      "Group Key": [
+        "usage_events.client_no"
+      ],
+      "Plans": [
+        {
+          "Node Type": "Sort",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 66.76,
+          "Total Cost": 66.79,
+          "Plan Rows": 14,
+          "Plan Width": 27,
+          "Sort Key": [
+            "usage_events.client_no"
+          ],
+          "Plans": [
+            {
+              "Node Type": "Append",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 0.0,
+              "Total Cost": 66.49,
+              "Plan Rows": 14,
+              "Plan Width": 27,
+              "Subplans Removed": 14,
+              "Plans": []
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

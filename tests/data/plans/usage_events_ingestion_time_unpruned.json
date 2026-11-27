@@ -1,0 +1,231 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Sort",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 149.76,
+      "Total Cost": 150.26,
+      "Plan Rows": 202,
+      "Plan Width": 19,
+      "Sort Key": [
+        "usage_events.client_no"
+      ],
+      "Plans": [
+        {
+          "Node Type": "Aggregate",
+          "Strategy": "Hashed",
+          "Partial Mode": "Simple",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 140.0,
+          "Total Cost": 142.03,
+          "Plan Rows": 202,
+          "Plan Width": 19,
+          "Group Key": [
+            "usage_events.client_no"
+          ],
+          "Planned Partitions": 0,
+          "Plans": [
+            {
+              "Node Type": "Append",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 0.0,
+              "Total Cost": 137.01,
+              "Plan Rows": 599,
+              "Plan Width": 15,
+              "Subplans Removed": 0,
+              "Plans": [
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2024_11",
+                  "Alias": "usage_events_1",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 0.0,
+                  "Plan Rows": 1,
+                  "Plan Width": 42,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2024_12",
+                  "Alias": "usage_events_2",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 0.0,
+                  "Plan Rows": 1,
+                  "Plan Width": 42,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_01",
+                  "Alias": "usage_events_3",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 0.0,
+                  "Plan Rows": 1,
+                  "Plan Width": 42,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_02",
+                  "Alias": "usage_events_4",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 0.0,
+                  "Plan Rows": 1,
+                  "Plan Width": 42,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_03",
+                  "Alias": "usage_events_5",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 0.0,
+                  "Plan Rows": 1,
+                  "Plan Width": 42,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_04",
+                  "Alias": "usage_events_6",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 0.0,
+                  "Plan Rows": 1,
+                  "Plan Width": 42,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_05",
+                  "Alias": "usage_events_7",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 15.2,
+                  "Plan Rows": 1,
+                  "Plan Width": 15,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_06",
+                  "Alias": "usage_events_8",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 15.09,
+                  "Plan Rows": 1,
+                  "Plan Width": 15,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_07",
+                  "Alias": "usage_events_9",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 21.77,
+                  "Plan Rows": 1,
+                  "Plan Width": 15,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_08",
+                  "Alias": "usage_events_10",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 16.64,
+                  "Plan Rows": 1,
+                  "Plan Width": 15,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_09",
+                  "Alias": "usage_events_11",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 15.38,
+                  "Plan Rows": 1,
+                  "Plan Width": 15,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_10",
+                  "Alias": "usage_events_12",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 20.04,
+                  "Plan Rows": 1,
+                  "Plan Width": 15,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_11",
+                  "Alias": "usage_events_13",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 14.91,
+                  "Plan Rows": 1,
+                  "Plan Width": 15,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Member",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "usage_events_p2025_12",
+                  "Alias": "usage_events_14",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 15.0,
+                  "Plan Rows": 586,
+                  "Plan Width": 15,
+                  "Filter": "((insertion_time >= '2025-12-02 00:00:00+00'::timestamp with time zone) AND (insertion_time < '2026-01-01 00:00:00+00'::timestamp with time zone))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

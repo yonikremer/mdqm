@@ -1,0 +1,49 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Aggregate",
+      "Strategy": "Hashed",
+      "Partial Mode": "Simple",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 66.98,
+      "Total Cost": 67.28,
+      "Plan Rows": 30,
+      "Plan Width": 24,
+      "Group Key": [
+        "usage_events.client_no"
+      ],
+      "Planned Partitions": 0,
+      "Plans": [
+        {
+          "Node Type": "Append",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 0.0,
+          "Total Cost": 66.83,
+          "Plan Rows": 30,
+          "Plan Width": 20,
+          "Subplans Removed": 13,
+          "Plans": [
+            {
+              "Node Type": "Index Scan",
+              "Parent Relationship": "Member",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Scan Direction": "Forward",
+              "Index Name": "usage_events_p2025_12_start_time_idx",
+              "Relation Name": "usage_events_p2025_12",
+              "Alias": "usage_events_1",
+              "Startup Cost": 0.28,
+              "Total Cost": 8.34,
+              "Plan Rows": 3,
+              "Plan Width": 15,
+              "Index Cond": "((start_time >= $1) AND (start_time < $2))"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

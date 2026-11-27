@@ -440,18 +440,29 @@ def partition_scan_all(
     granularity: str,
     default_window: str | None = None,
     partitions_if_fixed: str | None = None,
+    scanned: str | None = None,
 ) -> ErrorResponse:
     """Nothing filters the partition key, so all partitions would be read.
+
+    ``scanned`` carries what the source's own plan actually named, for the explain gate: the key
+    may be filtered and still not prune, and then the honest message is the measured one rather
+    than "no filter" (see :func:`mdqm.planner.partitions.gate_plan`).
 
     Code ``PARTITION_SCAN_ALL``.
     """
     relation = _ident(table)
     column = _ident(key)
     window = default_window if default_window is not None else "30d"
+    problem = (
+        f'"{relation}" is partitioned {_ident(granularity)} on "{column}" and the spec has no '
+        "filter on it, so every partition would be scanned."
+        if scanned is None
+        else f'"{relation}" is partitioned {_ident(granularity)} on "{column}", and the '
+        f"source's own plan would scan {scanned} partitions anyway."
+    )
     return _build(
         ErrorCode.PARTITION_SCAN_ALL,
-        f'"{relation}" is partitioned {_ident(granularity)} on "{column}" and the spec has no '
-        "filter on it, so every partition would be scanned.",
+        problem,
         f'Add "time": {_window(window)} (or any filter on "{column}"): that is what limits the '
         "scan to a few partitions.",
         partitions_if_fixed=partitions_if_fixed,

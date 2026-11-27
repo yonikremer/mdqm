@@ -1,0 +1,18 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Index Scan",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Scan Direction": "Forward",
+      "Index Name": "usage_events_p2025_12_start_time_idx",
+      "Relation Name": "usage_events_p2025_12",
+      "Alias": "usage_events",
+      "Startup Cost": 0.28,
+      "Total Cost": 8.66,
+      "Plan Rows": 19,
+      "Plan Width": 12,
+      "Index Cond": "((start_time >= '2025-12-05 00:00:00+00'::timestamp with time zone) AND (start_time < '2025-12-06 00:00:00+00'::timestamp with time zone))"
+    }
+  }
+]

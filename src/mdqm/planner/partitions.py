@@ -42,6 +42,7 @@ from mdqm.models import (
     PartitionGranularity,
     Partitioning,
     PartitionStrategy,
+    PlanSummary,
 )
 from mdqm.spec.durations import Duration
 
@@ -52,6 +53,7 @@ __all__ = [
     "Range",
     "align_to_partitions",
     "estimate_partition_scan",
+    "gate_plan",
     "plan_partitions",
 ]
 
@@ -879,6 +881,43 @@ def _apply_cap(plan: PartitionPlan, *, table: str, max_partitions: int | None) -
             estimated=plan.estimate.summary,
             limit=f"{max_partitions} partitions",
         ),
+    )
+
+
+def gate_plan(
+    summary: PlanSummary,
+    *,
+    table: str,
+    partitioning: Partitioning | None,
+    max_partitions_scanned: int | None,
+) -> ErrorResponse | None:
+    """Refuse a plan that scans more partitions than ``max_partitions_scanned`` (C08's cap).
+
+    :func:`plan_partitions` caps the *static* estimate, counted from the declared bounds. This gate
+    applies the same cap to what the source's own planner did, which is the only authority on
+    whether pruning actually happened: a filter written on the wrong column, or one a function
+    hides, passes the static count and still reads every partition. The code is
+    ``PARTITION_SCAN_ALL`` because from the source's point of view that is what happened.
+
+    Returns:
+        The agent-facing error, or ``None`` when the plan stays inside the cap (and whenever the
+        source reported no partition count at all: an unproven count is not a refusal).
+    """
+    scanned = summary.partitions_scanned
+    if max_partitions_scanned is None or scanned is None or scanned <= max_partitions_scanned:
+        return None
+    total = summary.partitions_total
+    key = ", ".join(partitioning.key) if partitioning is not None else ""
+    granularity = (
+        partitioning.granularity.value
+        if partitioning is not None and partitioning.granularity is not None
+        else (partitioning.strategy.value if partitioning is not None else "by the source")
+    )
+    return partition_scan_all(
+        table=table,
+        key=key or "the partition key",
+        granularity=granularity,
+        scanned=f"{scanned} of {total}" if total is not None else str(scanned),
     )
 
 

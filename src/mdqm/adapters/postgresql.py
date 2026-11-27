@@ -48,10 +48,10 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import re
 import time
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, ClassVar, Final
 
 import psycopg
@@ -60,6 +60,13 @@ import pyarrow as pa
 from psycopg import conninfo, sql
 
 from mdqm.adapters.base import OPTIONAL_METHODS, ArrowStream, NotSupported
+from mdqm.adapters.postgresql_plan import (
+    PARTITIONS_SQL,
+    parse_partitions,
+    parse_plan,
+    row_estimate,
+    split_names,
+)
 from mdqm.adapters.postgresql_stats import (
     MUTABILITY_CAPABILITY,
     MUTABILITY_SQL,
@@ -79,10 +86,7 @@ from mdqm.models import (
     Index,
     Limits,
     NormalizedType,
-    PartitionBound,
-    PartitionGranularity,
     Partitioning,
-    PartitionStrategy,
     PlanSummary,
     RawQuery,
     Table,
@@ -131,24 +135,35 @@ _CAPABILITY_PARTITIONS: Final = "partition_metadata"
 #: Why the optional features this adapter does not serve are reported *unprobed* (``None``) rather
 #: than unsupported. PostgreSQL can do all of them; the code that reads them belongs to another
 #: task, and saying "this source cannot" would be a lie the capability report repeats.
-_NOT_YET_EXPLAIN: Final = "EXPLAIN plan parsing is task A03 (adapters/postgresql_plan.py)"
+_NOT_YET_QUERIES: Final = "query-store mining is task A04 (adapters/postgresql_stats.py)"
+_NOT_YET_STATS: Final = "mutability counters are task A04 (adapters/postgresql_stats.py)"
+
+#: Why ``explain_plan`` stays unprobed. The plan and its partition counts are served (A03:
+#: :mod:`mdqm.adapters.postgresql_plan`), but the pruning *verdict* needs the window a spec intends,
+#: which an adapter cannot see; the adapter never decides whether a scan is acceptable.
+_UNPROBED_EXPLAIN: Final = (
+    "EXPLAIN counts are parsed (adapters/postgresql_plan.py); the pruning verdict needs the "
+    "spec's window, which the planner owns"
+)
 
 
-def _partition_relation_names(cursor: psycopg.Cursor[Any]) -> list[str]:
-    """Every partition relation name in this database, sorted.
+def _partition_children(cursor: psycopg.Cursor[Any]) -> dict[str, str]:
+    """Partition relation name -> its parent's name, for this whole database.
 
-    ``EXPLAIN`` names the partitions it scans, so the plan text is the source of truth; this list
-    is what those names are intersected with (a plan also names indexes, which are not partitions).
+    ``EXPLAIN`` names the partitions it scans, so the plan is the source of truth for *scanned*;
+    this map supplies the other half, how many partitions the scanned table has in total, and which
+    other partitioned tables the plan happened to touch (a join reads two of them).
     """
     rows = cursor.execute(
         """
-        SELECT c.relname
+        SELECT c.relname, p.relname
         FROM pg_inherits i
         JOIN pg_class c ON c.oid = i.inhrelid
+        JOIN pg_class p ON p.oid = i.inhparent
         ORDER BY c.relname
         """
     ).fetchall()
-    return [str(row[0]) for row in rows]
+    return {str(row[0]): str(row[1]) for row in rows}
 
 
 def _as_int(value: object) -> int | None:
@@ -297,32 +312,6 @@ _TABLE_KINDS: Final[dict[str, TableKind]] = {
     "f": TableKind.OTHER,
 }
 
-_PARTITION_STRATEGIES: Final[dict[str, PartitionStrategy]] = {
-    "r": PartitionStrategy.RANGE,
-    "l": PartitionStrategy.LIST,
-    "h": PartitionStrategy.HASH,
-}
-
-_MONTH_STEPS: Final[dict[timedelta, PartitionGranularity]] = {
-    timedelta(hours=1): PartitionGranularity.HOUR,
-    timedelta(days=1): PartitionGranularity.DAY,
-    timedelta(days=7): PartitionGranularity.WEEK,
-    timedelta(days=90): PartitionGranularity.QUARTER,
-    timedelta(days=365): PartitionGranularity.YEAR,
-}
-
-_RANGE_BOUND_RE: Final = re.compile(
-    r"\AFOR VALUES FROM \((?P<lower>.*)\) TO \((?P<upper>.*)\)\Z", re.DOTALL
-)
-_LIST_BOUND_RE: Final = re.compile(r"\AFOR VALUES IN \((?P<values>.*)\)\Z", re.DOTALL)
-_HASH_BOUND_RE: Final = re.compile(
-    r"\AFOR VALUES WITH \(MODULUS (?P<modulus>\d+), REMAINDER (?P<remainder>\d+)\)\Z",
-    re.IGNORECASE,
-)
-_QUOTED_RE: Final = re.compile(r"\A'(?P<text>.*)'\Z", re.DOTALL)
-_PARTKEY_RE: Final = re.compile(r"\A[A-Z]+ \((?P<key>.*)\)\Z")
-
-
 # --- SQL ------------------------------------------------------------------------------------
 
 # Partition children are excluded: they are how the parent is stored, not tables an agent should
@@ -415,29 +404,6 @@ SELECT n.nspname AS schema_name,
    AND NOT c.relispartition
    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
  ORDER BY n.nspname, c.relname, con.conname
-"""
-
-# Index partitions inherit the parent's index definition (`accounts_hash_p0_pkey`), so the child
-# relation is restricted to a real table: otherwise every partition of every index shows up.
-_PARTITIONS_SQL: Final = """
-SELECT pn.nspname AS parent_schema,
-       pc.relname AS parent_table,
-       pt.partstrat AS strategy,
-       pg_get_partkeydef(pc.oid) AS partition_key,
-       cn.nspname AS child_schema,
-       cc.relname AS child_table,
-       pg_get_expr(cc.relpartbound, cc.oid) AS bound,
-       cc.reltuples::bigint AS row_estimate
-  FROM pg_inherits i
-  JOIN pg_class pc ON pc.oid = i.inhparent
-  JOIN pg_namespace pn ON pn.oid = pc.relnamespace
-  JOIN pg_class cc ON cc.oid = i.inhrelid
-  JOIN pg_namespace cn ON cn.oid = cc.relnamespace
-  LEFT JOIN pg_partitioned_table pt ON pt.partrelid = pc.oid
- WHERE pn.nspname NOT IN ('pg_catalog', 'information_schema')
-   AND pc.relkind = 'p'
-   AND cc.relkind = 'r'
- ORDER BY pn.nspname, pc.relname, cc.relname
 """
 
 
@@ -731,14 +697,12 @@ class PostgresAdapter:
             partitioned = cur.fetchone()
             can_read_partitions = bool(partitioned and partitioned[0])
             queries = query_store_state(cur)
+        partitions_supported, partitions_detail = self._probe_partitions(can_read_partitions)
         capabilities = {
             _CAPABILITY_PARTITIONS: Capability(
-                supported=can_read_partitions,
-                detail="pg_partitioned_table + pg_inherits"
-                if can_read_partitions
-                else "this server has no declarative partitioning catalog (pre-10)",
+                supported=partitions_supported, detail=partitions_detail
             ),
-            "explain_plan": Capability(detail=_NOT_YET_EXPLAIN),
+            "explain_plan": Capability(detail=_UNPROBED_EXPLAIN),
             # Claimed only when the extension is installed *and* this role may select from it:
             # the conformance kit requires a claimed capability's method not to raise.
             OPTIONAL_METHODS["mine_queries"]: Capability(
@@ -755,6 +719,24 @@ class PostgresAdapter:
             retrieved_at=self._clock(),
             capabilities=capabilities,
         )
+
+    def _probe_partitions(self, has_catalog: bool) -> tuple[bool, str]:
+        """Claim ``partition_metadata`` only if extraction really returns metadata.
+
+        A catalog table that exists says nothing about whether *our* reading of it works: an
+        unsupported partitioning shape raises :class:`NotSupported`, and a permission problem
+        raises a driver error. Both mean the planner must take its fallback, so both are reported
+        as unsupported with the reason, never as a claim the rest of the system then relies on.
+        """
+        if not has_catalog:
+            return False, "this server has no declarative partitioning catalog (pre-10)"
+        try:
+            found = self.extract_partitions()
+        except NotSupported as exc:
+            return False, exc.detail or exc.capability
+        except psycopg.Error as exc:
+            return False, f"the partition catalog could not be read: {exc.diag.message_primary}"
+        return True, f"pg_partitioned_table + pg_inherits: {len(found)} partitioned table(s) read"
 
     # --- SourceAdapter: catalog ----------------------------------------------------------
 
@@ -795,7 +777,7 @@ class PostgresAdapter:
         indexes: dict[tuple[str, str], list[Index]] = {}
         for row in index_rows:
             key = (str(row[0]), str(row[1]))
-            names = _split_names(row[7])
+            names = split_names(row[7])
             if not names:
                 continue  # an expression-only index has no column list to report
             indexes.setdefault(key, []).append(
@@ -811,8 +793,8 @@ class PostgresAdapter:
 
         foreign_keys: dict[tuple[str, str], list[ForeignKey]] = {}
         for row in foreign_key_rows:
-            local = _split_names(row[5])
-            referenced = _split_names(row[6])
+            local = split_names(row[5])
+            referenced = split_names(row[6])
             if not local or len(local) != len(referenced):
                 continue
             key = (str(row[0]), str(row[1]))
@@ -843,7 +825,7 @@ class PostgresAdapter:
                     ),
                     # reltuples is -1 for a relation no ANALYZE has ever touched (and for views):
                     # that is "unknown", and 0 would be a claim about an empty table.
-                    row_estimate=_row_estimate(row[3]),
+                    row_estimate=row_estimate(row[3]),
                     comment=_text(row[4]),
                 )
             )
@@ -854,10 +836,15 @@ class PostgresAdapter:
     def explain(self, fragment: Fragment) -> PlanSummary:
         """The engine's own plan for ``fragment``, and how many partitions it would scan.
 
-        ``pruning_proof`` is deliberately left ``UNKNOWN``: whether a scan is *acceptable* depends
-        on the spec's intended window, which the adapter cannot see. The planner (C08) and A03 turn
-        these counts into a verdict; overstating it here would be the adapter claiming a promise
-        that belongs to someone else.
+        No statement is executed: ``EXPLAIN`` without ``ANALYZE`` only asks the planner. The plan
+        is parsed (:func:`~mdqm.adapters.postgresql_plan.parse_plan`) rather than searched as text,
+        and the partition counts are the *fragment's* tables: the partitions the plan named, over
+        the partitions those tables have.
+
+        ``pruning_proof`` is deliberately left ``UNKNOWN``. Whether a scan is acceptable depends on
+        the window the spec intends, which the adapter cannot see; the verdict belongs to
+        :func:`~mdqm.adapters.postgresql_plan.pruning_verdict`, and overstating it here would be
+        the adapter claiming a promise that belongs to someone else.
         """
         text = fragment.sql
         if text is None:
@@ -868,20 +855,22 @@ class PostgresAdapter:
             cur.execute(sql.SQL("EXPLAIN (FORMAT JSON) " + text))  # nosemgrep: python-sql-injection
             row = cur.fetchone()
             document = row[0] if row else None
-            plan = document[0]["Plan"] if document else {}
-            raw = json.dumps(document, ensure_ascii=False) if document is not None else None
-            partitions = _partition_relation_names(cur)
+            children = _partition_children(cur)
 
-        touched = sorted(name for name in partitions if f'"{name}"' in (raw or ""))
-        indexes = tuple(re.findall(r'"Index Name": "([^"]+)"', raw or ""))
-        total = len(partitions)
+        raw = json.dumps(document, ensure_ascii=False) if document is not None else None
+        plan = parse_plan(document)
+        scanned = () if plan is None else tuple(name for name in plan.relations if name in children)
+        parents = {children[name] for name in scanned}
+        sizes = Counter(children.values())
+        total = sum(sizes[parent] for parent in parents) if parents else None
+        indexes = () if plan is None else plan.indexes
         return PlanSummary(
-            partitions_scanned=len(touched) if total else None,
-            partitions_total=total or None,
+            partitions_scanned=len(scanned) if total else None,
+            partitions_total=total,
             uses_index=bool(indexes),
             indexes_used=indexes,
-            est_rows=_as_float(plan.get("Plan Rows")),
-            est_cost=_as_float(plan.get("Total Cost")),
+            est_rows=None if plan is None else plan.plan_rows,
+            est_cost=None if plan is None else plan.total_cost,
             raw=raw,
         )
 
@@ -972,50 +961,16 @@ class PostgresAdapter:
     # --- optional capabilities ------------------------------------------------------------
 
     def extract_partitions(self) -> list[Partitioning]:
-        """Partition metadata per partitioned table, read from the catalog.
+        """Partition metadata per partitioned table: strategy, key, bounds, rows per partition.
 
-        Task A03 owns the definitive version (:mod:`mdqm.adapters.postgresql_plan`): the range
-        bounds here come from ``pg_get_expr``'s text form, which is enough to count and align the
-        monthly set a query must prune to. The strategy, key and bound list are the same either
-        way, so a caller does not have to change shape when A03 lands.
+        The catalog columns and their parsing live in
+        :func:`~mdqm.adapters.postgresql_plan.parse_partitions` because the parser is the part
+        worth testing without a server; this method only runs the query.
         """
         with self._connection() as connection, connection.cursor() as cur:
-            cur.execute(_PARTITIONS_SQL)
+            cur.execute(PARTITIONS_SQL)
             rows = cur.fetchall()
-        grouped: dict[tuple[str, str], dict[str, Any]] = {}
-        for row in rows:
-            parent = (str(row[0]), str(row[1]))
-            entry = grouped.setdefault(
-                parent,
-                {"strategy": row[2], "key": row[3], "bounds": []},
-            )
-            bounds: list[PartitionBound] = entry["bounds"]
-            bounds.append(_bound(str(row[5]), str(row[6]), _row_estimate(row[7])))
-        return [self._partitioning(parent, entry) for parent, entry in sorted(grouped.items())]
-
-    def _partitioning(self, parent: tuple[str, str], entry: Mapping[str, Any]) -> Partitioning:
-        """Turn one grouped catalog row set into a validated :class:`Partitioning`."""
-        strategy = _PARTITION_STRATEGIES.get(str(entry["strategy"]))
-        bounds = tuple(entry["bounds"])
-        if strategy is None:
-            # An inheritance tree that is not declarative partitioning still exists and is still
-            # scanned in full; refusing to claim a strategy is the honest answer.
-            raise NotSupported(
-                _CAPABILITY_PARTITIONS,
-                f"{parent[0]}.{parent[1]} is partitioned by a mechanism this adapter does not read",
-            )
-        key = _split_names(_partition_key_text(str(entry["key"])))
-        if strategy is not PartitionStrategy.EXPRESSION and not key:
-            raise NotSupported(
-                _CAPABILITY_PARTITIONS,
-                f"{parent[0]}.{parent[1]}: the partition key expression is not a column list",
-            )
-        return Partitioning(
-            strategy=strategy,
-            key=key,
-            granularity=_infer_granularity(bounds) if strategy is PartitionStrategy.RANGE else None,
-            bounds=bounds,
-        )
+        return list(parse_partitions(rows))
 
 
 # --- helpers --------------------------------------------------------------------------------
@@ -1093,87 +1048,3 @@ def _short_version(version_text: str) -> str | None:
 def _text(value: object) -> str | None:
     """A nullable text column as ``str | None`` (``None`` stays ``None``)."""
     return None if value is None else str(value)
-
-
-def _row_estimate(value: object) -> int | None:
-    """``pg_class.reltuples`` as a non-negative estimate, or ``None`` when it is unknown (-1)."""
-    try:
-        estimate = int(str(value))
-    except (TypeError, ValueError):
-        return None
-    return estimate if estimate >= 0 else None
-
-
-def _split_names(value: object) -> tuple[str, ...]:
-    """Split a comma-joined column list into a tuple, dropping blanks."""
-    if value is None:
-        return ()
-    return tuple(part for part in (chunk.strip() for chunk in str(value).split(",")) if part)
-
-
-def _partition_key_text(definition: str) -> str:
-    """``RANGE (start_time)`` -> ``start_time``; an expression key keeps its parentheses."""
-    match = _PARTKEY_RE.match(definition.strip())
-    return match.group("key") if match else ""
-
-
-def _bound(name: str, definition: str, row_estimate: int | None) -> PartitionBound:
-    """Parse one partition's ``pg_get_expr(relpartbound)`` text into a bound.
-
-    Range bounds become UTC datetimes because the planner aligns ranges and cuts cache segments on
-    month boundaries; list and hash partitions carry their own text, since their values are not
-    datetimes and inventing one would be worse than reporting none.
-    """
-    text = definition.strip()
-    range_match = _RANGE_BOUND_RE.match(text)
-    if range_match is not None:
-        return PartitionBound(
-            name=name,
-            lower=_bound_datetime(range_match.group("lower")),
-            upper=_bound_datetime(range_match.group("upper")),
-            row_estimate=row_estimate,
-        )
-    if _LIST_BOUND_RE.match(text) is not None or _HASH_BOUND_RE.match(text) is not None:
-        return PartitionBound(name=name, values=(text,), row_estimate=row_estimate)
-    # DEFAULT (and anything a future release writes): the partition exists, its bound is unknown.
-    return PartitionBound(name=name, row_estimate=row_estimate)
-
-
-def _bound_datetime(token: str) -> datetime | None:
-    """Parse a range bound literal (``'2024-11-01 00:00:00+00'``), or ``None`` for MINVALUE."""
-    text = token.strip()
-    if text.upper() in {"MINVALUE", "MAXVALUE"}:
-        return None
-    quoted = _QUOTED_RE.match(text)
-    if quoted is not None:
-        text = quoted.group("text")
-    candidate = text.replace(" ", "T", 1)
-    with contextlib.suppress(ValueError):
-        return datetime.fromisoformat(candidate)
-    # PostgreSQL prints a zero offset as "+00"; fromisoformat before 3.11 wants "+00:00".
-    with contextlib.suppress(ValueError):
-        return datetime.fromisoformat(f"{candidate}:00")
-    return None
-
-
-def _infer_granularity(bounds: Sequence[PartitionBound]) -> PartitionGranularity | None:
-    """Infer the partition width when every step agrees, else ``None`` (never a guess)."""
-    steps = [(bound.lower, bound.upper) for bound in bounds if bound.lower and bound.upper]
-    if not steps:
-        return None
-    if all(_is_month_step(lower, upper) for lower, upper in steps if lower and upper):
-        return PartitionGranularity.MONTH
-    deltas = {(upper - lower) for lower, upper in steps if lower and upper}
-    if len(deltas) != 1:
-        return None
-    return _MONTH_STEPS.get(deltas.pop())
-
-
-def _is_month_step(lower: datetime, upper: datetime) -> bool:
-    """True when ``upper`` is exactly the first instant of the month after ``lower``."""
-    start = lower.astimezone(UTC)
-    end = upper.astimezone(UTC)
-    if (start.day, start.hour, start.minute, start.second, start.microsecond) != (1, 0, 0, 0, 0):
-        return False
-    next_month = datetime(start.year + start.month // 12, start.month % 12 + 1, 1, tzinfo=UTC)
-    return end == next_month
