@@ -1,9 +1,11 @@
 # Handoff: what is done, what is not, and exactly where to start
 
-Written at `main = 9a17b42` (pushed, working tree clean). Everything below was measured by running
-something, not by reading code — the commands are included so you can re-measure instead of trusting me.
+Written at `main = 2ced811` (working tree clean). Everything below was measured by running something,
+not by reading code — the commands are included so you can re-measure instead of trusting me. Where a
+number would go stale, the command is written instead: run it.
 
-Read this first: `progress/SERVER-E2E.md` (the same state, in the shorter progress-note format).
+Read `progress/` for the ledger: `BOOTSTRAP-PIPELINE.md` and `SQLI-CHECKER.md` are the two notes from
+this session, both honest about what they could not verify.
 
 ---
 
@@ -11,39 +13,46 @@ Read this first: `progress/SERVER-E2E.md` (the same state, in the shorter progre
 
 ```bash
 export PATH="/c/Users/yonik/AppData/Local/Programs/DockerDesktop/resources/bin:$PATH"   # Docker Desktop
-.venv/Scripts/python.exe scripts/dev.py up pg          # or: docker compose --profile pg --profile server up -d --build --wait
+.venv/Scripts/python.exe scripts/dev.py up pg          # or: docker compose --profile pg --profile server up -d --build --wait server
 .venv/Scripts/python.exe scripts/dev.py status
 ```
 
 * Server: `http://127.0.0.1:58765` — `GET /healthz` returns 200.
 * MCP client for manual calls: `python scripts/mdqm_call.py call <tool> '<json args>'`
 * Token for HTTP endpoints: `docker/server/tokens.json` (gitignored), first entry's `token`.
-* **The CLI is `python -m mdqm.cli <group>`.** `python -m mdqm` does *not* exist (no `__main__.py`) —
-  that cost me a debugging round.
+* **The CLI is `python -m mdqm.cli <group>`.** `python -m mdqm` does *not* exist (no `__main__.py`).
 * Metadata database inside the container: `/data/metadata.sqlite` (tables include `query_history`,
-  `audit_log`, `feedback`). Inspect with `docker exec mdqm-server-1 python -c "…sqlite3…"`.
+  `audit_log`, `feedback`, `pipeline_run`, `review_proposals`). Inspect with
+  `docker exec mdqm-server-1 python -c "…sqlite3…"`.
+* **Docker Desktop's engine died mid-session and could not be restarted from the agent's workspace**
+  (`open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified`). Every
+  container-level claim below was measured *before* that; the two things it blocked are marked
+  "unverified" in sections 4 and 5.
+* Compose needs the checkout's `.env` for interpolation, and a worktree has none:
+  `docker compose --env-file /c/Users/yonik/mdqm/.env …`.
 
 ## 2. The gate you must keep green
 
 ```bash
-.venv/Scripts/python.exe -m ruff check .          # clean
-.venv/Scripts/python.exe -m mypy                  # clean, 143 files
-.venv/Scripts/python.exe -m pytest tests/unit -q  # 4466 passed at 9a17b42
-.venv/Scripts/python.exe -m pytest tests/integration --require-services -q   # 164 passed
-.venv/Scripts/python.exe scripts/check.py         # ruff + mypy + unit, the CI gate
+.venv/Scripts/python.exe -m ruff check .
+.venv/Scripts/python.exe -m mypy
+.venv/Scripts/python.exe scripts/check_sql_sinks.py src/mdqm    # 0 findings expected
+.venv/Scripts/python.exe -m pytest tests/unit -q
+.venv/Scripts/python.exe -m pytest tests/integration --require-services -q
+.venv/Scripts/python.exe scripts/check.py                        # ruff + mypy + unit, the CI gate
 ```
 
-Also green at this commit, and worth re-running after changes to query paths:
+Also worth running after a change to query paths:
 
 ```bash
-.venv/Scripts/python.exe scripts/bench_glm.py score --answers bench/answers   # 15/15 vs E01 ground truth
-.venv/Scripts/python.exe -m pytest tests/integration/test_acceptance_e2e.py --require-services -q   # 5 passed
+.venv/Scripts/python.exe scripts/bench_glm.py score --answers bench/answers   # vs the E01 ground truth
+.venv/Scripts/python.exe -m pytest tests/integration/test_acceptance_e2e.py --require-services -q
 ```
 
-## 3. Verified working end to end (through the running server)
+## 3. Verified working end to end (through the running server, before the engine died)
 
 | surface | how it was checked | result |
-|---|---|---|
+| ------- | ------------------- | ------ |
 | `find_data` | `mdqm_call.py call find_data '{"question":"…"}'` | ok |
 | `query` single source | avg credit limit by status | ok, rows + `result_handle` |
 | **`query` federated** (`billing.usage_events` ⨝ `crm.customers`) | `group_by customer_status` over Nov–Dec | **1810474 / 956379 / 354603 = E01 ground truth** |
@@ -51,142 +60,148 @@ Also green at this commit, and worth re-running after changes to query paths:
 | `history` | `{"limit":3}` | ok — **the field is `runs`, not `items`** |
 | `feedback` | `{"query_id":"232","ok":true}` | ok, record saved |
 | `GET /healthz` | curl | 200 |
-| `POST /context` | `{"prompt":"…"}` at top level + `Authorization: Bearer <token>` | 200, returns `additionalContext` |
+| `POST /context` | `{"prompt":"…"}` at top level + bearer token | 200, returns `additionalContext` (see section 6 for the Hebrew caveat) |
 | `mdqm audit verify` | inside container | "audit chain intact: 234 row(s) verified" |
 | `mdqm review list` | inside container | "nothing to review" |
 | start with a missing adapter driver | image installs `.[pg]` only | server starts, logs `adapter 'oracle' is not installed in this deployment … it is unavailable` |
 
-## 4. The one big functional gap: the bootstrap pipeline runs nothing
+## 4. Bootstrap pipeline: wired, but the end-to-end run is still unproven
+
+The command that used to do nothing now has stages to run. What was wrong (both fixed):
+
+1. `src/mdqm/pipeline/core.py::available_stages()` returned `()` on purpose. It now **orders** the
+   stages a caller built against one declared `STAGE_ORDER`
+   (`D1+D2, D4, D5, D6, D7, D8, D10, A1+A2`). Core still imports no stage: every stage imports core,
+   so the construction cannot live there.
+2. `src/mdqm/pipeline/cli.py` never asked the adapter registry to discover its entry points, so every
+   source answered `no adapter registered for 'postgresql' (registered kinds: none)`. `build_stages()`
+   now calls `registry.discover()` first and reports what it found.
+
+Which stage appears is **derived, never invented**, and anything undeliverable is named in the run
+output: `D1+D2`/`D5`/`D6`/`D7`/`D10` need only adapters, `D4` needs a `sources[].spec` document, `D8`
+needs a measure declaring two or more readable source columns (the layer is the declaration —
+`ColumnPair` is not a guess), `A1+A2` needs a catalog.
+
+**Unverified, and it is E01's last acceptance claim:** `mdqm bootstrap run` inside the rebuilt image
+executing those stages and **rediscovering the 5000 / 5000-then-/10 conversions** from data. Docker was
+down before this could run. Finish it with:
 
 ```bash
+docker compose --env-file /c/Users/yonik/mdqm/.env --profile pg --profile server up -d --build --wait server
 docker exec mdqm-server-1 python -m mdqm.cli bootstrap run
-#   source crm: skipped (no adapter registered for 'postgresql' (registered kinds: none) …)
-#   no bootstrap stage is registered in this build; nothing to run
+docker exec mdqm-server-1 python -m mdqm.cli review list      # the conversion proposals land here
 ```
 
-Two independent causes, both real:
+Known limits of the wiring, stated rather than hidden: `A1+A2` gets `profiles=None` (D5's profiles are
+produced at run time and there is no artifact handoff between stages); a measure with no identity
+column makes D8 pick a reference and say so; and with two or more measures declaring pairs, all `D8`
+instances share one stage name, so none of them can be skipped as unchanged.
 
-1. `src/mdqm/pipeline/core.py::available_stages()` returns `()` on purpose ("nothing is registered
-   without its source dependency"), so the runner has an empty list.
-2. `src/mdqm/pipeline/cli.py` never asks the adapter registry to discover its entry points, hence
-   *"registered kinds: none"*. `mdqm.adapters.registry.registry.discover()` is the call that fixes it.
-
-The eight stage classes exist in `src/mdqm/pipeline/stages/`:
-`CatalogStage`, `OpenApiStage`, `ConversionStage`, `JoinStage`, `ProfilingStage`, `MutabilityStage`,
-`DriftStage`, `ProposeNamesStage`. **Each constructor requires real inputs** (mypy will tell you):
-`CatalogStage(adapters)`, `OpenApiStage(specs)`, `ConversionStage(adapters, pairs, measure=…)`,
-`JoinStage(adapters)`, `ProfilingStage(adapters)`, and so on.
-
-Do **not** try `Stage()` with no arguments — I did, it produced 12 mypy missing-argument errors and was
-reverted. The correct shape is a signature change plus a builder:
-
-```python
-def available_stages(*, adapters, specs, pairs, measure) -> tuple[Stage, ...]:   # run order
-    return (CatalogStage(adapters), OpenApiStage(specs), ConversionStage(adapters, pairs, measure=measure), …)
-```
-
-and `pipeline/cli.py` builds those inputs from `Settings` (`build_adapters(settings)` already exists in
-the wiring layer) before calling `run_pipeline`.
-
-**Done looks like:** `mdqm bootstrap run` against the live pg profile executes D1+D2 → … → A1+A2 and
-**rediscovers the 5000 / 5000-then-/10 conversions** from data. That is E01's last unproven acceptance
-claim; the conversions stage's own unit tests pass, but nothing has run it end to end.
-
-## 5. SQL-injection work: the design, and what is left
+## 5. SQL-injection work: the chokepoint, the lint rule, and its limits
 
 Design (agreed with the owner, do not re-litigate):
 
-* **`src/mdqm/sql/execution.py` is the single chokepoint.** `prepare(text, dialect, params)` runs
-  `mdqm.sql.guard.guard` and raises `StatementRefused` (carrying the guard's `ErrorResponse`);
-  `PreparedStatement` has no other constructor. `execute_one(cursor, statement)` is the only function
-  that hands dynamic source SQL to a driver(`run` is an alias). `wrapped(prepared, template=…)` is the
-  only place statement text is assembled (EXPLAIN wrappers). `set_local(engine, name, value)` validates
-  a local-engine setting name and value against a fixed table. `run_local(cursor, text, params)` is for
-  our own metadata SQLite, which writes and which the read-only guard must not see.
-* **`scripts/check_sql_sinks.py` is our own lint rule** (a data-flow check, replacing the naive
-  built-in one). It flags interpolation (`f"…{v}"`), `+`, `%`, `.format()/.join()`, and conditional-built
-  SQL reaching `execute`/`executemany`/`copy`; it passes literals, names bound only to literals, and
-  calls to `prepare`/`execute_one`/`run_local`/`sql.SQL`. `TRUSTED_ASSEMBLERS` exempts
-  `mdqm/sql/execution.py` **by path** — the list has exactly one entry on purpose.
-* The naive rules (`python-sql-injection`, semgrep `sqlalchemy-execute-raw-query`) are **disabled in
-  `.pi-lens.json`** and replaced by the above. Also disabled there: `no-ellipsis-body`,
-  `unchecked-numeric-parse-python`, `line-length` (the owner asked for the last one explicitly).
-* `29` adversarial protection tests live in `tests/unit/test_sql_injection_protection.py`; the chokepoint
-  has its own tests in `tests/unit/test_sql_execution.py` (added by the adapters agent).
+* **`src/mdqm/sql/execution.py` is the single chokepoint.** `prepare(text, dialect=…, params=…)` runs
+  `mdqm.sql.guard.guard` and raises `StatementRefused`; `execute_one(cursor, statement)` is the only
+  function that hands dynamic source SQL to a driver; `wrapped(...)` assembles EXPLAIN wrappers;
+  `run_local(cursor, text, params)` is for our own metadata SQLite and the local DuckDB engine;
+  `set_local(engine, name, value)` validates both halves of a `SET`; `local_ident(name)` /
+  `local_idents(names)` validate and quote an identifier, which is the one thing a driver cannot bind.
+* **`scripts/check_sql_sinks.py` is our own lint rule** and now has tests
+  (`tests/unit/test_sql_sinks_checker.py`, table-driven, fixtures on disk). Writing them found two real
+  holes: a name bound to interpolated text was never reported (the two-line injection form), and
+  `sql.SQL(…).format(sql.Identifier(col))` was flagged although psycopg quotes the identifier itself.
+  Resolution is provenance-based: literals and compiled objects (`Fragment`/`FederatedPlan`, by
+  construction, annotation or the compiler's attribute) are safe; a name bound to anything else is a
+  finding.
+* **The limit, in the code and here:** a bare parameter is not traced. `def go(cursor, text):
+  cursor.execute(text)` is not reported, because the question there is "was the guard run", which
+  `prepare()`/`execute_one()` answer at execution time. The rule catches text being *built*.
+* `TRUSTED_ASSEMBLERS` exempts `mdqm/sql/execution.py` by path (one entry), and `TRUSTED_PREFIXES`
+  exempts `mdqm/testing/` (the synthetic-data loaders emit DDL, which the read-only guard refuses, and
+  the query path never runs them). If you add a call site that needs an exemption, that is the signal
+  to use the chokepoint instead.
+* `29` adversarial protection tests live in `tests/unit/test_sql_injection_protection.py`; the
+  chokepoint has its own in `tests/unit/test_sql_execution.py`.
+* The pre-commit `sql-sinks` hook now scopes `pipeline/` and `eval/` as well — the old hand-written
+  directory list silently missed both.
 
-Remaining:
+**Unverified:** `tests/integration --require-services`. The loaders' emitted DDL did not change (the
+conversions were mechanical), but that is a claim until it runs against real services.
 
-1. **`python scripts/check_sql_sinks.py src/mdqm` reports 42 sites.** Mostly `src/mdqm/testing/loaders/*`
-   (DDL built from table-name constants) and two `src/mdqm/cache/segments.py` `CREATE OR REPLACE TABLE …`
-   statements. Fix by inlining the literal at the call site, or by adding chokepoint helpers for the
-   identifier cases. Note: I added `create_table_as` / `create_table_from_query` to `execution.py` in an
-   attempt at the cache sites, then reverted the file — **check `grep -n "^def " src/mdqm/sql/execution.py`
-   before assuming they exist.**
-2. **The checker has no tests of its own.** It is a security tool; it needs cases proving: f-string → flagged,
-   `+` → flagged, `%` → flagged, `.format`/`.join` → flagged, conditional → flagged; literal → clean,
-   module constant → clean, `prepare(...)` → clean, `execute_one(...)` → clean; the trusted-assembler
-   exemption honoured. Table-driven, in `tests/unit/`.
-3. **Oracle / SQL Server / Elasticsearch**: their `execute` is wired through `execute_one` by the adapters
-   agent (verified: 52 adapter integration tests green), Elasticsearch is documented as JSON-not-SQL.
-   Re-check with `python scripts/check_sql_sinks.py src/mdqm/adapters`.
+## 6. `/context` and Hebrew: a real gap, and it is a model question
 
-## 6. Deployment facts and gaps
+The endpoint works: English prompts return 500–1100 characters of measures, joins, value maps and
+table facts. Hebrew returns `""` — because the only place the layer can hold Hebrew today is
+`value_maps.synonyms`. "פעיל" and "עזב" match; "מסגרת אשראי ממוצעת" matches nothing, since a measure
+and a table have no name or label per language.
 
-* `Dockerfile` installs `.[pg]` only. Oracle and SQL Server need their extras (`.[oracle]`, `.[mssql]`);
-  a missing driver is now survivable but the adapter is unavailable. Decide per deployment and document.
+**Decision needed from you:** should `Measure` and `TableSemantics` carry per-language labels
+(`he`/`en`) that the context index matches, or is a Hebrew question expected to go through value
+synonyms and English identifiers only? The code cannot pick for you, and inventing a field name would
+be a design change.
+
+## 7. Deployment facts and gaps
+
+* `Dockerfile` takes `--build-arg MDQM_EXTRAS=pg` (default `pg`; `pg,oracle`, `pg,mssql`, or all
+  three). `docs/deployment.md` §1a has the per-site matrix and the command that proves which drivers
+  actually arrived in the image. A missing driver makes its adapter unavailable; the server still runs.
+* `/data` and `/cache` are volumes, and **`/semantic` now is too** (`server-semantic`). It was not:
+  a container recreate silently lost the whole generated layer, after which `/context` fell back to
+  curated-only without saying so.
 * Air-gap rules still apply: no runtime `pip install`, no DuckDB extensions, no network at hook time.
-  `.pre-commit-config.yaml` is `repo: local` throughout for that reason, and every hook goes through
-  `scripts/precommit_hook.py` (it resolves `.venv/Scripts/python.exe`; `language: system` alone runs the
-  wrong interpreter — that is how `No module named 'ruamel'` happened).
+  `.pre-commit-config.yaml` is `repo: local` throughout, and every hook goes through
+  `scripts/precommit_hook.py` (`language: system` alone runs the wrong interpreter).
 * Pre-commit hooks: `ruff check --fix`, `ruff format`, `check_configs.py`, `check_secrets.py`,
-  `sql-sinks` (our rule, scoped to runtime paths) on commit; `mypy --strict` and unit tests on push.
-  All six verified passing at this commit.
+  `sql-sinks` on commit; `mypy --strict` and unit tests on push.
 
-## 7. Lint state (so you do not re-discover it)
+## 8. Lint state (so you do not re-discover it)
 
-* `ruff check .` → **0 findings**. Rule families enabled: `E,F,I,W,S,B,BLE,TRY,RUF,A,DTZ,PERF,C4,PIE,RET,UP,SIM,ASYNC`.
-* Five rules are **ratcheted** in `pyproject.toml` with counts and reasons (`PERF401` 39, `BLE001` 15,
-  `TRY004` 12, `RUF043` 7, `DTZ001` 56). `TRY003` (490) and `RUF001-3` (73) are off with reasons. Burn the
-  ratchet down; do not add to it without a count and a reason.
-* **pyright** still reports ~141 findings, almost all in `tests/`: `reportArgumentType` (literals where
-  pydantic wants enums/typed models: `TimeMode`, `Duration`, `SpecInstant`, `QuietWindow.start: time`,
-  `SecretStr`; and stub adapters not satisfying `SourceAdapter`), `reportReturnType` (fixtures annotated
-  `-> X` but they are generators; a stub stream missing `rows_returned`/`bytes_returned`),
-  `reportAttributeAccessIssue` (`ArrowStream` not declaring `cached`/`fetched_at`/`total_hits`; `sqlglot.errors`
-  used without importing the submodule). None of this gates CI.
+* `ruff check .` → clean. Rule families: `E,F,I,W,S,B,BLE,TRY,RUF,A,DTZ,PERF,C4,PIE,RET,UP,SIM,ASYNC`.
+* Five rules are **ratcheted** in `pyproject.toml` with counts and reasons (`PERF401`, `BLE001`,
+  `TRY004`, `RUF043`, `DTZ001`). `TRY003` and `RUF001-3` are off with reasons. Burn the ratchet down;
+  do not add to it without a count and a reason.
+* **pyright** reports findings, almost all in `tests/`: literals where pydantic wants enums or typed
+  models, fixtures annotated `-> X` that are generators, stub streams missing protocol members,
+  `ArrowStream` not declaring `cached`/`fetched_at`/`total_hits`. Measure with `python -m pyright`;
+  none of it gates CI.
 
-## 8. Traps that cost time (avoid repeating them)
+## 9. Traps that cost time (avoid repeating them)
 
-1. **A delegated agent often produces no commits.** Observed on D03, S02, D05, E02, M04, E03, D06, A07,
-   sqli-testing and others. Always `git log --oneline main..task/<ID>` before believing a completion
-   report, and re-run the verification yourself. The good ones (store, adapters) did land.
-2. **Heredocs mangle backslashes.** Writing a regex through `<<'PY'` turned `\b` into a literal backspace
-   byte and the pattern silently matched nothing. Use the `edit` tool, or build the character with
-   `chr(92)`.
-3. **`git checkout -- <file>` cannot restore an untracked file.** Committing early is the only real undo.
-4. **pyright honours `# type: ignore` too.** Deleting a mypy-only ignore in a test file un-suppressed real
-   pyright errors (that is fine — fix them — but know why they appeared).
-5. **`.ruff_cache` permission warnings** ("Failed to write cache file … Access is denied") are noise on
-   this Windows setup.
-6. **The lens scan caps at 100 files per call** out of 249 Python files, and its store is outside the
-   workspace. Directory-by-directory scans are the only trustworthy count; a single workspace scan is not
-   proof of "zero findings".
-7. **Container rebuild required** after any `src/` change (`docker compose … up -d --build --wait server`);
-   the running image does not pick up local files.
+1. **A delegated agent often produces no commits.** Observed repeatedly, including three attempts in
+   this session that each burned ~15 minutes of tokens and landed nothing. Always
+   `git log --oneline main..task/<ID>` before believing a completion report, and tell the delegate to
+   create its worktree first and commit per step.
+2. **`ruff format .` reformats unrelated files.** It left a stray blank line in
+   `src/mdqm/adapters/registry.py` twice. Run the formatter on the files you touched.
+3. **`run_local(cursor, text)` with the default `params=None` breaks sqlite3**
+   (`ProgrammingError: parameters are of unsupported type`). Pass `()` for metadata SQLite; DuckDB
+   tolerates `None`.
+4. **Heredocs mangle backslashes and escape sequences.** Writing a regex through `<<'PY'` put a NUL
+   byte into a Python source file (`source code string cannot contain null bytes`). Use the `edit`
+   tool, or build the character with `chr(92)`.
+5. **`git checkout -- <file>` cannot restore an untracked file.** Committing early is the only undo.
+6. **pyright honours `# type: ignore` too.** Deleting a mypy-only ignore in a test un-suppresses real
+   pyright errors — fix them, but know why they appeared.
+7. **A container rebuild is required after any `src/` change**; the running image does not pick up
+   local files.
+8. **Compose in a worktree has no `.env`** (it is gitignored): pass `--env-file` pointing at the main
+   checkout.
 
-## 9. Suggested order for the next session
+## 10. Suggested order for the next session
 
-1. **Bootstrap pipeline** (§4) — the largest functional gap; ends with the conversion-rediscovery claim
-   proven end to end.
-2. **`/context` content**: it answers 200, but confirm `additionalContext` is *non-empty and useful* for a
-   real question (the layer/index must be built for it; if the server started without a semantic layer it
-   returns the no-layer fallback).
-3. **Tests for `scripts/check_sql_sinks.py`** (§5.2), then clear the 42 sites (§5.1).
-4. **pyright debt in `tests/`** (§7) — mechanical, one class at a time.
-5. Deployment docs for extras (§6).
+1. **Run the bootstrap end to end** (§4) — the last unproven acceptance claim, and the command is
+   written out for you.
+2. **Clear the pyright debt in `tests/`** (§8) — mechanical, one class at a time; a partial pass was
+   attempted this session and did not land.
+3. **Decide the Hebrew labelling question** (§6), then either extend the layer models or document that
+   Hebrew questions are matched through value synonyms only.
+4. Re-run `tests/integration --require-services` (§5) once Docker is back, to turn the loader claim
+   into a measurement.
 
-## 10. Where the history lives
+## 11. Where the history lives
 
-`progress/<TASK-ID>.md` is the ledger: 69 backlog tasks are all `status: done`. That means the *task
-board* is closed, not that every feature is proven end to end — §4 is the proof that the two are not the
-same thing. `docs/DESIGN.md` is the design; `progress/SERVER-E2E.md` is this state in brief.
+`progress/<TASK-ID>.md` is the ledger: 69 backlog tasks are `status: done`, plus
+`BOOTSTRAP-PIPELINE.md` and `SQLI-CHECKER.md` from this session. The task board being closed does not
+mean every feature is proven end to end — §4 and §5 are the proof that the two are not the same
+thing. `docs/DESIGN.md` is the design.
