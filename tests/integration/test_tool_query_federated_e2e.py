@@ -309,6 +309,21 @@ def statements(pg: PgTarget, database: str, needle: str) -> int:
     return int(0 if row is None else row[0])
 
 
+def counters(pg: PgTarget, database: str, needle: str) -> dict[str, int]:
+    """Each statement's call count in one database, keyed by the server's normalised text.
+
+    A single total is not enough on a shared server: another session's statements move the total
+    too. Comparing the same statements' counts before and after the repeat isolates this query's
+    own calls, which is what "zero new statements" means.
+    """
+    with psycopg.connect(pg.dsn(database), connect_timeout=5) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT query, sum(calls) FROM pg_stat_statements WHERE query ILIKE %s GROUP BY query",
+            (f"%{needle}%",),
+        )
+        return {str(query): int(calls) for query, calls in cur.fetchall()}
+
+
 def orphan_keys(pg: PgTarget) -> set[str]:
     """The ``client_no`` values in billing that no crm customer matches, asked from the two servers.
 
@@ -396,19 +411,19 @@ def test_a_repeated_cross_source_query_makes_zero_new_statements(
     first = ask(spec)
     assert first.status == "ok", first.error
     assert first.cache_hit is False
-    before = (
-        statements(pg, "billing", "usage_events"),
-        statements(pg, "crm", "customers"),
-    )
+    before = counters(pg, "billing", "usage_events"), counters(pg, "crm", "from customers")
     second = ask(spec)
-    after = (
-        statements(pg, "billing", "usage_events"),
-        statements(pg, "crm", "customers"),
-    )
+    after = counters(pg, "billing", "usage_events"), counters(pg, "crm", "from customers")
     assert second.status == "ok", second.error
     assert second.cache_hit is True
     assert second.sample == first.sample
-    assert after == before, f"the second call reached a source: {before} -> {after}"
+    grown = [
+        (query, before[index].get(query, 0), after[index].get(query, 0))
+        for index in (0, 1)
+        for query in set(before[index]) | set(after[index])
+        if after[index].get(query, 0) != before[index].get(query, 0)
+    ]
+    assert not grown, f"the second call reached a source: {grown}"
     assert second.quality is not None
     assert all(
         step.fetched is False and step.cache_status == "hit" for step in second.quality.steps
