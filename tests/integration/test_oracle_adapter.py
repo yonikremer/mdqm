@@ -54,11 +54,14 @@ from mdqm.models import (
     PruningProof,
     TableKind,
 )
+from mdqm.sql.execution import StatementRefused
+from mdqm.sql.guard import WRITE_BLOCKED
 from mdqm.testing.conformance import run_conformance
 from mdqm.testing.loaders.oracle import (
     GENERATED_PARTITION_PREFIX,
     INITIAL_PARTITION,
     OracleTarget,
+    connect_owner,
     connect_read_only,
     generation_expected_months,
     target_from_environ,
@@ -571,33 +574,61 @@ INSERT_PROBE: Final = (
 )
 
 
-def test_read_only_account_refuses_a_write(adapter: OracleAdapter) -> None:
-    """``MDQM_RO`` holds ``SELECT`` and nothing else: Oracle answers ``ORA-41900``."""
-    with pytest.raises(oracledb.DatabaseError) as excinfo:
+def test_read_only_account_refuses_a_write(adapter: OracleAdapter, target: OracleTarget) -> None:
+    """Two layers, both proved: the chokepoint refuses the write, and ``MDQM_RO`` cannot write.
+
+    The adapter path is closed by the guard now -- which is the point -- so the account layer is
+    proved through a **raw** connection as the same read-only login: that is how an injected
+    statement would arrive if our guard were absent. Oracle answers ``ORA-41900``.
+    """
+    with pytest.raises(StatementRefused) as refused:
         _drain(adapter, INSERT_PROBE)
-    error = excinfo.value.args[0]
-    message = _message(excinfo.value)
-    assert int(getattr(error, "code", 0)) == MISSING_PRIVILEGE, message
-    assert "privilege" in message.lower(), message
+    assert refused.value.result.error is not None
+    assert refused.value.result.error.code == WRITE_BLOCKED
+
+    with connect_read_only(target) as connection, connection.cursor() as cur:
+        with pytest.raises(oracledb.DatabaseError) as excinfo:
+            cur.execute(INSERT_PROBE)
+        error = excinfo.value.args[0]
+        message = _message(excinfo.value)
+        assert int(getattr(error, "code", 0)) == MISSING_PRIVILEGE, message
+        assert "privilege" in message.lower(), message
+
     # The adapter itself is still healthy after the refusal.
     assert _drain(adapter, SIMPLE_SQL) == 1
 
 
 def test_read_only_transaction_refuses_a_write_the_account_could_make(
-    owner_adapter: OracleAdapter,
+    owner_adapter: OracleAdapter, target: OracleTarget
 ) -> None:
     """``SET TRANSACTION READ ONLY`` is the layer the guard bypasses: ``ORA-01456``.
 
     The connection can write and the statement is well formed, so the only thing that can refuse it
-    is the read-only transaction the adapter opened before executing.
+    is the read-only transaction. The adapter path proves the guard refuses first; the raw owner
+    connection, opened the way the adapter opens one, proves the transaction layer underneath.
     """
     assert _drain(owner_adapter, "SELECT count(*) AS n FROM MDQM_BILLING.accounts") == 1
-    with pytest.raises(oracledb.DatabaseError) as excinfo:
+    with pytest.raises(StatementRefused) as refused:
         _drain(owner_adapter, INSERT_PROBE)
-    error = excinfo.value.args[0]
-    message = _message(excinfo.value)
-    assert int(getattr(error, "code", 0)) == READ_ONLY_TRANSACTION, message
-    assert "READ ONLY" in message.upper(), message
+    assert refused.value.result.error is not None
+    assert refused.value.result.error.code == WRITE_BLOCKED
+
+    connection = connect_owner(target)
+    try:
+        cur = connection.cursor()
+        # The adapter's own session contract, without the ability to go through the guard.
+        cur.execute("ALTER SESSION SET TIME_ZONE = 'UTC'")
+        connection.rollback()
+        cur.execute("SET TRANSACTION READ ONLY")
+        with pytest.raises(oracledb.DatabaseError) as excinfo:
+            cur.execute(INSERT_PROBE)
+        error = excinfo.value.args[0]
+        message = _message(excinfo.value)
+        assert int(getattr(error, "code", 0)) == READ_ONLY_TRANSACTION, message
+        assert "READ ONLY" in message.upper(), message
+    finally:
+        connection.close()
+
     assert _drain(owner_adapter, SIMPLE_SQL) == 1
 
 

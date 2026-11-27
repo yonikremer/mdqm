@@ -58,6 +58,8 @@ from mdqm.models import (
     PruningProof,
     TableKind,
 )
+from mdqm.sql.execution import StatementRefused
+from mdqm.sql.guard import WRITE_BLOCKED
 from mdqm.testing.conformance import run_conformance
 from mdqm.testing.loaders.sqlserver import (
     PARTITION_FUNCTION,
@@ -74,8 +76,14 @@ NOW: Final = datetime(2026, 1, 1, tzinfo=UTC)
 
 LIMITS: Final = Limits(timeout_s=20.0, max_rows=100_000, max_bytes=50_000_000, max_partitions=8)
 
-#: Ten seconds of server time, no table and no privilege: what a deadline must interrupt.
-SLOW_SQL: Final = "WAITFOR DELAY '00:00:10'; SELECT 1 AS one"
+#: A read that keeps the server busy past any deadline here: a three-way cross join is 125 billion
+#: rows, so it cannot finish before the watchdog fires. It must be a *read* -- since the execution
+#: chokepoint guards every statement, only a read can reach the driver at all, which is the point of
+#: the guard and the reason this is no longer a ``WAITFOR DELAY``.
+SLOW_SQL: Final = (
+    "SELECT COUNT_BIG(*) AS n FROM dbo.usage_events a "
+    "CROSS JOIN dbo.usage_events b CROSS JOIN dbo.usage_events c"
+)
 
 #: A filter on the partition key as a ``datetime2`` literal: prunable to two of eighteen partitions.
 PRUNED_SQL: Final = (
@@ -453,30 +461,44 @@ def test_max_bytes_stops_the_stream(adapter: SqlServerAdapter) -> None:
     assert 0 < total <= 4096 + 1024, total
 
 
-def test_a_write_is_refused_by_the_server(adapter: SqlServerAdapter) -> None:
-    """``mdqm_ro`` holds ``db_datareader``, so SQL Server itself refuses a write that reaches us."""
-    with pytest.raises(Exception) as refused:
-        stream = adapter.execute(
-            _fragment(
-                adapter.source,
-                "INSERT INTO dbo.customers (cust_no, status_code, limit_k, name) "
-                "VALUES (1, 1, 1, 'x')",
-            ),
-            LIMITS,
-        )
-        for _ in stream:
-            pass
-        stream.close()
-    message = str(refused.value)
+def test_a_write_is_refused_by_the_server(adapter: SqlServerAdapter, target: MssqlTarget) -> None:
+    """Two layers, both proved: the chokepoint refuses the write, and SQL Server would too.
+
+    The adapter path is closed by the guard now -- which is the point -- so the server layer is
+    proved through a **raw** connection as the same read-only login: that is how an injected
+    statement would arrive if our guard were absent.
+    """
+    for statement in (
+        "INSERT INTO dbo.customers (cust_no, status_code, limit_k, name) VALUES (1, 1, 1, 'x')",
+        "DELETE FROM dbo.customers",
+    ):
+        with pytest.raises(StatementRefused) as refused:
+            stream = adapter.execute(_fragment(adapter.source, statement), LIMITS)
+            try:
+                for _ in stream:
+                    pass
+            finally:
+                stream.close()
+        assert refused.value.result.error is not None
+        assert refused.value.result.error.code == WRITE_BLOCKED
+
+    # Layer 2: the same DML on a raw connection is refused by the server, not by us.
+    with connect(target, read_only=True) as connection:
+        cursor = connection.cursor()
+        try:
+            with pytest.raises(Exception) as server:
+                cursor.execute(
+                    "INSERT INTO dbo.customers (cust_no, status_code, limit_k, name) "
+                    "VALUES (1, 1, 1, 'x')"
+                )
+        finally:
+            cursor.close()
+    message = str(server.value)
     assert "permission was denied" in message, message
     assert "INSERT" in message, message
 
-    with pytest.raises(Exception) as deleted:
-        stream = adapter.execute(_fragment(adapter.source, "DELETE FROM dbo.customers"), LIMITS)
-        for _ in stream:
-            pass
-        stream.close()
-    assert "permission was denied" in str(deleted.value)
+    # The adapter itself is still healthy after both refusals.
+    assert _drain(adapter, "SELECT COUNT(*) AS n FROM dbo.customers", LIMITS) == 1
 
 
 # --- cancel and the deadline ------------------------------------------------------------------

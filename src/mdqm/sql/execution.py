@@ -78,13 +78,15 @@ def execute_one(cursor: Any, statement: PreparedStatement) -> Any:
     by `;` on some engines, which is precisely how a stacked-statement injection works. Here the guard
     has already refused anything but a single parsed read, and this is the only function that hands the
     text to a driver -- so "one statement, parameterised" is the only shape that exists.
-    """
-    """Execute a prepared *source* statement.
 
-    A statement cannot arrive here unguarded: :class:`PreparedStatement` is only produced by
-    :func:`prepare`, which runs the AST guard.
+    A statement with no values is executed with one argument, not with ``None`` as a second one:
+    mssql-python switches to its prepared-statement path as soon as it is handed a parameter
+    argument, and under ``SET SHOWPLAN_XML ON`` that path returns no result set at all ("Invalid
+    cursor state"). A driver is handed exactly what the statement needs.
     """
-    return cursor.execute(statement.text, statement.params or None)
+    if statement.params is None:
+        return cursor.execute(statement.text)
+    return cursor.execute(statement.text, statement.params)
 
 
 def wrapped(prepared: PreparedStatement, *, template: str, **fields: Any) -> PreparedStatement:

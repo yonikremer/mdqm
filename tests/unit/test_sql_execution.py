@@ -37,10 +37,10 @@ class SpyCursor:
     """A cursor that records what it was asked to run, and never talks to a server."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, Any]] = []
+        self.calls: list[tuple[Any, ...]] = []
 
-    def execute(self, text: str, params: Any = None) -> SpyCursor:
-        self.calls.append((text, params))
+    def execute(self, *args: Any) -> SpyCursor:
+        self.calls.append(args)
         return self
 
 
@@ -83,13 +83,17 @@ def test_a_read_reaches_the_driver_once_through_the_chokepoint() -> None:
     ]
 
 
-def test_an_unbound_read_passes_no_parameters() -> None:
-    """psycopg wants ``None``, not ``()``, when a statement takes no value."""
+def test_an_unbound_read_gets_one_argument() -> None:
+    """A driver is handed what the statement needs and nothing more.
+
+    mssql-python takes a different path as soon as it is given a parameter argument, and that path
+    returns no result set under ``SET SHOWPLAN_XML ON``: no values means one argument.
+    """
     cursor = SpyCursor()
 
     run(cursor, prepare("SELECT 1", dialect="postgres"))
 
-    assert cursor.calls == [("SELECT 1", None)]
+    assert cursor.calls == [("SELECT 1",)]
 
 
 def test_a_prefix_cannot_launder_a_write() -> None:
