@@ -43,24 +43,28 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # `mirror` uses the index pip is configured with; leave PIP_INDEX_URL empty on a connected build.
 # `PIP_TRUSTED_HOST` is for a mirror served over plain HTTP (an internal, air-gapped address).
-# `pg` is the only extra that ships today. `oracle`/`mssql` stay out until their driver verdicts
-# (task A08) land, so an image never carries a driver nobody chose.
+# Which adapter drivers the image carries. `pg` is the default (the MVP target and the one extra
+# every deployment needs); a site that reads Oracle or SQL Server builds with
+# `--build-arg MDQM_EXTRAS=pg,oracle` so an image never carries a driver nobody chose. The names are
+# pyproject's `[project.optional-dependencies]` extras; the SQL Server driver is `mssql-python`
+# (task A08). A driver that is absent makes its adapter unavailable at runtime, not the server dead.
 # `--only-binary=:all:`: every dependency must be a wheel. A source tarball needs a compiler, and
 # an sdist means the internal mirror is incomplete.
 # A local directory (`.[pg]`) is built from source, so pip installs the build backend from
 # `build-system.requires` into an isolated environment: `hatchling` is a real dependency of this
 # build, and the wheelhouse mode has to stage it like any other wheel.
 ARG INSTALL_MODE=mirror
+ARG MDQM_EXTRAS=pg
 ARG PIP_INDEX_URL=""
 ARG PIP_TRUSTED_HOST=""
 RUN set -eu; \
     if [ "$INSTALL_MODE" = "wheelhouse" ]; then \
-        pip install --no-index --find-links /wheelhouse --only-binary=:all: ".[pg]"; \
+        pip install --no-index --find-links /wheelhouse --only-binary=:all: ".[$MDQM_EXTRAS]"; \
     else \
         set -- --only-binary=:all:; \
         if [ -n "$PIP_INDEX_URL" ]; then set -- "$@" --index-url "$PIP_INDEX_URL"; fi; \
         if [ -n "$PIP_TRUSTED_HOST" ]; then set -- "$@" --trusted-host "$PIP_TRUSTED_HOST"; fi; \
-        pip install "$@" ".[pg]"; \
+        pip install "$@" ".[$MDQM_EXTRAS]"; \
     fi
 
 # No installer in the runtime image: nothing may `pip install` once the image exists (principle 7).

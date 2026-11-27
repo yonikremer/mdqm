@@ -323,6 +323,10 @@ services:
     volumes:
       - server-data:/data
       - server-cache:/cache
+      # The bootstrap pipeline writes generated/*.yaml here. Without a
+      # volume, a container recreate loses the generated layer and
+      # /context falls back to the curated files only.
+      - server-semantic:/semantic
       - ./docker/server:/run/secrets:ro
       # A curated semantic layer. Without one the server starts and answers
       # NOT_SUPPORTED with a
@@ -343,6 +347,7 @@ services:
 volumes:
   server-data:
   server-cache:
+  server-semantic:
   pg-data:
   oracle-data:
   mssql-data:

@@ -30,8 +30,60 @@ Files: `Dockerfile` (multi-stage, task M08), `.dockerignore`, `wheelhouse/`,
 | Volumes | `/data` (SQLite metadata DB + audit chain: the only state to back up), `/cache` (DuckDB spill + query cache, disposable) |
 | Secrets | files under `/run/secrets`; `MDQM_SECRETS__DIR=/run/secrets` and `MDQM_TOKENS_FILE=/run/secrets/tokens.json` |
 
-The `pg` extra is the only extra installed. `oracle` and `mssql` join the image only after their
-driver verdicts (task A08); a driver nobody chose must never ride along.
+The `pg` extra is the default (`--build-arg MDQM_EXTRAS=pg`). `oracle` and `mssql` are opt-in, so a
+driver nobody chose never rides along; see section 1a for how a deployment decides and what happens
+when a driver is missing.
+
+## 1a. Adapter drivers: one image per site's sources
+
+The image carries only the extras the build asks for (`MDQM_EXTRAS`, default `pg`). The names are the
+ones in `pyproject.toml`'s `[project.optional-dependencies]`: `pg` (`psycopg[binary]`), `oracle`
+(`oracledb`, Thin mode, no Oracle Client), `mssql` (`mssql-python`, which bundles the ODBC driver and
+its DLLs — task A08's verdict).
+
+| Sources at the site | Build argument |
+|---|---|
+| PostgreSQL only | *(none: `pg` is the default)* |
+| PostgreSQL + Oracle | `--build-arg MDQM_EXTRAS=pg,oracle` |
+| PostgreSQL + SQL Server | `--build-arg MDQM_EXTRAS=pg,mssql` |
+| All three | `--build-arg MDQM_EXTRAS=pg,oracle,mssql` |
+
+The extra is only the **driver**. An adapter is registered through the entry-point group
+`mdqm.adapters` and appears in the server's discovery log (`adapter kinds discovered: …`). Those are
+two different facts, and both have to be true before a source works:
+
+* driver missing → discovery logs `adapter 'oracle' is not installed in this deployment (…); it is
+  unavailable`, and the server **still starts** and serves its other sources. That is deliberate: a
+  Postgres-only site must not be blocked by an optional driver.
+* source configured but its adapter unavailable → `mdqm probe` and `query` refuse with a capability
+  report naming the source, never a stack trace.
+
+Before you ship, confirm from inside the image which drivers actually arrived — this is the check,
+not an assumption:
+
+```bash
+docker run --rm --entrypoint python mdqm:local -c "import importlib.util as u; print({m: bool(u.find_spec(m)) for m in ('psycopg','oracledb','mssql_python')})"
+```
+
+A wheelhouse build stages those wheels too (`scripts/check_offline_install.py --wheelhouse
+wheelhouse` proves the closure, including the build backend).
+
+### The semantic layer is not disposable
+
+`/data` and `/cache` are volumes (`VOLUME ["/data", "/cache"]`) but the semantic directory (`/semantic`,
+`MDQM_PATHS__SEMANTIC_DIR`) is **not**: the bootstrap pipeline writes `generated/*.yaml` there, and a
+container recreate without a mount silently loses the whole generated layer, after which every
+`/context` answer falls back to "no semantic layer". Mount it:
+
+```yaml
+volumes:
+  - mdqm-semantic:/semantic        # generated layer: keep it like /data
+  - ./curated:/semantic/curated:ro # humans' files, read-only, wins on conflict
+```
+
+`docker-compose.yml` does this (`server-semantic`). It belongs with the backup note at the top of this
+section: `/data` holds the metadata DB and the audit chain, `/semantic` holds the facts the answers
+are built from.
 
 ## 2. Mode A: build against an internal mirror (the normal case)
 
