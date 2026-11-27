@@ -56,6 +56,7 @@ from mdqm.store.db import Store
 __all__ = [
     "ERROR_LIMIT",
     "PIPELINE_RUN_TABLE",
+    "STAGE_ORDER",
     "PipelineContext",
     "PipelineResult",
     "SourceBusy",
@@ -745,13 +746,21 @@ def run_pipeline(
     )
 
 
-def available_stages() -> tuple[Stage, ...]:
-    """The stages this build registers, in run order.
+#: The run order of the bootstrap stages: read the catalogs, then everything measured or proposed
+#: from them, and the name proposals last because they read the earlier stages' output. A stage a
+#: build adds and does not list here runs after these, by name, so an unlisted stage can never
+#: silently land in the middle of the sequence.
+STAGE_ORDER: Final[tuple[str, ...]] = ("D1+D2", "D4", "D5", "D6", "D7", "D8", "D10", "A1+A2")
 
-    Each D-stage task adds its own object here. A stage that reads a source needs its adapters, so
-    those are constructed by the caller that has them (``mdqm.pipeline.cli``); what this returns is
-    what can run with no wiring beyond the context.
+
+def available_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:
+    """The stages a caller built, in run order.
+
+    The caller -- ``mdqm.pipeline.cli`` -- is the one place with settings, secrets, a store and the
+    adapters, so it builds the objects; this function only decides the order, which keeps this
+    module free of any stage import (every stage imports it) and keeps the order in one reviewable
+    place. Ties keep the caller's order, so two instances of one stage (D8 per measure) stay in the
+    order they were given.
     """
-    # D1+D2 read the catalog, so they need adapters; the CLI builds them from settings and calls
-    # `run_pipeline` with that list. Nothing here is registered without its source dependency.
-    return ()
+    rank = {name: position for position, name in enumerate(STAGE_ORDER)}
+    return tuple(sorted(stages, key=lambda stage: (rank.get(stage.name, len(rank)), stage.name)))

@@ -733,10 +733,12 @@ def test_mining_runs_through_the_pipeline_and_skips_on_the_second_pass(
 
 
 def test_cli_bootstrap_run_reports_an_empty_registry() -> None:
-    assert available_stages() == ()
+    # The order helper is all core owns; the wiring is `mdqm.pipeline.cli.build_stages`, which the
+    # command below reaches with no source configured.
+    assert available_stages([]) == ()
     result = CliRunner().invoke(app, ["bootstrap", "run"])
     assert result.exit_code == 0, result.output
-    assert "no bootstrap stage is registered" in result.output
+    assert "no bootstrap stage can run here" in result.output
 
 
 def test_cli_lists_bootstrap_commands() -> None:

@@ -140,7 +140,7 @@ class CatalogStage:
         for source in self._selected(ctx):
             snapshot = self._snapshots.get(source) or self._adapters[source].extract_catalog()
             partitions = self._partitions.get(source, ())
-            by_table = _partitions_by_table(partitions, snapshot, source)
+            by_table = partitions_by_table(partitions, snapshot, source)
             if not partitions:
                 skipped.append(f"{source}: no partition metadata (unsupported or none declared)")
 
@@ -190,7 +190,7 @@ def _catalog_digest(snapshot: CatalogSnapshot) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _partitions_by_table(
+def partitions_by_table(
     partitions: Sequence[Partitioning], snapshot: CatalogSnapshot, source: str
 ) -> dict[str, Partitioning]:
     """Map each ``Partitioning`` to its table by bound name, dropping anything ambiguous.
