@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import inspect
+import logging
 from collections.abc import Callable, Iterable
 from typing import Protocol, cast
 
@@ -31,6 +32,8 @@ __all__ = [
 #: Entry-point group every adapter distribution declares in its ``pyproject.toml``.
 ADAPTER_ENTRY_POINT_GROUP = "mdqm.adapters"
 
+
+_log = logging.getLogger(__name__)
 
 class AdapterEntryPoint(Protocol):
     """The slice of ``importlib.metadata.EntryPoint`` the registry uses (test doubles are easy)."""
@@ -87,6 +90,8 @@ class AdapterRegistry:
         self._secrets = secrets
         self._entry_points = entry_points or (lambda: _installed_entry_points(self._group))
         self._factories: dict[str, AdapterFactory] = {}
+        self._unavailable: dict[str, str] = {}
+        """Kinds whose entry point exists but whose driver is not installed in this deployment."""
 
     # --- registration -------------------------------------------------------------------
 
@@ -125,6 +130,17 @@ class AdapterRegistry:
             origin = f"entry point {self._group}:{entry_point.name}"
             try:
                 loaded = entry_point.load()
+            except ModuleNotFoundError as exc:
+                # A deployment installs the extras it serves. An adapter whose third-party driver is
+                # absent is *not available here* -- a capability fact to report (principle 10), not a
+                # broken plugin. Raising would mean a Postgres-only site cannot start the server.
+                _log.warning(
+                    "adapter %r is not installed in this deployment (%s); it is unavailable",
+                    entry_point.name,
+                    exc,
+                )
+                self._unavailable[entry_point.name] = str(exc)
+                continue
             except Exception as exc:  # a broken plugin must stop discovery, not vanish silently
                 raise AdapterRegistrationError(
                     f"{origin} failed to load: {type(exc).__name__}: {exc}"

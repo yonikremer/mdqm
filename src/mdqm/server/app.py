@@ -23,6 +23,7 @@ from starlette.responses import JSONResponse, Response
 
 from mdqm import __version__
 from mdqm.config.settings import Settings
+from mdqm.governor.handles import ResultStore
 from mdqm.server.auth import (
     READ_SCOPE,
     AuthConfigError,
@@ -41,9 +42,10 @@ from mdqm.server.tools import (
     FindDataServices,
     configure_find_data,
     configure_query_services,
+    configure_services,
     register_tools,
 )
-from mdqm.server.wiring import WiringError, query_services
+from mdqm.server.wiring import WiringError, query_services, tool_services
 
 __all__ = [
     "DEFAULT_PUBLIC_URL",
@@ -215,7 +217,12 @@ def serve(*, host: str, port: int, public_url: str | None = None) -> None:
         # here -- rather than in `create_server` -- keeps the constructor pure and makes a failure
         # visible at startup instead of on the first agent's question.
         try:
-            configure_query_services(query_services(settings, context_source.layer))
+            # One result store for the whole server: `query` fills it, `get_more` pages it.
+            handles = ResultStore()
+            configure_services(tool_services(settings, handles=handles))
+            configure_query_services(
+                query_services(settings, context_source.layer, handles=handles)
+            )
         except WiringError:
             logger.exception("query pipeline not wired")
     server = create_server(

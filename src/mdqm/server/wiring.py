@@ -25,11 +25,14 @@ from mdqm.config.settings import Settings
 from mdqm.executor.cache import FragmentCache
 from mdqm.governor.clock import Clock
 from mdqm.governor.core import Governor
+from mdqm.governor.handles import ResultStore
 from mdqm.models import Limits
 from mdqm.semantic.models import SemanticLayer
+from mdqm.server.tools.misc import ToolServices
 from mdqm.server.tools.query import QueryServices
 from mdqm.store.audit import AuditLog
 from mdqm.store.db import Store
+from mdqm.store.feedback import FeedbackStore
 from mdqm.store.history import HistoryStore
 
 _log = logging.getLogger(__name__)
@@ -109,12 +112,38 @@ def open_cache(cache_dir: Path, clock: Clock | None = None) -> FragmentCache:
     return FragmentCache(connection, clock=clock)
 
 
+def tool_services(
+    settings: Settings,
+    *,
+    clock: Clock | None = None,
+    handles: ResultStore | None = None,
+) -> ToolServices:
+    """The stores `history`, `feedback` and `get_more` read.
+
+    They share one metadata database with the query path: a run recorded by `query` must be visible to
+    `history`, and a handle it returns must be pageable by `get_more`. Wiring them here keeps that true
+    in one place instead of relying on two constructors agreeing.
+    """
+    store = Store(settings.paths.metadata_db)
+    store.initialize()
+    # The stores take a plain `now` callable while the governor's clock also carries `monotonic`;
+    # passing the method keeps every component on one notion of time.
+    now = None if clock is None else clock.now
+    return ToolServices(
+        handles=handles if handles is not None else ResultStore(clock=clock),
+        history=HistoryStore(store, clock=now),
+        feedback=FeedbackStore(store, clock=now),
+        audit=AuditLog(store, clock=now),
+    )
+
+
 def query_services(
     settings: Settings,
     layer: SemanticLayer,
     *,
     clock: Clock | None = None,
     tables: Sequence[str] | None = None,
+    handles: ResultStore | None = None,
 ) -> QueryServices:
     """Assemble everything the ``query`` tool needs from one `Settings` object."""
     adapters = build_adapters(settings)
@@ -131,7 +160,13 @@ def query_services(
         columns = {key: value for key, value in columns.items() if key in allowed}
     return QueryServices(
         layer=layer,
-        governor=Governor(adapters, clock=clock),
+        # The result store is shared with `get_more`, otherwise a handle from `query` would be
+        # unknown to the tool that pages it.
+        governor=Governor(
+            adapters,
+            clock=clock,
+            store=handles if handles is not None else ResultStore(clock=clock),
+        ),
         # history and audit take a plain `now` callable while the governor's clock also carries
         # `monotonic`; passing the method keeps every component on the same notion of time.
         history=HistoryStore(store, clock=None if clock is None else clock.now),
