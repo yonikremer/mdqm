@@ -107,15 +107,15 @@ class OssSeed:
     def from_json(cls, document: dict[str, Any]) -> OssSeed:
         """Read ``render_json``/``python -m mdqm.testing.world`` output back into rows."""
         return cls(
-            seed=int(document["config"]["seed"]),
+            seed=_parse_int(document["config"]["seed"], "config.seed"),
             crm_customers=tuple(
                 CrmCustomer(
-                    cust_id=int(row["cust_id"]),
+                    cust_id=_parse_int(row["cust_id"], "crm.customers[].cust_id"),
                     full_name=str(row["full_name"]),
                     status=str(row["status"]),
-                    credit_limit=int(row["credit_limit"]),
+                    credit_limit=_parse_int(row["credit_limit"], "crm.customers[].credit_limit"),
                     region=str(row["region"]),
-                    signup_date=_as_date(row["signup_date"]),
+                    signup_date=_as_date(row["signup_date"], "crm.customers[].signup_date"),
                 )
                 for row in document["crm"]["customers"]
             ),
@@ -123,40 +123,55 @@ class OssSeed:
                 BillingAccount(
                     client_no=str(row["client_no"]),
                     state=str(row["state"]),
-                    credit_limit=None if row["credit_limit"] is None else int(row["credit_limit"]),
+                    credit_limit=(
+                        None
+                        if row["credit_limit"] is None
+                        else _parse_int(row["credit_limit"], "billing.accounts[].credit_limit")
+                    ),
                     region=str(row["region"]),
-                    opened_date=_as_date(row["opened_date"]),
+                    opened_date=_as_date(row["opened_date"], "billing.accounts[].opened_date"),
                 )
                 for row in document["billing"]["accounts"]
             ),
             usage_events=tuple(
                 UsageEvent(
-                    event_id=int(row["event_id"]),
+                    event_id=_parse_int(row["event_id"], "billing.usage_events[].event_id"),
                     client_no=str(row["client_no"]),
-                    start_time=_as_datetime(row["start_time"]),
-                    insertion_time=_as_datetime(row["insertion_time"]),
-                    units=int(row["units"]),
+                    start_time=_as_datetime(row["start_time"], "billing.usage_events[].start_time"),
+                    insertion_time=_as_datetime(
+                        row["insertion_time"], "billing.usage_events[].insertion_time"
+                    ),
+                    units=_parse_int(row["units"], "billing.usage_events[].units"),
                     corrects_event_id=(
-                        None if row["corrects_event_id"] is None else int(row["corrects_event_id"])
+                        None
+                        if row["corrects_event_id"] is None
+                        else _parse_int(
+                            row["corrects_event_id"],
+                            "billing.usage_events[].corrects_event_id",
+                        )
                     ),
                 )
                 for row in document["billing"]["usage_events"]
             ),
             accounts_hist=tuple(
                 AccountsHistRow(
-                    hist_id=int(row["hist_id"]),
+                    hist_id=_parse_int(row["hist_id"], "billing.accounts_hist[].hist_id"),
                     client_no=str(row["client_no"]),
                     state=str(row["state"]),
-                    credit_limit=int(row["credit_limit"]),
-                    updated_at=_as_datetime(row["updated_at"]),
+                    credit_limit=_parse_int(
+                        row["credit_limit"], "billing.accounts_hist[].credit_limit"
+                    ),
+                    updated_at=_as_datetime(
+                        row["updated_at"], "billing.accounts_hist[].updated_at"
+                    ),
                 )
                 for row in document["billing"]["accounts_hist"]
             ),
             erp_customers=tuple(
                 ErpCustomer(
-                    cust_no=int(row["cust_no"]),
-                    status_code=int(row["status_code"]),
-                    limit_k=int(row["limit_k"]),
+                    cust_no=_parse_int(row["cust_no"], "erp.customers[].cust_no"),
+                    status_code=_parse_int(row["status_code"], "erp.customers[].status_code"),
+                    limit_k=_parse_int(row["limit_k"], "erp.customers[].limit_k"),
                     name=str(row["name"]),
                 )
                 for row in document["erp"]["customers"]
@@ -174,13 +189,34 @@ class OssSeed:
         }
 
 
-def _as_date(value: Any) -> date:
-    return date.fromisoformat(str(value))
+def _parse_int(value: Any, field: str) -> int:
+    """One integer field of a world JSON row, naming the field when it is not one.
+
+    The document is written by ``python -m mdqm.testing.world``, so a non-integer means the wrong
+    file was passed: one line naming the field beats a traceback out of ``int()``. A float is
+    accepted only when it is whole, because ``int(1.5)`` would silently change the data.
+    """
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+        raise SystemExit(f"world JSON: `{field}` is not an integer: {value!r}")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise SystemExit(f"world JSON: `{field}` is not an integer: {value!r}") from None
 
 
-def _as_datetime(value: Any) -> datetime:
+def _as_date(value: Any, field: str) -> date:
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        raise SystemExit(f"world JSON: `{field}` is not an ISO date: {value!r}") from None
+
+
+def _as_datetime(value: Any, field: str) -> datetime:
     """Parse the ISO-8601 form ``world.render_json`` writes; naive input is taken as UTC."""
-    parsed = datetime.fromisoformat(str(value))
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        raise SystemExit(f"world JSON: `{field}` is not an ISO timestamp: {value!r}") from None
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 

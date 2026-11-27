@@ -87,7 +87,13 @@ class Question:
 
 def load_questions(path: Path = QUESTIONS_PATH) -> tuple[list[Question], float]:
     document = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
-    tolerance = float(document.get("float_tolerance") or DEFAULT_TOLERANCE)
+    if not isinstance(document, dict):
+        raise SystemExit(f"{path}: expected a mapping with `questions` and `float_tolerance`")
+    raw_tolerance = document.get("float_tolerance")
+    try:
+        tolerance = float(DEFAULT_TOLERANCE if raw_tolerance is None else raw_tolerance)
+    except (TypeError, ValueError):
+        raise SystemExit(f"{path}: `float_tolerance` is not a number: {raw_tolerance!r}") from None
     questions = [
         Question(id=str(item["id"]), text=dict(item["text"]), answer=dict(item["answer"]))
         for item in document["questions"]
@@ -144,7 +150,10 @@ def _coerce(value: Any) -> Any:
     if isinstance(value, bool):
         return value
     if isinstance(value, int | float):
-        return float(value)
+        try:
+            return float(value)
+        except OverflowError:
+            return value  # an integer too large for a float: compare it exactly, do not crash
     if isinstance(value, str):
         text = value.strip()
         try:

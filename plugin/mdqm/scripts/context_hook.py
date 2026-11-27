@@ -110,11 +110,17 @@ def _fetch(url: str, token: str, prompt: str) -> str | None:
     # The scheme is already narrowed to http/https by `_base_url`, so no `file:` URL can arrive.
     parts = urllib.parse.urlsplit(url + "/context")
     if parts.scheme == "https":
+        # TLS is verified: `ssl.create_default_context()` uses the system trust store with
+        # CERT_REQUIRED and check_hostname, and this hook has no unverified or CERT_NONE context
+        # anywhere. The host is the operator's configured base URL, already narrowed to http(s)
+        # with a non-empty host by `_base_url`, so it is never attacker-chosen. The semgrep rule
+        # warns about pre-3.4.3 Python, where verification was off by default: not this case.
+        # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
         connection: http.client.HTTPConnection = http.client.HTTPSConnection(
             parts.hostname or "",
             parts.port,
             timeout=CONNECT_TIMEOUT_SECONDS,
-            context=ssl.create_default_context(),  # the system trust store, no proxy of our own
+            context=ssl.create_default_context(),  # verifies the chain and the hostname
         )
     else:
         connection = http.client.HTTPConnection(
