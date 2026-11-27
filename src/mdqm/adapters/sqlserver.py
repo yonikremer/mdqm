@@ -1128,7 +1128,10 @@ class SqlServerAdapter:
         """Toggle ``SHOWPLAN_XML``, translating a refusal into the grant an operator must issue."""
         try:
             # pi-lens-ignore: python-sql-injection
-            cursor.execute(_SHOWPLAN_ON if enabled else _SHOWPLAN_OFF)
+            if enabled:
+                cursor.execute(_SHOWPLAN_ON)
+            else:
+                cursor.execute(_SHOWPLAN_OFF)
         except Exception as exc:
             raise NotSupported(
                 OPTIONAL_METHODS["explain"],

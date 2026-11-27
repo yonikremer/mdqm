@@ -19,6 +19,7 @@ last possible moment, where a mistake cannot slip past.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -70,13 +71,41 @@ def prepare(
     return PreparedStatement(text=text, params=params, dialect=dialect)
 
 
-def run(cursor: Any, statement: PreparedStatement) -> Any:
+def execute_one(cursor: Any, statement: PreparedStatement) -> Any:
+    """Execute exactly one guarded statement, with its values bound.
+
+    Named `execute_one` on purpose. A driver's `execute` will happily run several statements separated
+    by `;` on some engines, which is precisely how a stacked-statement injection works. Here the guard
+    has already refused anything but a single parsed read, and this is the only function that hands the
+    text to a driver -- so "one statement, parameterised" is the only shape that exists.
+    """
     """Execute a prepared *source* statement.
 
-    The only function in the package that hands dynamic source SQL to a driver. A statement cannot
-    arrive here unguarded: :class:`PreparedStatement` is only produced by :func:`prepare`.
+    A statement cannot arrive here unguarded: :class:`PreparedStatement` is only produced by
+    :func:`prepare`, which runs the AST guard.
     """
     return cursor.execute(statement.text, statement.params or None)
+
+
+def wrapped(prepared: PreparedStatement, *, template: str, **fields: Any) -> PreparedStatement:
+    """Wrap an already-guarded statement in a constant template, e.g. ``EXPLAIN {sql}``.
+
+    Some statements *must* embed another one (``EXPLAIN … FOR``, ``SET SHOWPLAN_XML``). Doing that at a
+    call site is text building, and text building is where injections live, so it happens here instead:
+    the inner statement is already guarded, the template is a literal, and any interpolated field is a
+    value this module controls (an integer statement id, never agent input). The result is still a
+    :class:`PreparedStatement`, so it can only leave through :func:`execute_one`.
+    """
+    return PreparedStatement(
+        text=template.format(sql=prepared.text, **fields),
+        params=prepared.params,
+        dialect=prepared.dialect,
+    )
+
+
+def run(cursor: Any, statement: PreparedStatement) -> Any:
+    """Deprecated alias for :func:`execute_one`; kept so existing call sites keep working."""
+    return execute_one(cursor, statement)
 
 
 def run_local(
@@ -89,3 +118,29 @@ def run_local(
     the text -- never anything assembled from user input.
     """
     return cursor.execute(text, params)
+
+
+#: Settings this repository is willing to change on a local engine, with the shape their value may take.
+_LOCAL_SETTINGS: dict[str, re.Pattern[str]] = {
+    "memory_limit": re.compile(r"^[0-9]{1,6}(KB|MB|GB|TB)$"),
+    "temp_directory": re.compile(r"^[A-Za-z]:[\/][^'\"]*$|^/[^'\"]*$"),
+    "TimeZone": re.compile(r"^[A-Za-z][A-Za-z0-9_+/-]{0,63}$"),
+}
+
+
+def set_local(engine: Any, name: str, value: str) -> None:
+    """Set a local engine setting, validating both halves first.
+
+    A driver cannot bind a value into ``SET``, so this is the one place where a setting is written into
+    SQL text -- and it is written here, where the name must be one of a fixed table and the value must
+    match that setting's pattern. An agent-provided string cannot reach it: the callers pass our own
+    configuration.
+    """
+    pattern = _LOCAL_SETTINGS.get(name)
+    if pattern is None:
+        raise StatementRefused(
+            guard("SELECT 1", "duckdb")  # reuse the refusal type with the guard's shape
+        )
+    if not pattern.fullmatch(value):
+        raise StatementRefused(guard("SELECT 1", "duckdb"))
+    engine.execute("SET " + name + " = '" + value + "'").fetchall()

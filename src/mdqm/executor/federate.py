@@ -84,6 +84,7 @@ from mdqm.models import ErrorResponse
 from mdqm.semantic.measures import render_normalize
 from mdqm.semantic.models import ApprovedJoin, SemanticLayer, render_template
 from mdqm.spec.models import Agg
+from mdqm.sql.execution import set_local
 
 __all__ = [
     "DEFAULT_MEMORY_LIMIT",
@@ -200,14 +201,14 @@ class FederatedExecutor:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             self._con = duckdb.connect(str(path))
         # UTC everywhere: a fetched_at must round-trip to the same instant it was recorded at.
-        self._con.execute("SET TimeZone='UTC'").fetchall()
-        # A SET value cannot be bound as a parameter; the regex above restricts it to <size><unit>.
-        self._con.execute(f"SET memory_limit='{memory_limit}'").fetchall()  # nosemgrep
+        set_local(self._con, "TimeZone", "UTC")
+        # A SET value cannot be bound; the chokepoint validates the name and the value shape.
+        set_local(self._con, "memory_limit", memory_limit)
         # DuckDB's default temp_directory is `.tmp` relative to the process CWD (/app in the image,
         # read-only there), and TMPDIR does not move it, so this is always set explicitly.
         spill = Path(spill_dir) if spill_dir is not None else Settings().paths.spill_dir
         spill.mkdir(parents=True, exist_ok=True)
-        self._con.execute(f"SET temp_directory='{spill.as_posix()}'").fetchall()  # nosemgrep
+        set_local(self._con, "temp_directory", spill.as_posix())
         self._cache = FragmentCache(self._con, clock=self._clock, min_ttl=min_ttl, max_ttl=max_ttl)
 
     # --- lifecycle ------------------------------------------------------------------------

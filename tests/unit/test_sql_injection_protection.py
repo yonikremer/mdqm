@@ -120,9 +120,7 @@ HOSTILE_VALUES = (
 
 
 @pytest.mark.parametrize("hostile", HOSTILE_VALUES)
-def test_a_hostile_value_comes_back_as_data(
-    local_db: sqlite3.Connection, hostile: str
-) -> None:
+def test_a_hostile_value_comes_back_as_data(local_db: sqlite3.Connection, hostile: str) -> None:
     """The payload must round-trip as a string and leave the table alone."""
     cur = local_db.cursor()
     before = local_db.execute("SELECT count(*) FROM victim").fetchone()[0]

@@ -62,6 +62,17 @@ repos:
         language: system
         pass_filenames: true
 
+      # Our own rule: it looks at *how* a statement was built (interpolation, concatenation,
+      # formatting) instead of refusing every non-literal, which is what the built-in rule does. It
+      # runs on the runtime query paths; the test loaders build DDL from their own constants and are
+      # tracked separately.
+      - id: sql-sinks
+        name: no values interpolated into runtime SQL
+        entry: python scripts/precommit_hook.py scripts/check_sql_sinks.py
+        language: system
+        files: ^src/mdqm/(adapters|sql|server|executor|compiler|semantic|planner|governor|store|review|context|results|cache)/
+        pass_filenames: true
+
       # ---- pre-push: slower, whole-repository gates ----
       - id: mypy-strict
         name: mypy --strict on src

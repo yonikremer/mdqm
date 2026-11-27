@@ -93,7 +93,7 @@ from mdqm.models import (
     TableKind,
     TableStats,
 )
-from mdqm.sql.execution import PreparedStatement, prepare, run
+from mdqm.sql.execution import PreparedStatement, execute_one, prepare
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
@@ -878,7 +878,7 @@ class PostgresAdapter:
             # with it -- explaining a parameterised statement without them fails outright.
             # The inner statement is what can carry an injection; it is guarded before it is wrapped.
             inner = prepare(text, dialect=self.dialect(), params=fragment.params or ())
-            run(cur, PreparedStatement(
+            execute_one(cur, PreparedStatement(
                 text="EXPLAIN (FORMAT JSON) " + inner.text,
                 params=inner.params,
                 dialect=inner.dialect,
@@ -965,7 +965,7 @@ class PostgresAdapter:
             statement = prepare(
                 fragment.sql, dialect=self.dialect(), params=fragment.params or ()
             )
-            run(cursor, statement)
+            execute_one(cursor, statement)
             return PgArrowStream(
                 connection=connection,
                 cursor=cursor,

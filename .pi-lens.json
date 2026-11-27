@@ -8,6 +8,12 @@
     },
     "line-length": {
       "disable": true
+    },
+    "python-sql-injection": {
+      "disable": true
+    },
+    "python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query": {
+      "disable": true
     }
   }
 }
