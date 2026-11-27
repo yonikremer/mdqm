@@ -43,6 +43,7 @@ all = ["mdqm[pg,oracle,mssql,dev]"]
 [project.entry-points."mdqm.adapters"]
 postgresql = "mdqm.adapters.postgresql:PostgresAdapter"
 openapi = "mdqm.adapters.openapi:OpenApiAdapter"
+elastic = "mdqm.adapters.elastic:ElasticAdapter"
 
 [project.scripts]
 mdqm = "mdqm.cli:app"
