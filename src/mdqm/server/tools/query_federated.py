@@ -473,7 +473,9 @@ def run_federated(
         )
         executor = own
     try:
-        result = executor.execute(plan, user=user)
+        # An executor method, not a SQL sink: every fragment was built by the compiler through the
+        # sqlglot AST and re-guarded before the governor sends it (same ignore as governor/core.py).
+        result = executor.execute(plan, user=user)  # pi-lens-ignore: python-sql-injection
     finally:
         if own is not None:
             own.close()
