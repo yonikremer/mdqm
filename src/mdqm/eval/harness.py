@@ -71,8 +71,13 @@ class Report:
             "total": len(self.verdicts),
             "passed": self.passed,
             "worst_first": [
-                {"id": v.id, "kind": v.kind, "spec": v.spec_result, "oracle": v.oracle_result,
-                 "detail": v.detail}
+                {
+                    "id": v.id,
+                    "kind": v.kind,
+                    "spec": v.spec_result,
+                    "oracle": v.oracle_result,
+                    "detail": v.detail,
+                }
                 for v in sorted(self.verdicts, key=lambda v: (v.passed, v.id))
             ],
         }
@@ -115,8 +120,7 @@ def run_spec_path(
         return {"kind": "skipped", "problem": "no spec in the question set"}
     snapshot = adapter.extract_catalog()
     columns = {
-        f"{source}.{table.name}": tuple(c.name for c in table.columns)
-        for table in snapshot.tables
+        f"{source}.{table.name}": tuple(c.name for c in table.columns) for table in snapshot.tables
     }
     compiled = compile_spec(
         parse_spec(dict(question.spec)),
@@ -132,9 +136,7 @@ def run_spec_path(
     if not compiled.ok or compiled.fragment is None:
         error = compiled.error
         return {"kind": "error", "error_code": None if error is None else error.code}
-    limits = Limits(
-        timeout_s=60, max_rows=10_000, max_bytes=64 << 20, max_partitions=64
-    )
+    limits = Limits(timeout_s=60, max_rows=10_000, max_bytes=64 << 20, max_partitions=64)
     rows = _rows_from_batches(adapter.execute(compiled.fragment, limits))
     return {"kind": "rows", "rows": rows}
 

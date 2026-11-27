@@ -173,11 +173,7 @@ class CatalogStage:
     # -- helpers -------------------------------------------------------------------------
 
     def _selected(self, ctx: PipelineContext) -> list[str]:
-        chosen = [
-            source
-            for source in self.sources
-            if ctx.source is None or ctx.source == source
-        ]
+        chosen = [source for source in self.sources if ctx.source is None or ctx.source == source]
         if self._only is not None:
             chosen = [source for source in chosen if source in self._only]
         return chosen

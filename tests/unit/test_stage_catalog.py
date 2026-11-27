@@ -62,9 +62,9 @@ class _StubAdapter:
         self, tables: tuple[Table, ...], partitions: tuple[Partitioning, ...] = ()
     ) -> None:
         self._snapshot = CatalogSnapshot(
-            source="stub", captured_at=__import__("datetime").datetime.now(
-                __import__("datetime").UTC
-            ), tables=tables
+            source="stub",
+            captured_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+            tables=tables,
         )
         self._partitions = partitions
         self.calls = 0
@@ -141,7 +141,7 @@ def test_the_same_catalog_gives_the_same_input_hash(tmp_path: Path) -> None:
     fresh = CatalogStage({"crm": _StubAdapter((_table("events"),))})
     assert fresh.inputs_hash(context) == first
 
-    changed = CatalogStage({"crm": _StubAdapter((_table("events"), _table("extra")))}) 
+    changed = CatalogStage({"crm": _StubAdapter((_table("events"), _table("extra")))})
     assert changed.inputs_hash(context) != first
 
 

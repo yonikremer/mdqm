@@ -45,43 +45,43 @@ async def run(url: str, token: str, action: str, name: str | None, raw: str | No
     async with http_client, streamable_http_client(url, http_client=http_client) as streams:
         read_stream, write_stream = streams[0], streams[1]
         async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                if action == "list":
-                    listing = await session.list_tools()
-                    for tool in listing.tools:
-                        description = (tool.description or "").strip().splitlines()[0:1]
-                        print(f"{tool.name}\t{description[0] if description else ''}")
-                    return 0
-
-                if action == "schema":
-                    listing = await session.list_tools()
-                    for tool in listing.tools:
-                        if name in (None, tool.name):
-                            print(
-                                json.dumps(
-                                    {
-                                        "name": tool.name,
-                                        "description": tool.description,
-                                        "input_schema": tool.input_schema,
-                                    },
-                                    indent=2,
-                                    ensure_ascii=False,
-                                )
-                            )
-                    return 0
-
-                arguments: dict[str, Any] = json.loads(raw or "{}")
-                result = await session.call_tool(name or "", arguments)
-                payload: dict[str, Any] = {
-                    "is_error": getattr(result, "isError", None),
-                    "structured": getattr(result, "structuredContent", None),
-                }
-                if payload["structured"] is None:
-                    payload["content"] = [
-                        getattr(item, "text", None) for item in getattr(result, "content", []) or []
-                    ]
-                print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+            await session.initialize()
+            if action == "list":
+                listing = await session.list_tools()
+                for tool in listing.tools:
+                    description = (tool.description or "").strip().splitlines()[0:1]
+                    print(f"{tool.name}\t{description[0] if description else ''}")
                 return 0
+
+            if action == "schema":
+                listing = await session.list_tools()
+                for tool in listing.tools:
+                    if name in (None, tool.name):
+                        print(
+                            json.dumps(
+                                {
+                                    "name": tool.name,
+                                    "description": tool.description,
+                                    "input_schema": tool.input_schema,
+                                },
+                                indent=2,
+                                ensure_ascii=False,
+                            )
+                        )
+                return 0
+
+            arguments: dict[str, Any] = json.loads(raw or "{}")
+            result = await session.call_tool(name or "", arguments)
+            payload: dict[str, Any] = {
+                "is_error": getattr(result, "isError", None),
+                "structured": getattr(result, "structuredContent", None),
+            }
+            if payload["structured"] is None:
+                payload["content"] = [
+                    getattr(item, "text", None) for item in getattr(result, "content", []) or []
+                ]
+            print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+            return 0
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -226,7 +226,13 @@ def score_answers(answers_dir: Path) -> int:
                 rows.append((question.id, "PASS", f"refused with {code}"))
                 correct += 1
             else:
-                rows.append((question.id, "FAIL", f"expected refusal {expected.get('code')}, got {code or 'an answer'}"))
+                rows.append(
+                    (
+                        question.id,
+                        "FAIL",
+                        f"expected refusal {expected.get('code')}, got {code or 'an answer'}",
+                    )
+                )
             continue
 
         problem = score_rows(actual, expected, tolerance)

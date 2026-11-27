@@ -933,7 +933,8 @@ class PostgresAdapter:
             # `fragment.sql` is compiled-and-guarded SQL text; psycopg types the parameter as
             # LiteralString, which a runtime string can never satisfy. Bound values stay bound.
             cursor.execute(  # pyright: ignore[reportArgumentType]
-                fragment.sql, fragment.params or None  # pyright: ignore[reportArgumentType]
+                fragment.sql,
+                fragment.params or None,  # pyright: ignore[reportArgumentType]
             )
             return PgArrowStream(
                 connection=connection,

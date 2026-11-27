@@ -149,6 +149,7 @@ def create_server(
         ),
     )
     register_tools(server)
+
     # The tools and the /context route must answer from the SAME semantic layer: an agent whose
     # hook got a Context Pack and whose `find_data` then says "no dictionary is loaded" has been
     # told two different things by the same server. Wiring it here makes that impossible.
