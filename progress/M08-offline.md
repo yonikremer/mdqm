@@ -1,6 +1,6 @@
 status: done
 task: M08 (follow-up: staging a Linux wheelhouse from Windows)
-agent: m08-offline   branch: task/M08-offline   commit: 39386b9
+agent: m08-offline   branch: task/M08-offline   commit: 1a8df17
 tests run: `python scripts/check_offline_install.py` -> exit 0 (staged 55 wheels inside `python:3.12-slim`,
              built `mdqm-0.0.1-py3-none-any.whl`, installed `mdqm[pg]` with `--no-index` inside the
              container, "smoke ok 0.0.1", `mdqm --version` -> 0.0.1, "offline install check passed")
