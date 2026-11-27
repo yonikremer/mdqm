@@ -1,18 +1,22 @@
 """The governor: one call that takes a slot, honours a deadline and hands back a handle.
 
-This is where the four protections meet, in a fixed order, so a weak agent cannot get past any of
-them (:class:`~mdqm.governor.admission.Admission` ceilings and quota,
+This is where the protections meet, in a fixed order, so a weak agent cannot get past any of them
+(:func:`~mdqm.sql.guard.guard`,
+:class:`~mdqm.governor.admission.Admission` ceilings and quota,
 :class:`~mdqm.governor.breaker.CircuitBreaker`, the per-call deadline with a real ``cancel``, and
 :class:`~mdqm.governor.handles.ResultStore`):
 
-1. **The breaker** refuses a source already known to be down, before any slot is taken.
-2. **The slots** bound global, per-user and per-source concurrency; a refused slot releases nothing
+1. **The guard** refuses a fragment that carries SQL which is not one read-only query, before
+   any other protection is spent -- so a write never takes a slot, spends quota, or reaches an
+   adapter.
+2. **The breaker** refuses a source already known to be down, before any slot is taken.
+3. **The slots** bound global, per-user and per-source concurrency; a refused slot releases nothing
    and reports which ceiling bound it.
-3. **The quota** spends one query from the user's window; an exhausted budget reports its reset.
-4. **The deadline** is checked around every batch while the stream is drained. When it passes, the
+4. **The quota** spends one query from the user's window; an exhausted budget reports its reset.
+5. **The deadline** is checked around every batch while the stream is drained. When it passes, the
    adapter's own ``cancel`` path is called on the live stream -- the driver is told to stop, rather
    than a thread being abandoned -- and the refusal is a ``TIMEOUT`` naming the source and limit.
-5. **The handle** stores the full table and the agent receives summary + sample + handle.
+6. **The handle** stores the full table and the agent receives summary + sample + handle.
 
 Cancellation is the adapter's contract, not something the governor invents: ``SourceAdapter.cancel``
 takes the stream ``execute`` returned, so the cancel point is the stream. An ``execute`` that blocks
@@ -34,7 +38,7 @@ import pyarrow as pa
 from pydantic import Field
 
 from mdqm.adapters.base import ArrowStream, SourceAdapter
-from mdqm.errors import from_exception
+from mdqm.errors import from_exception, from_guard
 from mdqm.errors import timeout as timeout_error
 from mdqm.governor.admission import Admission, Peak, Quota, Scope
 from mdqm.governor.breaker import BreakerReport, CircuitBreaker
@@ -50,6 +54,7 @@ from mdqm.results.summary import (
     ResultSummary,
     summarise,
 )
+from mdqm.sql.guard import guard
 
 __all__ = [
     "ExecutionOutcome",
@@ -157,11 +162,13 @@ class Governor:
             The summary, the handle and the receipt.
 
         Raises:
-            GovernorRefusal: the breaker is open, a slot was not free in time, the quota is spent,
-                or the deadline cancelled the stream. Each carries the ``ErrorResponse`` to return.
+            GovernorRefusal: the fragment carries SQL that is not one read-only query, the breaker
+                is open, a slot was not free in time, the quota is spent, or the deadline
+                cancelled the stream. Each carries the ``ErrorResponse`` to return.
             KeyError: ``source`` is not one of the configured adapters.
         """
         adapter = self._adapters[source]
+        self._refuse_unreadable(fragment)
         self._breaker.ensure_closed(source)
         drained, waited_s = self._run_slot(
             adapter=adapter, source=source, user=user, fragment=fragment, limits=limits
@@ -202,6 +209,21 @@ class Governor:
             peaks=self._admission.peaks(),
             breakers=tuple(self._breaker.report(name) for name in sorted(self._adapters)),
         )
+
+    def _refuse_unreadable(self, fragment: Fragment) -> None:
+        """Guard a fragment that carries SQL, before a slot, a quota unit or the adapter is spent.
+
+        The compiler already guards the SQL it builds, but the governor is the last hop before
+        ``adapter.execute`` and a fragment can also arrive hand-built (a plugin, a test, a future
+        caller). Nothing here trusts that: a write is refused with the guard's own
+        ``ErrorResponse``, so the agent sees the normal ``WRITE_BLOCKED`` and the source never
+        hears about it.
+        """
+        if fragment.sql is None:
+            return
+        error = from_guard(guard(fragment.sql, fragment.dialect))
+        if error is not None:
+            raise GovernorRefusal(error)
 
     def _run_slot(
         self,
@@ -246,7 +268,11 @@ class Governor:
             GovernorRefusal: the deadline passed; the adapter's ``cancel`` was called first.
         """
         deadline = self._clock.monotonic() + limits.timeout_s
-        stream: ArrowStream = adapter.execute(fragment, limits)
+        # The adapter protocol method, not a SQL sink: ``fragment.sql`` was guarded by
+        # ``_refuse_unreadable`` above (and by the compiler that built it).
+        stream: ArrowStream = (  # pi-lens-ignore: python-sql-injection -- adapter protocol call
+            adapter.execute(fragment, limits)
+        )
         schema = stream.schema
         batches: list[pa.RecordBatch] = []
         rows = 0

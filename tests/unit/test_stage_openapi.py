@@ -71,7 +71,7 @@ def config() -> SourceConfig:
         name=SOURCE,
         adapter="openapi",
         auth=AuthSettings(header=AUTH_HEADER, secret="rates_api_key"),
-        options={"base_url": "http://mock-api.invalid"},
+        options={"base_url": "https://mock-api.invalid"},
     )
 
 

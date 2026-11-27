@@ -40,7 +40,7 @@ from mdqm.testing.conformance import run_conformance
 from mdqm.testing.mock_api import AUTH_HEADER, CURRENCIES, RATE_DAYS, MockApi, MockApiConfig
 
 #: Where the in-process app answers. Any host works: the ASGI bridge never resolves it.
-BASE_URL = "http://mock-api.invalid"
+BASE_URL = "https://mock-api.invalid"
 
 #: A throwaway key. It protects nothing; it must simply never live in ``src``.
 KEY = "a06-throwaway-key"

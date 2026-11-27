@@ -64,6 +64,7 @@ from mdqm.pipeline.core import (
     next_quiet_start,
     quiet_allows,
 )
+from mdqm.sql.guard import guard
 
 __all__ = [
     "DEFAULT_GRANULARITY_SHARE",
@@ -947,6 +948,8 @@ class ProfilingStage:
         """The statement to run: the adapter's own when it has one, else the sqlglot bound."""
         if supports_method(adapter, "sample_sql"):
             # Optional method: absent on most adapters, so it is reached through a plain lookup.
+            # It returns raw SQL text, so it is a trusted-plugin surface: the statement is guarded
+            # before it runs (see :meth:`_read`), and a plugin that returns a write is reported.
             build = getattr(adapter, "sample_sql")  # noqa: B009 - not a declared protocol member
             sql = build(table.name, self._sample_rows, self._seed)
             if not isinstance(sql, str) or not sql:
@@ -977,8 +980,25 @@ class ProfilingStage:
         table: Table,
         skipped: list[str],
     ) -> list[Mapping[str, Any]]:
-        """Run the bounded fragment and materialise its rows; a failed fetch yields no rows."""
-        stream = adapter.execute(fragment, limits)
+        """Run the bounded fragment and materialise its rows; a failed fetch yields no rows.
+
+        The statement is guarded here because this is the one place in the pipeline that hands a
+        fragment straight to an adapter with no governor in between, and ``sample_sql()`` can
+        return raw SQL text from a plugin. A refusal is reported in ``skipped``, never run.
+        """
+        if fragment.sql is not None:
+            checked = guard(fragment.sql, fragment.dialect)
+            if not checked.ok:
+                code = checked.error.code if checked.error is not None else "WRITE_BLOCKED"
+                skipped.append(
+                    f"{source}.{table.name}: the sample statement was refused by the read-only "
+                    f"guard ({code}), so only statistics were read"
+                )
+                return []
+        # The adapter protocol method, not a SQL sink: the statement was guarded just above.
+        stream = (  # pi-lens-ignore: python-sql-injection -- adapter protocol call
+            adapter.execute(fragment, limits)
+        )
         try:
             return [row for batch in stream for row in _rows_of(batch)]
         except (NotSupported, TimeoutError) as exc:

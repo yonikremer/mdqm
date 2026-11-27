@@ -86,6 +86,21 @@ def _digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _problems(exc: ValidationError, *, limit: int = 3) -> str:
+    """Field paths and messages only.
+
+    ``str(exc)`` renders pydantic's ``input_value=...``, which for a sibling-field failure is the
+    whole entry dict -- token included -- and this message reaches console and container logs.
+    """
+    problems = [
+        f"{'.'.join(str(part) for part in error['loc']) or '<root>'}: {error['msg']}"
+        for error in exc.errors()[:limit]
+    ]
+    if len(exc.errors()) > limit:
+        problems.append(f"and {len(exc.errors()) - limit} more")
+    return "; ".join(problems)
+
+
 def identity_from_access_token(token: AccessToken) -> UserIdentity:
     """Read :class:`UserIdentity` out of a verified access token.
 
@@ -145,7 +160,9 @@ class StaticTokenVerifier:
         try:
             parsed = TokenFile.model_validate(raw)
         except ValidationError as exc:
-            raise AuthConfigError(f"token file {target} does not match its shape: {exc}") from exc
+            raise AuthConfigError(
+                f"token file {target} does not match its shape: {_problems(exc)}"
+            ) from exc
         try:
             verifier = cls(parsed.tokens)
         except AuthConfigError as exc:

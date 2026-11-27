@@ -9,9 +9,12 @@ The guard is deliberately paranoid:
 * no DML, DDL, transaction control, ``COPY``, ``CALL``/``EXEC``, ``SELECT ... INTO``, ``FOR UPDATE``
   or locking table hint anywhere in the tree, so a Postgres data-modifying CTE
   (``WITH d AS (DELETE ...) SELECT ...``) is refused even though its root looks like a ``SELECT``;
-* a configurable denylist of functions that read files, sleep, run remote commands or write
-  sequences (``pg_read_file``, ``lo_*``, ``dblink``, ``xp_*``, ``DBMS_*``, ``UTL_*``, ...), matched
-  on the function name and, for package-qualified calls, on the qualifier;
+* no sequence advance (``NEXT VALUE FOR``, ``seq.NEXTVAL``): it is permanent and survives a
+  rollback;
+* a configurable denylist of functions that read files, sleep, run remote commands, take session
+  locks or write sequences (``pg_read_file``, ``read_text``/``read_parquet``, ``lo_*``, ``dblink``,
+  ``pg_advisory_*``, ``xp_*``, ``DBMS_*``, ``UTL_*``, ...), matched on the function name and, for
+  package-qualified calls, on the qualifier;
 * a parse failure is a rejection, never an allow: SQL the parser does not understand is never handed
   to a database.
 
@@ -81,6 +84,7 @@ DEFAULT_DENIED_FUNCTIONS: Final[frozenset[str]] = frozenset(
         "pg_create_logical_replication_slot",
         "pg_wal_replay_pause",
         "pg_wal_replay_resume",
+        "pg_logical_emit_message",
         "set_config",
         "nextval",
         "setval",
@@ -118,6 +122,23 @@ DEFAULT_DENIED_FUNCTIONS: Final[frozenset[str]] = frozenset(
         "load_file",
         "sys_exec",
         "sys_eval",
+        # DuckDB: the same class as ``pg_read_file`` -- they read the server's file system (and,
+        # for ``which_secret``, its stored credentials) into rows. The ``read_*`` family is covered
+        # by the ``read_`` prefix below; the ``*_scan`` spellings are the older aliases of it, and
+        # ``query``/``query_table`` run SQL text the guard never saw.
+        "glob",
+        "query",
+        "query_table",
+        "csv_scan",
+        "json_scan",
+        "parquet_scan",
+        "iceberg_scan",
+        "delta_scan",
+        "sqlite_scan",
+        "postgres_scan",
+        "mysql_scan",
+        "st_read",
+        "which_secret",
     }
 )
 
@@ -146,6 +167,15 @@ DEFAULT_DENIED_FUNCTION_PREFIXES: Final[tuple[str, ...]] = (
     "pg_drop_",
     "pg_wal_",
     "pg_promote",
+    # Session-scoped advisory locks survive cancel and rollback, so a caller could pin a lock on a
+    # primary database long after its query was abandoned.
+    "pg_advisory_",
+    "pg_try_advisory_",
+    # ``read_text``/``read_csv``/``read_parquet``/``read_blob``/... are DuckDB's file readers. A
+    # global prefix rather than a per-dialect list: the guard has one policy for every dialect, and
+    # refusing a user-defined ``read_*`` function on an engine that has none is the conservative
+    # side of that trade-off (it can never be a write the caller needed to run).
+    "read_",
 )
 
 #: Table hints that only weaken isolation or skip locked rows. Anything else (UPDLOCK, XLOCK,
@@ -202,6 +232,10 @@ _READ_ROOTS: Final[tuple[type[exp.Expression], ...]] = (exp.Select, exp.SetOpera
 _NUL: Final[str] = "\x00"
 #: MySQL runs the body of ``/*! ... */`` as SQL; a write hidden there would survive an AST check.
 _EXECUTABLE_COMMENT: Final[str] = "/*!"
+
+#: Parser nodes that advance a sequence. T-SQL spells it ``NEXT VALUE FOR`` and sqlglot gives it a
+#: node of its own; a later version may rename it, so the check is by node name as well as by class.
+_SEQUENCE_NODE_NAMES: Final[frozenset[str]] = frozenset({"NextValueFor", "NextValue"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +416,14 @@ def _forbidden(node: exp.Expr, policy: GuardPolicy) -> _Finding | None:
                 "Remove the hint, or use only NOLOCK, READPAST or READUNCOMMITTED.",
             )
         return None
+    if _is_sequence_advance(node):
+        return (
+            WRITE_BLOCKED,
+            "The statement advances a sequence (NEXT VALUE FOR / seq.NEXTVAL). A sequence advance "
+            "is permanent and survives a rollback, so it is a write even inside a SELECT.",
+            "Remove the sequence advance: this server can only read. Ask a DBA for the current "
+            "value with a plain SELECT on the table that holds it.",
+        )
     if isinstance(node, exp.Func):
         denied = _denied_name(_function_name(node), policy)
         if denied is not None:
@@ -394,6 +436,18 @@ def _forbidden(node: exp.Expr, policy: GuardPolicy) -> _Finding | None:
             if denied is not None:
                 return _denied_function_finding(denied)
     return None
+
+
+def _is_sequence_advance(node: exp.Expr) -> bool:
+    """True for ``NEXT VALUE FOR seq`` (T-SQL) and ``seq.NEXTVAL`` (Oracle).
+
+    Neither is an ``exp.Func``: Oracle's ``seq.NEXTVAL`` parses to a ``Column`` named ``nextval``
+    with the sequence as its table, so the denylisted ``nextval`` function never matched it. A
+    column that is genuinely called ``nextval`` is refused too -- the conservative side.
+    """
+    if type(node).__name__ in _SEQUENCE_NODE_NAMES:
+        return True
+    return isinstance(node, exp.Column) and _normalise(node.name) == "nextval"
 
 
 def _denied_function_finding(name: str) -> _Finding:

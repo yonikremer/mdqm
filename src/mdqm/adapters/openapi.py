@@ -177,6 +177,11 @@ class OpenApiUnavailable(OpenApiError, OSError):
 class _SpecError(ValueError):
     """The document is not a readable OpenAPI 3.x description (a config problem, not a query)."""
 
+    def __init__(self, message: str, *, error: ErrorResponse | None = None) -> None:
+        super().__init__(message)
+        self.error = error
+        """The agent-facing refusal, when the problem has one; ``None`` for a plain config error."""
+
 
 @dataclass(frozen=True, slots=True)
 class SpecColumn:
@@ -334,12 +339,35 @@ def _paging_for(params: Sequence[SpecParam], next_key: str | None) -> SpecPaging
     return SpecPaging(style="none", limit_param=limit)
 
 
+def _require_relative_path(path: str) -> None:
+    """Refuse a ``paths`` key that is not a single-slash-relative path.
+
+    ``httpx`` treats an absolute URL as the whole URL and *discards* ``base_url``, so a document
+    whose key was ``https://attacker.example/x`` would send the source's auth header to that host
+    with no redirect and no write. A path key must start with exactly one ``/`` and name no host.
+    """
+    if path.startswith("/") and not path.startswith("//") and "://" not in path:
+        return
+    raise _SpecError(
+        f"the path key {path!r} is not a relative path: an OpenAPI path key starts with exactly "
+        "one '/' and names no host (for example '/v1/customers'). fix: rewrite the key as a path "
+        "on the document's servers[0].url, or put the host in options.base_url instead",
+        error=invalid_spec(
+            field="paths",
+            reason=f"the path key {path!r} is not a relative path, so a request built from it "
+            "would leave the configured base URL",
+            expected=("/v1/collection", "/collection"),
+        ),
+    )
+
+
 def _operations(spec: Mapping[str, Any]) -> Iterator[tuple[str, str, Mapping[str, Any]]]:
     """Every operation in the document as ``(path, method, operation)``, in document order."""
     paths = spec.get("paths")
     if not isinstance(paths, Mapping):
         raise _SpecError("the document has no 'paths' object")
     for path, item in paths.items():
+        _require_relative_path(str(path))
         if not isinstance(item, Mapping):
             continue
         for method, operation in item.items():
@@ -410,13 +438,15 @@ def read_endpoints(
     tables: list[SpecEndpoint] = []
     ignored: list[SkippedOperation] = []
     for path, item in paths.items():
+        text = str(path)
+        _require_relative_path(text)
         if not isinstance(item, Mapping):
             continue
         for method, operation in item.items():
             verb = str(method).lower()
             if not isinstance(operation, Mapping):
                 continue
-            label = f"{verb.upper()} {path}"
+            label = f"{verb.upper()} {text}"
             if verb in _WRITE_METHODS:
                 ignored.append(
                     SkippedOperation(
@@ -459,8 +489,8 @@ def read_endpoints(
                 continue
             tables.append(
                 SpecEndpoint(
-                    table=_table_name(str(path)),
-                    path=str(path),
+                    table=_table_name(text),
+                    path=text,
                     columns=columns,
                     params=params,
                     paging=_paging_for(params, _next_key(spec, schema)),
@@ -479,14 +509,26 @@ class GetOnlyTransport(httpx.BaseTransport):
     The adapter has no code path that would build another method; this wrapper is the layer that
     proves it, so a future change cannot quietly start writing to a source. ``close`` forwards, so
     the wrapped transport's own cleanup still runs.
+
+    It also refuses a request whose host is not ``allowed_host`` (the configured base URL's host),
+    because ``httpx`` drops ``base_url`` for an absolute URL. That check lives here, not in
+    ``_get``, so a subclass overriding the request path cannot skip it.
     """
 
-    def __init__(self, inner: httpx.BaseTransport) -> None:
+    def __init__(self, inner: httpx.BaseTransport, *, allowed_host: str | None = None) -> None:
         self._inner = inner
+        self._allowed_host = allowed_host
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         if request.method != "GET":
             raise OpenApiError(write_blocked(operation=request.method))
+        if self._allowed_host is not None and request.url.host != self._allowed_host:
+            raise OpenApiError(
+                invalid_spec(
+                    field="options.base_url",
+                    reason="a request would leave the configured base URL's host",
+                )
+            )
         return self._inner.handle_request(request)
 
     def close(self) -> None:
@@ -607,7 +649,9 @@ class OpenApiAdapter:
 
         self._client = httpx.Client(
             base_url=self._base_url,
-            transport=GetOnlyTransport(transport or httpx.HTTPTransport()),
+            transport=GetOnlyTransport(
+                transport or httpx.HTTPTransport(), allowed_host=httpx.URL(self._base_url).host
+            ),
             timeout=timeout_s,
             follow_redirects=False,
         )
@@ -1014,18 +1058,50 @@ def read_spec(config: SourceConfig | None) -> dict[str, Any]:
     return {str(key): value for key, value in loaded.items()}
 
 
+#: Hosts a plaintext ``http://`` base URL is allowed for: a sidecar on the same machine cannot be
+#: eavesdropped on the way.
+_LOOPBACK_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _checked_base_url(url: str, *, origin: str) -> str:
+    """Refuse a plaintext base URL: the source's auth header would travel unencrypted.
+
+    A loopback ``http://`` URL is allowed because the request never leaves the host.
+    """
+    try:
+        parsed = httpx.URL(url)
+    except Exception:  # httpx raises several types for an unparseable URL
+        raise _SpecError(
+            f"the base URL {url!r} from {origin} is not a URL. fix: use an https:// URL such as "
+            "https://api.internal"
+        ) from None
+    if parsed.scheme == "https" or (
+        parsed.scheme == "http" and (parsed.host or "") in _LOOPBACK_HOSTS
+    ):
+        return url
+    raise _SpecError(
+        f"the base URL {url!r} from {origin} is not https. fix: use an https:// URL, or a "
+        "loopback http:// URL (127.0.0.1, ::1, localhost) for a sidecar on the same host",
+        error=invalid_spec(
+            field="options.base_url",
+            reason="it is not an https:// URL (only a loopback host may use http://)",
+            expected=("https://api.internal", "http://127.0.0.1:8000"),
+        ),
+    )
+
+
 def _base_url(config: SourceConfig | None, spec: Mapping[str, Any]) -> str:
     """The base URL: the source's configured override, else the spec's first server."""
     override = config.options.get("base_url") if config is not None else None
     if isinstance(override, str) and override:
-        return override
+        return _checked_base_url(override, origin="options.base_url")
     servers = spec.get("servers")
     if isinstance(servers, list):
         for server in servers:
             if isinstance(server, Mapping) and isinstance(server.get("url"), str):
                 url = str(server["url"])
                 if url.startswith(("http://", "https://")):
-                    return url
+                    return _checked_base_url(url, origin="servers[0].url")
     # A spec with a relative server URL needs an explicit base_url; refuse it loudly, not at request
     # time (a request without a base would raise a message the agent cannot act on).
     raise _SpecError(
