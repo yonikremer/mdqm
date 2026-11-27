@@ -220,8 +220,7 @@ ALLOWED_BY_DIALECT: dict[str, tuple[Case, ...]] = {
         ("nvl", "SELECT NVL(credit_limit, 0) AS credit_limit FROM billing.accounts"),
         (
             "optimizer_hint",
-            "SELECT /*+ INDEX(c IDX_CUST) */ cust_id FROM crm.customers c "
-            "WHERE c.status = 'A'",
+            "SELECT /*+ INDEX(c IDX_CUST) */ cust_id FROM crm.customers c WHERE c.status = 'A'",
         ),
         ("from_dual", "SELECT SYSDATE AS now_ts FROM dual"),
         (
@@ -243,8 +242,7 @@ ALLOWED_BY_DIALECT: dict[str, tuple[Case, ...]] = {
         ("sys_guid", "SELECT SYS_GUID() AS g FROM dual"),
         (
             "listagg_within_group",
-            "SELECT LISTAGG(cust_id, ',') WITHIN GROUP (ORDER BY cust_id) AS s "
-            "FROM crm.customers",
+            "SELECT LISTAGG(cust_id, ',') WITHIN GROUP (ORDER BY cust_id) AS s FROM crm.customers",
         ),
     ),
     "tsql": (
@@ -371,7 +369,7 @@ BLOCKED_COMMON: tuple[Case, ...] = (
     ("setval", "SELECT setval('customer_seq', 1) AS id FROM crm.customers"),
     ("sys_exec", "SELECT SYS_EXEC('id') AS x FROM dual"),
     # A quoted or full-width spelling must not dodge the denylist.
-    ("quoted_function", 'SELECT "PG_READ_FILE"(\'/etc/passwd\') AS x FROM crm.customers'),
+    ("quoted_function", "SELECT \"PG_READ_FILE\"('/etc/passwd') AS x FROM crm.customers"),
     (
         "fullwidth_function",
         "SELECT \uff50\uff47\uff3f\uff52\uff45\uff41\uff44\uff3f\uff46\uff49\uff4c\uff45"
@@ -742,7 +740,5 @@ def test_trailing_separators_keep_a_query_allowed(sql: str, extra: int, dialect:
     padding=st.text(alphabet=" \n\t", min_size=1, max_size=6),
     dialect=st.sampled_from(DIALECTS),
 )
-def test_surrounding_whitespace_keeps_a_query_allowed(
-    sql: str, padding: str, dialect: str
-) -> None:
+def test_surrounding_whitespace_keeps_a_query_allowed(sql: str, padding: str, dialect: str) -> None:
     assert guard(f"{padding}{sql}{padding}", dialect).ok

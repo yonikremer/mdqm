@@ -86,7 +86,9 @@ def ok_entry(**overrides: object) -> AuditEntry:
         "row_count": 12,
     }
     fields.update(overrides)
-    return AuditEntry(**fields)  # type: ignore[arg-type]
+    # `model_validate` takes the mapping as data, which is what this helper builds: a
+    # splat would make pyright (rightly) ask which keyword arguments exist.
+    return AuditEntry.model_validate(fields)
 
 
 def fill(audit: AuditLog, count: int, clock: FakeClock, **overrides: object) -> None:
@@ -370,7 +372,7 @@ SECRET_VALUES: tuple[str, ...] = (
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ5b25pIn0.c2lnbmF0dXJl",
     "Bearer abcdefghijklmnop",
     "-----BEGIN-RSA-PRIVATE-KEY-----",
-    "AKIAIOSFODNN7EXAMPLE",
+    "AKIAIOSFODNN7EXAMPLE",  # pragma: allowlist secret
     "password=hunter2",
     "token:abc123",
     "postgresql://yoni:hunter2@db.internal/crm",
@@ -388,7 +390,7 @@ def test_a_secret_cannot_enter_a_text_field(field: str, secret: str) -> None:
     with pytest.raises(ValueError):
         AuditEntry(
             **{"user_id": "yoni", "tool": "run_query", "outcome": AuditOutcome.OK, field: secret}
-        )  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.parametrize("secret", SECRET_VALUES)
@@ -399,7 +401,7 @@ def test_a_secret_cannot_enter_a_source_name(secret: str) -> None:
 
 def test_a_refused_secret_is_never_echoed_in_the_error() -> None:
     """The refusal names the field, never the value: quoting it would leak it into the log."""
-    secret = "AKIAIOSFODNN7EXAMPLE"
+    secret = "AKIAIOSFODNN7EXAMPLE"  # pragma: allowlist secret
     with pytest.raises(ValueError) as caught:
         ok_entry(tool=secret)
     assert secret not in str(caught.value)
@@ -413,15 +415,15 @@ def test_the_entry_model_has_no_payload_field() -> None:
                 user_id="yoni",
                 tool="run_query",
                 outcome=AuditOutcome.OK,
-                **{forbidden: "anything"},  # type: ignore[arg-type]
+                # the unknown key is the thing under test  # noqa: E501
+                **{forbidden: "anything"},  # pyright: ignore[reportCallIssue]
             )
 
 
 def test_the_stored_row_holds_no_payload_column(store: Store) -> None:
     """Belt and braces: the table itself has no column a payload could occupy."""
     columns = {
-        str(row["name"])
-        for row in store.connect().execute(f"PRAGMA table_info({AUDIT_LOG_TABLE})")
+        str(row["name"]) for row in store.connect().execute(f"PRAGMA table_info({AUDIT_LOG_TABLE})")
     }
     assert columns == {
         "id",
@@ -550,10 +552,14 @@ def test_purge_records_a_checkpoint_row(store: Store, audit: AuditLog, clock: Fa
     fill(audit, 2, clock)
     clock.advance(days=DEFAULT_RETENTION_DAYS + 1)
     report = audit.purge()
-    row = store.connect().execute(
-        # S608: constant table name.
-        f"SELECT last_purged_id, last_purged_hash FROM {AUDIT_CHECKPOINT_TABLE} WHERE id = 1"  # noqa: S608
-    ).fetchone()
+    row = (
+        store.connect()
+        .execute(
+            # S608: constant table name.
+            f"SELECT last_purged_id, last_purged_hash FROM {AUDIT_CHECKPOINT_TABLE} WHERE id = 1"  # noqa: S608
+        )
+        .fetchone()
+    )
     assert row is not None
     assert int(row["last_purged_id"]) == report.checkpoint_id
     assert str(row["last_purged_hash"]) == report.checkpoint_hash
@@ -626,9 +632,9 @@ def test_ids_are_contiguous_across_a_purge(audit: AuditLog, clock: FakeClock) ->
 
 def test_the_head_mirror_is_written(store: Store, audit: AuditLog, clock: FakeClock) -> None:
     fill(audit, 2, clock)
-    row = store.connect().execute(
-        "SELECT value FROM mdqm_meta WHERE key = ?", (HEAD_KEY,)
-    ).fetchone()
+    row = (
+        store.connect().execute("SELECT value FROM mdqm_meta WHERE key = ?", (HEAD_KEY,)).fetchone()
+    )
     assert row is not None
     assert str(row["value"]) == audit.rows()[-1].hash
 

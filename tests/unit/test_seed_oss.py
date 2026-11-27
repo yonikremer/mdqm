@@ -129,9 +129,7 @@ def test_committed_fixtures_match_the_generator(seed_oss: types.ModuleType, tmp_
 
 
 def test_line_endings_are_lf(seed_oss: types.ModuleType, tmp_path: Path) -> None:
-    generated = seed_oss.write_all(
-        seed_oss.OssSeed.from_world(build_world(SMALL_CONFIG)), tmp_path
-    )
+    generated = seed_oss.write_all(seed_oss.OssSeed.from_world(build_world(SMALL_CONFIG)), tmp_path)
     for path in generated:
         assert b"\r\n" not in path.read_bytes(), f"{path.name} has CRLF line endings"
 

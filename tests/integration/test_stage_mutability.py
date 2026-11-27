@@ -255,9 +255,11 @@ def test_measured_lag_is_positive_and_backed_by_a_sample(
 
     # The measurement is also recorded as the baseline the next pass compares against, so the
     # nightly re-measurement (and a violation) has something to compare with.
-    raw = store.connect().execute(
-        "SELECT value FROM mdqm_meta WHERE key = ?", (f"{BASELINE_PREFIX}.billing",)
-    ).fetchone()
+    raw = (
+        store.connect()
+        .execute("SELECT value FROM mdqm_meta WHERE key = ?", (f"{BASELINE_PREFIX}.billing",))
+        .fetchone()
+    )
     assert raw is not None
     document = json.loads(str(raw["value"]))
     assert document["maxima"], document

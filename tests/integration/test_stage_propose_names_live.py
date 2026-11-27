@@ -54,7 +54,7 @@ def answer_from(prompt: str) -> Labels:
     No model and no network: what is under test here is the fact sheet, the validators and the
     queue, so the reply is derived from the sheet itself (a label per target, unique per table).
     """
-    sheet = json.loads(prompt[prompt.index("{"):])
+    sheet = json.loads(prompt[prompt.index("{") :])
     subject = sheet.get("column") or sheet.get("table") or "record"
     if sheet["kind"] == "table":
         return Labels(
@@ -158,7 +158,7 @@ def test_the_stage_writes_no_curated_file(live: tuple[Path, StageReport, int, in
 
 
 def test_a_table_of_the_live_catalog_reaches_the_queue(
-    live: tuple[Path, StageReport, int, int]
+    live: tuple[Path, StageReport, int, int],
 ) -> None:
     root, _, _, _ = live
     keys = {item.key for item in ReviewQueue(Store(root / "metadata.sqlite"), root).pending()}
@@ -199,9 +199,9 @@ def test_a_second_pass_over_an_unchanged_catalog_is_skipped(pg: PgTarget) -> Non
     first_adapter, second_adapter = build(), build()
     try:
         first = ProposeNamesStage({"billing": first_adapter.extract_catalog()}).inputs_hash(context)
-        second = ProposeNamesStage(
-            {"billing": second_adapter.extract_catalog()}
-        ).inputs_hash(context)
+        second = ProposeNamesStage({"billing": second_adapter.extract_catalog()}).inputs_hash(
+            context
+        )
     finally:
         first_adapter.close()
         second_adapter.close()

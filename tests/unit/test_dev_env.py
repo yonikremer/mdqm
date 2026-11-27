@@ -26,6 +26,7 @@ COMPOSE_PATH = REPO_ROOT / "docker-compose.yml"
 ENV_EXAMPLE_PATH = REPO_ROOT / ".env.example"
 GITIGNORE_PATH = REPO_ROOT / ".gitignore"
 
+
 @dataclass(frozen=True)
 class ServiceSpec:
     """What the tests claim about one compose service.
@@ -120,9 +121,7 @@ def test_each_service_declares_the_profiles_we_claim(service: str) -> None:
 
 
 def test_oss_profile_is_the_open_source_stack_only() -> None:
-    claimed = {
-        name for name, definition in services().items() if "oss" in definition["profiles"]
-    }
+    claimed = {name for name, definition in services().items() if "oss" in definition["profiles"]}
     assert claimed == OSS_PROFILE
     for name, spec in SERVICES.items():
         if name in OSS_PROFILE:
@@ -164,9 +163,7 @@ def test_each_service_has_a_healthcheck(service: str) -> None:
 @pytest.mark.parametrize("service", sorted(SERVICES))
 def test_ports_are_loopback_only_and_not_the_engine_default(service: str) -> None:
     # 127.0.0.1:${MDQM_PG_PORT:-55432}:5432 — the host port is the only variable part.
-    pattern = re.compile(
-        r"^127\.0\.0\.1:\$\{(?P<var>[A-Z0-9_]+)(?::-\d+)?\}:(?P<container>\d+)$"
-    )
+    pattern = re.compile(r"^127\.0\.0\.1:\$\{(?P<var>[A-Z0-9_]+)(?::-\d+)?\}:(?P<container>\d+)$")
     published = services()[service].get("ports")
     if SERVICES[service].container_port is None:
         # A one-shot service publishes nothing, which the healthcheck test already asserts.

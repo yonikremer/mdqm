@@ -101,9 +101,7 @@ def test_new_since_reproduces_design_sql(since: datetime, expected_bound: dateti
     assert plan.derived_bound == expected_bound
     text = plan.where_sql("postgres")
     assert f"insertion_time >= CAST('{since.replace(tzinfo=None).isoformat(sep=' ')}'" in text
-    assert (
-        f"start_time >= CAST('{expected_bound.replace(tzinfo=None).isoformat(sep=' ')}'" in text
-    )
+    assert f"start_time >= CAST('{expected_bound.replace(tzinfo=None).isoformat(sep=' ')}'" in text
     # The original insertion predicate stays: correctness first, the bound only narrows the scan.
     assert text.index("insertion_time") < text.index("start_time")
 
@@ -418,11 +416,7 @@ def test_world_lag_is_within_the_declared_bound(small_world: World) -> None:
     deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-@given(
-    fraction=st.floats(
-        min_value=0.0, max_value=0.9, allow_nan=False, allow_infinity=False
-    )
-)
+@given(fraction=st.floats(min_value=0.0, max_value=0.9, allow_nan=False, allow_infinity=False))
 def test_derived_bound_never_loses_a_row(
     usage_db: duckdb.DuckDBPyConnection,
     event_range: tuple[datetime, datetime],
@@ -504,9 +498,7 @@ def test_partition_key_is_ingestion_time_loses_no_row_on_the_world(
 
     lo = start.replace(tzinfo=None).isoformat(sep=" ")
     hi = end.replace(tzinfo=None).isoformat(sep=" ")
-    in_events = _ids(
-        usage_db, f"start_time >= TIMESTAMP '{lo}' AND start_time < TIMESTAMP '{hi}'"
-    )
+    in_events = _ids(usage_db, f"start_time >= TIMESTAMP '{lo}' AND start_time < TIMESTAMP '{hi}'")
     assert in_events, "the window must contain events, or the test proves nothing"
 
     ingestion_lo = (start + timedelta(0)).replace(tzinfo=None).isoformat(sep=" ")
@@ -570,9 +562,7 @@ def test_widening_the_requested_range_never_narrows_the_derived_bound(
     ),
     width=st.timedeltas(min_value=timedelta(hours=1), max_value=timedelta(days=30)),
 )
-def test_wider_event_window_widens_the_ingestion_range(
-    start: datetime, width: timedelta
-) -> None:
+def test_wider_event_window_widens_the_ingestion_range(start: datetime, width: timedelta) -> None:
     """An event window ``[X, Y)`` always yields a non-empty ingestion range that contains it."""
     end = start + width
     plan = plan_time(

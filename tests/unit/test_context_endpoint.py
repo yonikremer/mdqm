@@ -65,6 +65,7 @@ def loopback_only() -> Iterator[None]:
     yield
     pytest_socket.socket_allow_hosts(["127.0.0.1"])
 
+
 #: A layer with one measure stored three ways, a Hebrew-labelled status value map, one partitioned
 #: event table and one approved join: enough that a real question has something to bring back.
 SEMANTIC: dict[str, Any] = {
@@ -199,9 +200,7 @@ async def test_a_malformed_authorization_header_is_401(client: httpx.AsyncClient
 
 
 @pytest.mark.parametrize("token", [TOKENS[0].token, TOKENS[1].token], ids=["alice", "bob"])
-async def test_both_users_get_the_same_layer_context(
-    client: httpx.AsyncClient, token: str
-) -> None:
+async def test_both_users_get_the_same_layer_context(client: httpx.AsyncClient, token: str) -> None:
     # The block is semantic facts, not a person's data: who asks cannot change it.
     response = await client.post("/context", json={"prompt": DATA_PROMPT}, headers=auth(token))
 
@@ -215,9 +214,7 @@ async def test_both_users_get_the_same_layer_context(
 
 
 @pytest.mark.parametrize("prompt", [DATA_PROMPT, HEBREW_PROMPT, "credit limit", "לקוחות"], ids=str)
-async def test_a_data_prompt_gets_compact_context(
-    client: httpx.AsyncClient, prompt: str
-) -> None:
+async def test_a_data_prompt_gets_compact_context(client: httpx.AsyncClient, prompt: str) -> None:
     response = await client.post("/context", json={"prompt": prompt}, headers=auth())
 
     assert response.status_code == 200

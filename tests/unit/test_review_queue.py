@@ -275,9 +275,7 @@ class TestApproveWritesCurated:
 
     def test_approval_preserves_unrelated_keys(self, queue: ReviewQueue, root: Path) -> None:
         curated = root / "curated" / "value_maps.yaml"
-        curated.write_text(
-            "value_maps:\n  other_map:\n    canonical: [x, y]\n", encoding="utf-8"
-        )
+        curated.write_text("value_maps:\n  other_map:\n    canonical: [x, y]\n", encoding="utf-8")
         created = queue.submit(make())
         queue.approve(created.proposal.id, by="data-team")
         layer = load(root)
@@ -299,9 +297,7 @@ class TestApproveWritesCurated:
         assert "פעיל" in text
         assert load(root).value_maps["customer_status"].synonyms["active"] == ("פעיל",)
 
-    def test_mutability_approval_sets_approved(
-        self, queue: ReviewQueue, root: Path
-    ) -> None:
+    def test_mutability_approval_sets_approved(self, queue: ReviewQueue, root: Path) -> None:
         created = queue.submit(
             make(
                 kind=ProposalKind.MUTABILITY,
@@ -487,7 +483,8 @@ class TestExportPatch:
         written = (root / "curated" / "value_maps.yaml").read_text(encoding="utf-8")
         # Every added line of the diff is a line of the approved file.
         added = [
-            line[1:] for line in exported.splitlines()
+            line[1:]
+            for line in exported.splitlines()
             if line.startswith("+") and not line.startswith("+++")
         ]
         for line in added:
@@ -526,9 +523,7 @@ class TestBulkApproval:
     def test_questions_are_deterministic(self, queue: ReviewQueue) -> None:
         for index in range(4):
             queue.submit(make(key=f"m{index}", confidence=0.5))
-        assert [q.summary for q in queue.questions()] == [
-            q.summary for q in queue.questions()
-        ]
+        assert [q.summary for q in queue.questions()] == [q.summary for q in queue.questions()]
 
     def test_empty_queue_asks_nothing(self, queue: ReviewQueue) -> None:
         assert queue.questions() == ()
@@ -543,9 +538,7 @@ class TestAudit:
         return AuditLog(store, clock=lambda: NOW)
 
     @pytest.fixture
-    def audited(
-        self, store: Store, root: Path, clock: FakeClock, audit: AuditLog
-    ) -> ReviewQueue:
+    def audited(self, store: Store, root: Path, clock: FakeClock, audit: AuditLog) -> ReviewQueue:
         return ReviewQueue(store, root, clock=clock, audit=audit)
 
     def test_approval_is_audited(self, audited: ReviewQueue, audit: AuditLog) -> None:
@@ -564,9 +557,7 @@ class TestAudit:
         assert len(rows) == 1
         assert rows[0].tool == "review.reject"
 
-    def test_chain_valid_across_decisions(
-        self, audited: ReviewQueue, audit: AuditLog
-    ) -> None:
+    def test_chain_valid_across_decisions(self, audited: ReviewQueue, audit: AuditLog) -> None:
         first = audited.submit(make(key="a", confidence=0.9))
         second = audited.submit(make(key="b", confidence=0.9))
         audited.approve(first.proposal.id, by="data-team")

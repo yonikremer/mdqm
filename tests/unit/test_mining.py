@@ -565,9 +565,7 @@ def test_mine_merges_statements_that_share_a_fingerprint() -> None:
     assert len(report.queries) == 2  # the two Windows differ only in the literal
 
     usage = next(
-        query
-        for query in report.queries
-        if "usage_events" in (query.facts.normalized or "")
+        query for query in report.queries if "usage_events" in (query.facts.normalized or "")
     )
     assert usage.calls == 50
     assert usage.statements == 2

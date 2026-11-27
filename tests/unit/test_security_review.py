@@ -65,9 +65,7 @@ def _spec(paths: dict[str, Any], *, servers: str = "https://internal.example") -
 
 def _get_ok() -> dict[str, Any]:
     return {
-        "get": {
-            "responses": {"200": {"content": {"application/json": {"schema": _row_schema()}}}}
-        }
+        "get": {"responses": {"200": {"content": {"application/json": {"schema": _row_schema()}}}}}
     }
 
 

@@ -301,7 +301,9 @@ def _sql_opt_int(value: int | None) -> str:
 
 
 def _sql_opt_datetime(value: datetime | None) -> str:
-    return "NULL" if value is None else _sql_str(value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S"))
+    return (
+        "NULL" if value is None else _sql_str(value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S"))
+    )
 
 
 def _sql_date(value: date) -> str:

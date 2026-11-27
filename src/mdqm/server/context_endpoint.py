@@ -161,10 +161,7 @@ def _has_semantic_files(root: Path) -> bool:
     because it is almost always a deployment mistake, but it does not stop the server.
     """
     strays = sorted(
-        entry
-        for pattern in ("*.yaml", "*.yml")
-        for entry in root.glob(pattern)
-        if entry.is_file()
+        entry for pattern in ("*.yaml", "*.yml") for entry in root.glob(pattern) if entry.is_file()
     )
     if strays:
         logger.warning(

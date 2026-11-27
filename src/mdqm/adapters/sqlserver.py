@@ -888,9 +888,7 @@ class SqlServerAdapter:
                 cursor = connection.cursor()
                 try:
                     # pi-lens-ignore: python-sql-injection
-                    cursor.execute(
-                        _QUERY_STORE_SQL, (datetime(1970, 1, 1),)
-                    )
+                    cursor.execute(_QUERY_STORE_SQL, (datetime(1970, 1, 1),))
                     cursor.fetchall()
                 finally:
                     cursor.close()

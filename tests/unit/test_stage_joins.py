@@ -110,9 +110,7 @@ def adapters(world: Any) -> Any:
     billing = ("accounts", "usage_events", "accounts_hist")
     built = {
         "crm": FakeAdapter(name="crm", tables={"customers_crm": tables["customers_crm"]}),
-        "billing": FakeAdapter(
-            name="billing", tables={name: tables[name] for name in billing}
-        ),
+        "billing": FakeAdapter(name="billing", tables={name: tables[name] for name in billing}),
         "erp": FakeAdapter(name="erp", tables={"customers_erp": tables["customers_erp"]}),
     }
     try:
@@ -304,12 +302,8 @@ def test_a_three_value_code_column_contained_in_an_id_is_not_proposed(
 
 def test_overlapping_integer_ranges_are_not_proposed(tmp_path: Path, store: Store) -> None:
     """Two integer columns whose ranges merely intersect score about 0.33, far under the floor."""
-    alpha = FakeAdapter(
-        name="alpha", tables={"orders": _table(order_no=range(1, 501))}
-    )
-    beta = FakeAdapter(
-        name="beta", tables={"tickets": _table(order_no=range(250, 751))}
-    )
+    alpha = FakeAdapter(name="alpha", tables={"orders": _table(order_no=range(1, 501))})
+    beta = FakeAdapter(name="beta", tables={"tickets": _table(order_no=range(250, 751))})
     try:
         measurement = _measure(_ctx(tmp_path, store), {"alpha": alpha, "beta": beta})
     finally:
@@ -321,9 +315,7 @@ def test_overlapping_integer_ranges_are_not_proposed(tmp_path: Path, store: Stor
 
 def test_a_similar_name_with_unrelated_values_is_not_proposed(tmp_path: Path, store: Store) -> None:
     """``customer_id`` on both sides, disjoint values: the name alone approves nothing."""
-    left = FakeAdapter(
-        name="crm", tables={"customers": _table(customer_id=range(1, 201))}
-    )
+    left = FakeAdapter(name="crm", tables={"customers": _table(customer_id=range(1, 201))})
     right = FakeAdapter(
         name="warehouse", tables={"customers": _table(customer_id=range(10_001, 10_201))}
     )
@@ -368,9 +360,7 @@ def test_conversions_are_offered_only_when_the_values_support_them() -> None:
 
 def test_prefix_strip_conversion_is_measured_and_proposed(tmp_path: Path, store: Store) -> None:
     """``CUST-000123`` against ``123``: the constant prefix is detected, not assumed."""
-    numbers = FakeAdapter(
-        name="crm", tables={"customers": _table(cust_no=range(1, 51))}
-    )
+    numbers = FakeAdapter(name="crm", tables={"customers": _table(cust_no=range(1, 51))})
     prefixed = FakeAdapter(
         name="api",
         tables={"tickets": _table(ticket_ref=[f"CUST-{n:06d}" for n in range(1, 51)])},
@@ -549,9 +539,7 @@ def test_a_declared_foreign_key_with_total_containment_is_auto_approvable(
 
 def test_distinct_query_is_bounded_and_ordered() -> None:
     """The read is one ``GROUP BY``, ordered for determinism and limited one past the cap."""
-    column = Column(
-        name="client_no", native_type="varchar", normalized_type=NormalizedType.STRING
-    )
+    column = Column(name="client_no", native_type="varchar", normalized_type=NormalizedType.STRING)
     table = Table(name="accounts", columns=(column,))
     sql = distinct_query(table, column, dialect="postgres", cap=7)
     assert "GROUP BY" in sql

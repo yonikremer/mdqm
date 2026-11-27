@@ -186,9 +186,7 @@ def layer(tmp_path_factory: pytest.TempPathFactory) -> SemanticLayer:
 def adapters(world: World) -> Iterator[dict[str, FakeAdapter]]:
     """Three fake adapters, one per logical source, each holding that source's storage form."""
     built = {
-        "crm": FakeAdapter(
-            name="crm", tables={"customers": table_from_rows(world.crm.customers)}
-        ),
+        "crm": FakeAdapter(name="crm", tables={"customers": table_from_rows(world.crm.customers)}),
         "billing": FakeAdapter(
             name="billing",
             tables={
@@ -196,9 +194,7 @@ def adapters(world: World) -> Iterator[dict[str, FakeAdapter]]:
                 "usage_events": table_from_rows(world.billing.usage_events),
             },
         ),
-        "erp": FakeAdapter(
-            name="erp", tables={"customers": table_from_rows(world.erp.customers)}
-        ),
+        "erp": FakeAdapter(name="erp", tables={"customers": table_from_rows(world.erp.customers)}),
     }
     try:
         yield built

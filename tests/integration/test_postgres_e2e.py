@@ -247,9 +247,7 @@ def test_real_billing_average_matches_two_independent_derivations(
         assert produced[status] == pytest.approx(wanted, rel=tolerance), status
 
 
-def test_catalog_finds_usage_events_and_its_monthly_partitions(
-    pg: PgTarget, seeded: None
-) -> None:
+def test_catalog_finds_usage_events_and_its_monthly_partitions(pg: PgTarget, seeded: None) -> None:
     """Claim: capability detection, not assumptions -- the partition set is discovered.
 
     FAILS IF: ``usage_events`` is reported as a plain table; or its discovered partition bounds do
@@ -420,9 +418,7 @@ def test_timeout_cancels_a_real_pg_sleep(pg: PgTarget) -> None:
     started = time.monotonic()
     try:
         with pytest.raises(GovernorRefusal) as excinfo:
-            governor.execute(
-                source="billing", user="e2e", fragment=fragment, limits=_limits(0.5)
-            )
+            governor.execute(source="billing", user="e2e", fragment=fragment, limits=_limits(0.5))
         elapsed = time.monotonic() - started
     finally:
         adapter.close()

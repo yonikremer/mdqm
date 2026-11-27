@@ -1,0 +1,79 @@
+# Pre-commit hooks for mdqm.
+#
+# Constraints, from AGENTS.md:
+# * **Nothing is fetched at hook time.** Every hook is `repo: local` and calls
+# tools already
+# installed in the project's environment, so this works on the air-gapped target
+# and in CI
+#   with no network. There is no `rev:` to update and no remote to clone.
+# * **Fast on commit, thorough on push.** A commit lints the files being
+# committed; the type
+#   gate and the unit suite run on push, where a 2-3 minute wait is acceptable.
+# * **One toolchain.** ruff (lint + format) and mypy are the tools
+# `scripts/check.py` runs, so
+#   a hook cannot disagree with CI.
+#
+# Install once per clone:
+#     python -m pip install -e ".[dev]"
+#     python -m pre_commit install --install-hooks
+#
+# Run everything by hand:
+#     python -m pre_commit run --all-files
+#     python scripts/check.py
+minimum_pre_commit_version: "3.5.0"
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      # Security first: `S` is flake8-bandit (hardcoded secrets, SQL built from
+      # strings, unsafe
+      # deserialisation, subprocess with a shell, weak crypto). `B` (bugbear)
+      # and `RUF` cover the
+      # hidden-bug class: mutable defaults, blind excepts, `assert` on a tuple.
+      - id: ruff-lint
+        name: ruff - security, bugs and quality (autofix)
+        entry: >-
+          python scripts/precommit_hook.py -m ruff check --fix
+          --exit-non-zero-on-fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: python scripts/precommit_hook.py -m ruff format
+        language: system
+        types_or: [python, pyi]
+
+      # Files that break silently when malformed.
+      - id: configs-parse
+        name: toml and yaml parse
+        entry: python scripts/precommit_hook.py scripts/check_configs.py
+        language: system
+        files: \.(toml|ya?ml)$
+        pass_filenames: true
+
+      # A private key or a bearer token in a diff is never intentional here.
+      - id: no-secrets
+        name: no secrets or private keys in the diff
+        entry: python scripts/precommit_hook.py scripts/check_secrets.py
+        language: system
+        pass_filenames: true
+
+      # ---- pre-push: slower, whole-repository gates ----
+      - id: mypy-strict
+        name: mypy --strict on src
+        entry: python scripts/precommit_hook.py -m mypy
+        language: system
+        files: ^src/
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: unit-tests
+        name: unit tests (no network, no Docker)
+        entry: python scripts/precommit_hook.py -m pytest tests/unit -x -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

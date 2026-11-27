@@ -287,8 +287,9 @@ def test_the_billing_question_through_the_tool_matches_the_e01_ground_truth(
         for row in answer.sample
         if row[columns[0]] is not None
     }
-    expected = {str(row[0]): float(row[1]) for row in cast(list[list[Any]],
-    entry["answer"]["rows"])}
+    expected = {
+        str(row[0]): float(row[1]) for row in cast(list[list[Any]], entry["answer"]["rows"])
+    }
     assert set(produced) == set(expected), produced
     for status, wanted in expected.items():
         assert produced[status] == pytest.approx(wanted, rel=tolerance), status
@@ -338,8 +339,9 @@ def test_an_unbounded_partitioned_query_is_refused_and_never_reaches_the_server(
         "sent"
     )
     # It is a refusal, so it is a row: the audit chain says which code the agent was given.
-    blocked = [row for row in services.audit.rows() if row.error_code is
-    ErrorCode.PARTITION_SCAN_ALL]
+    blocked = [
+        row for row in services.audit.rows() if row.error_code is ErrorCode.PARTITION_SCAN_ALL
+    ]
     assert blocked, "the refusal was not audited"
     assert blocked[-1].outcome.value == "blocked"
 

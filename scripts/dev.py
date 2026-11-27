@@ -101,14 +101,22 @@ def main(argv: list[str] | None = None) -> int:
 
     up = sub.add_parser("up", help="start the given profiles and wait until they are healthy")
     up.add_argument(
-        "profiles", nargs="+", choices=PROFILES, metavar="profile", help=f"one or more of: {HELP_PROFILES}"
+        "profiles",
+        nargs="+",
+        choices=PROFILES,
+        metavar="profile",
+        help=f"one or more of: {HELP_PROFILES}",
     )
 
     sub.add_parser("down", help="stop every service and remove the volumes")
 
     status = sub.add_parser("status", help="show the state of the services")
     status.add_argument(
-        "profiles", nargs="*", choices=PROFILES, metavar="profile", help=f"default: all ({HELP_PROFILES})"
+        "profiles",
+        nargs="*",
+        choices=PROFILES,
+        metavar="profile",
+        help=f"default: all ({HELP_PROFILES})",
     )
 
     sub.add_parser("env", help="create .env from .env.example if it is missing")

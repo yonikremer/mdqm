@@ -240,9 +240,7 @@ def _parse_block(dialect: str, lineno: int, lines: list[str]) -> CorpusStatement
         details = "; ".join(
             f"{'.'.join(map(str, error['loc']))}: {error['msg']}" for error in exc.errors()
         )
-        problems.append(
-            f"{dialect}.sql:{lineno + expect_at}: invalid expect block: {details}"
-        )
+        problems.append(f"{dialect}.sql:{lineno + expect_at}: invalid expect block: {details}")
 
     sql = "\n".join(lines[expect_at + 1 :]).strip()
     if not sql:

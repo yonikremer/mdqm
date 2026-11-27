@@ -270,8 +270,7 @@ class TableEvidence(MDQMModel):
             verdict = self.old_rows.changed
             state = "no previous pass" if verdict is None else ("changed" if verdict else "same")
             lines.append(
-                f"oldest {self.old_rows.rows} rows checksum {self.old_rows.checksum[:16]}: "
-                f"{state}"
+                f"oldest {self.old_rows.rows} rows checksum {self.old_rows.checksum[:16]}: {state}"
             )
         lines.extend(self.notes)
         return tuple(lines)
@@ -505,9 +504,7 @@ class MutabilityStage:
         skipped: list[str] = []
         fixes: list[str] = []
         for source in selected:
-            payload = self._measure_source(
-                source, ctx, counts=counts, skipped=skipped, fixes=fixes
-            )
+            payload = self._measure_source(source, ctx, counts=counts, skipped=skipped, fixes=fixes)
             ctx.write_generated(f"mutability_{_slug(source)}", payload)
             counts["sources"] += 1
         return StageReport(
@@ -570,9 +567,7 @@ class MutabilityStage:
                 after=after,
                 partitions=partitions.get(table.name),
                 lag=lag,
-                old_rows=self._with_previous(
-                    old_rows, table.name, previous.get("checksums", {})
-                ),
+                old_rows=self._with_previous(old_rows, table.name, previous.get("checksums", {})),
                 window_from=window_from,
                 window_to=window_to,
             )
@@ -863,11 +858,7 @@ class MutabilityStage:
                 "unknown because their own counters exclude their partitions"
             )
             return {}
-        parents = [
-            table
-            for table in catalog.tables
-            if table.kind is TableKind.PARTITIONED_TABLE
-        ]
+        parents = [table for table in catalog.tables if table.kind is TableKind.PARTITIONED_TABLE]
         attributed: dict[str, Partitioning] = {}
         for item in reported:
             if not isinstance(item, Partitioning) or not item.bounds:
@@ -1114,7 +1105,7 @@ def _lag_payload(lag: LagMeasurement) -> dict[str, Any]:
                 ),
                 "verify": "nightly",
             },
-        }
+        },
     }
 
 
@@ -1180,9 +1171,13 @@ def read_lag_unverified(store: Any, source: str) -> frozenset[str]:
     C07 disables the derived bound for these: a violated lag means the written ``max`` is wrong for
     at least one observed row, and deriving on it would drop that row silently.
     """
-    row = store.connect().execute(
-        "SELECT value FROM mdqm_meta WHERE key = ?", (f"{LAG_UNVERIFIED_PREFIX}.{source}",)
-    ).fetchone()
+    row = (
+        store.connect()
+        .execute(
+            "SELECT value FROM mdqm_meta WHERE key = ?", (f"{LAG_UNVERIFIED_PREFIX}.{source}",)
+        )
+        .fetchone()
+    )
     if row is None:
         return frozenset()
     try:
@@ -1193,9 +1188,9 @@ def read_lag_unverified(store: Any, source: str) -> frozenset[str]:
 
 
 def _meta(ctx: PipelineContext, key: str) -> str | None:
-    row = ctx.store.connect().execute(
-        "SELECT value FROM mdqm_meta WHERE key = ?", (key,)
-    ).fetchone()
+    row = (
+        ctx.store.connect().execute("SELECT value FROM mdqm_meta WHERE key = ?", (key,)).fetchone()
+    )
     return None if row is None else str(row["value"])
 
 

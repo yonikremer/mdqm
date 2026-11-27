@@ -283,9 +283,7 @@ class Governor:
                 if self._clock.monotonic() > deadline:
                     # The driver's own stop path, not an abandoned thread.
                     adapter.cancel(stream)
-                    raise GovernorRefusal(
-                        timeout_error(seconds=limits.timeout_s, target=source)
-                    )
+                    raise GovernorRefusal(timeout_error(seconds=limits.timeout_s, target=source))
                 try:
                     batch = next(iterator)
                 except StopIteration:

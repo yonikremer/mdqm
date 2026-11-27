@@ -35,6 +35,7 @@ dev = [
   "uvicorn>=0.30",                # D04: the mock's ephemeral-port fixture and its container entry point
   "ruff>=0.6",
   "mypy>=1.11",
+  "pre-commit>=3.5",             # .pre-commit-config.yaml: local hooks only, so no network at hook time
   "types-PyYAML",
 ]
 all = ["mdqm[pg,oracle,mssql,dev]"]

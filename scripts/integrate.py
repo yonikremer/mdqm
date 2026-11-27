@@ -72,7 +72,10 @@ def main():
         r = subprocess.run(["git", "rebase", "main"], cwd=wt, capture_output=True, text=True)
         if r.returncode != 0:
             subprocess.run(["git", "rebase", "--abort"], cwd=wt, capture_output=True)
-            die(f"rebase of {branch} onto main failed (resolve conflicts in the worktree, then retry):\n{r.stdout}{r.stderr}", 2)
+            die(
+                f"rebase of {branch} onto main failed (resolve conflicts in the worktree, then retry):\n{r.stdout}{r.stderr}",
+                2,
+            )
         progress = os.path.join(wt, "progress", f"{tid}.md")
         if not os.path.exists(progress):
             die(f"progress/{tid}.md missing on {branch}", 6)

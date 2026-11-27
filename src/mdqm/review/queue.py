@@ -120,9 +120,7 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def proposal_id(
-    kind: ProposalKind, section: str, key: str, field: str, patch: JsonObject
-) -> str:
+def proposal_id(kind: ProposalKind, section: str, key: str, field: str, patch: JsonObject) -> str:
     """The content hash of a proposed fact, which is also its primary key.
 
     The evidence is **not** part of the id: the same fact proposed with new evidence must land on
@@ -265,30 +263,43 @@ class ReviewQueue:
 
     def get(self, proposal: str) -> Proposal:
         """The proposal with this id, or :class:`ReviewError` if no such row exists."""
-        row = self._store.connect().execute(
-            f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?", (proposal,)  # noqa: S608 - constant
-        ).fetchone()
+        row = (
+            self._store.connect()
+            .execute(
+                f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?",
+                (proposal,),  # noqa: S608 - constant
+            )
+            .fetchone()
+        )
         if row is None:
             raise ReviewError(f"no proposal with id {proposal!r}")
         return _row_to_proposal(row)
 
     def pending(self) -> tuple[Proposal, ...]:
         """Every undecided proposal, highest confidence first, ordered stably for determinism."""
-        rows = self._store.connect().execute(
-            # S608: the table name is a module constant; the status value is bound.
-            f"SELECT * FROM {PROPOSALS_TABLE} WHERE status = ?"  # noqa: S608
-            " ORDER BY confidence DESC, id ASC",
-            (ProposalStatus.PENDING.value,),
-        ).fetchall()
+        rows = (
+            self._store.connect()
+            .execute(
+                # S608: the table name is a module constant; the status value is bound.
+                f"SELECT * FROM {PROPOSALS_TABLE} WHERE status = ?"  # noqa: S608
+                " ORDER BY confidence DESC, id ASC",
+                (ProposalStatus.PENDING.value,),
+            )
+            .fetchall()
+        )
         return tuple(_row_to_proposal(row) for row in rows)
 
     def decided(self) -> tuple[Proposal, ...]:
         """Every proposal a human has decided on, oldest decision first."""
-        rows = self._store.connect().execute(
-            f"SELECT * FROM {PROPOSALS_TABLE} WHERE status != ?"  # noqa: S608
-            " ORDER BY decided_at ASC, id ASC",
-            (ProposalStatus.PENDING.value,),
-        ).fetchall()
+        rows = (
+            self._store.connect()
+            .execute(
+                f"SELECT * FROM {PROPOSALS_TABLE} WHERE status != ?"  # noqa: S608
+                " ORDER BY decided_at ASC, id ASC",
+                (ProposalStatus.PENDING.value,),
+            )
+            .fetchall()
+        )
         return tuple(_row_to_proposal(row) for row in rows)
 
     def questions(self, *, bulk_threshold: float = 0.9) -> tuple[Question, ...]:
@@ -455,9 +466,14 @@ class ReviewQueue:
         return now.astimezone(UTC)
 
     def _find(self, proposal: str) -> Proposal | None:
-        row = self._store.connect().execute(
-            f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?", (proposal,)  # noqa: S608
-        ).fetchone()
+        row = (
+            self._store.connect()
+            .execute(
+                f"SELECT * FROM {PROPOSALS_TABLE} WHERE id = ?",
+                (proposal,),  # noqa: S608
+            )
+            .fetchone()
+        )
         return None if row is None else _row_to_proposal(row)
 
     def _insert(self, proposal: Proposal) -> None:

@@ -111,7 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--interval", type=float, default=DEFAULT_INTERVAL, help="seconds between tries"
     )
-    parser.add_argument("--expect", type=int, default=200, help="expected HTTP status (default 200)")
+    parser.add_argument(
+        "--expect", type=int, default=200, help="expected HTTP status (default 200)"
+    )
     args = parser.parse_args(argv)
 
     probe: Probe

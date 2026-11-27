@@ -62,17 +62,11 @@ def manifest_paths() -> list[Path]:
 
 def manifests() -> dict[str, dict[str, Any]]:
     """Every cluster object in the directory, keyed by file name."""
-    return {
-        path.name: load_raw(path)
-        for path in manifest_paths()
-        if path.name != KUSTOMIZATION
-    }
+    return {path.name: load_raw(path) for path in manifest_paths() if path.name != KUSTOMIZATION}
 
 
 def by_kind(kind: str) -> dict[str, dict[str, Any]]:
-    return {
-        name: doc for name, doc in manifests().items() if doc.get("kind") == kind
-    }
+    return {name: doc for name, doc in manifests().items() if doc.get("kind") == kind}
 
 
 def one(kind: str) -> dict[str, Any]:
@@ -102,8 +96,7 @@ def scalars(node: Any, path: str = "") -> list[tuple[str, str]]:
     if isinstance(node, dict):
         return list(
             chain.from_iterable(
-                scalars(value, f"{path}.{key}" if path else str(key))
-                for key, value in node.items()
+                scalars(value, f"{path}.{key}" if path else str(key)) for key, value in node.items()
             )
         )
     if isinstance(node, list):
@@ -162,9 +155,9 @@ def test_deployment_is_a_single_recreate_writer() -> None:
     spec = one("Deployment")["spec"]
     assert spec["replicas"] == 1, "two pods would fight over the SQLite file on the claim"
     assert spec["strategy"]["type"] == "Recreate", "RollingUpdate would run two writers"
-    assert "HorizontalPodAutoscaler" not in {
-        doc.get("kind") for doc in manifests().values()
-    }, "an HPA would break the single-writer guarantee"
+    assert "HorizontalPodAutoscaler" not in {doc.get("kind") for doc in manifests().values()}, (
+        "an HPA would break the single-writer guarantee"
+    )
 
 
 def test_deployment_requests_no_api_token() -> None:
@@ -278,7 +271,7 @@ def test_secret_template_has_only_placeholders() -> None:
     for key, value in values.items():
         assert PLACEHOLDER.search(value), f"{key} must be a CHANGEME placeholder"
     assert "tokens.json" in values, "MDQM_TOKENS_FILE names this key"
-    assert '"tokens"' in values["tokens.json"], "the token file shape: {\"tokens\": [...]}"
+    assert '"tokens"' in values["tokens.json"], 'the token file shape: {"tokens": [...]}'
 
 
 def test_the_secret_template_is_never_applied() -> None:

@@ -67,12 +67,14 @@ def cmd_ready(a, tasks):
     if not r:
         print("(no ready tasks)")
     for t in r:
-        print(f'{t["id"]:6} wave{t["wave"]} {t["priority"]} lane={t["lane"]:2} {t["title"]}')
+        print(f"{t['id']:6} wave{t['wave']} {t['priority']} lane={t['lane']:2} {t['title']}")
 
 
 def cmd_show(a, tasks):
     t = tasks.get(a.id) or die(f"unknown task {a.id}")
-    print(f'{t["id"]}: {t["title"]}   [phase {t["phase"]}, priority {t["priority"]}, wave {t["wave"]}]')
+    print(
+        f"{t['id']}: {t['title']}   [phase {t['phase']}, priority {t['priority']}, wave {t['wave']}]"
+    )
     print("depends_on:", ", ".join(t["depends_on"]) or "-")
     print("owns:", ", ".join(t["owns"]))
     print("\n" + t["description"])
@@ -120,14 +122,18 @@ def cmd_status(a, tasks):
     done, cl = done_ids(), claimed()
     ready = {t["id"] for t in ready_tasks(tasks)}
     blocked = [i for i in tasks if i not in done and i not in cl and i not in ready]
-    print(f"done={len(done)} claimed={len(cl)} ready={len(ready)} blocked={len(blocked)} total={len(tasks)}")
+    print(
+        f"done={len(done)} claimed={len(cl)} ready={len(ready)} blocked={len(blocked)} total={len(tasks)}"
+    )
     for i, c in sorted(cl.items()):
         print(f"  claimed {i} by {c.get('agent')}{' (STALE)' if is_stale(c) else ''}")
     print(f"(progress dir: {main_root() / 'progress'})")
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("ready")
     r.add_argument("--priority")
@@ -140,7 +146,13 @@ def main():
     sub.add_parser("status")
     a = p.parse_args()
     tasks = load_tasks()
-    {"ready": cmd_ready, "show": cmd_show, "claim": cmd_claim, "release": cmd_release, "status": cmd_status}[a.cmd](a, tasks)
+    {
+        "ready": cmd_ready,
+        "show": cmd_show,
+        "claim": cmd_claim,
+        "release": cmd_release,
+        "status": cmd_status,
+    }[a.cmd](a, tasks)
 
 
 if __name__ == "__main__":

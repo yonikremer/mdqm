@@ -736,9 +736,7 @@ class ElasticAdapter:
         aliases = self._alias_members()
         docs, indices = self._index_docs()
         mappings = self._mappings(tuple(indices) or tuple(sorted(aliases)))
-        self._tables = _build_tables(
-            aliases, indices, docs, mappings, time_field=self._time_field
-        )
+        self._tables = _build_tables(aliases, indices, docs, mappings, time_field=self._time_field)
         return self._tables
 
     def _alias_members(self) -> dict[str, tuple[str, ...]]:
@@ -808,9 +806,7 @@ class ElasticAdapter:
                     strategy=PartitionStrategy.RANGE,
                     key=(table.time_field,),
                     granularity=table.granularity,
-                    bounds=tuple(
-                        _bound(name, table.members) for name in table.members
-                    ),
+                    bounds=tuple(_bound(name, table.members) for name in table.members),
                 )
             )
         return partitions
@@ -1156,9 +1152,7 @@ def _base_url(config: SourceConfig) -> str:
     return f"{scheme}://{host}:{port}"
 
 
-def _auth_headers(
-    config: SourceConfig, secrets: SecretProvider | None
-) -> dict[str, str]:
+def _auth_headers(config: SourceConfig, secrets: SecretProvider | None) -> dict[str, str]:
     """The configured auth header; the secret's *name* is reported, never its value."""
     auth = config.auth
     if auth is None:
@@ -1291,9 +1285,7 @@ def _fields_from_mappings(mappings: Sequence[Mapping[str, Any]]) -> tuple[EsFiel
     for name in sorted(merged):
         spec = merged[name]
         es_type = str(spec.get("type", "object"))
-        normalized, arrow_type = _FIELD_TYPES.get(
-            es_type, (NormalizedType.OTHER, pa.string())
-        )
+        normalized, arrow_type = _FIELD_TYPES.get(es_type, (NormalizedType.OTHER, pa.string()))
         fields.append(
             EsField(
                 name=name,
@@ -1418,9 +1410,7 @@ def _overlaps(
     return start < upper and _next_month(start) > lower
 
 
-def _time_bounds(
-    query: Mapping[str, Any] | None, field: str
-) -> tuple[datetime, datetime] | None:
+def _time_bounds(query: Mapping[str, Any] | None, field: str) -> tuple[datetime, datetime] | None:
     """The ``[lower, upper)`` window a query bounds ``field`` to, or ``None`` when it bounds none.
 
     Reads ``range`` clauses anywhere in the query (``bool.filter``/``must``/``should``, nested),
@@ -1446,9 +1436,7 @@ def _time_bounds(
     return max(lowers), min(uppers)
 
 
-def _collect_ranges(
-    node: Any, field: str, out: list[Mapping[str, Any]]
-) -> None:
+def _collect_ranges(node: Any, field: str, out: list[Mapping[str, Any]]) -> None:
     """Collect every ``range`` clause on ``field`` in a query tree, in a stable order."""
     if isinstance(node, Mapping):
         for key, value in node.items():

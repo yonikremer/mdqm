@@ -127,9 +127,7 @@ def audit_purge(
     opened = Store(_settings().paths.metadata_db)
     try:
         opened.initialize()
-        log = AuditLog(
-            opened, retention_days=DEFAULT_RETENTION_DAYS if days is None else days
-        )
+        log = AuditLog(opened, retention_days=DEFAULT_RETENTION_DAYS if days is None else days)
         report = log.purge()
     finally:
         opened.close()
@@ -137,6 +135,8 @@ def audit_purge(
         f"purged {report.purged_rows} row(s), kept {report.kept_rows}; "
         f"chain resumes after id {report.checkpoint_id}"
     )
+
+
 @review_app.command("list")
 def review_list(
     all_: bool = typer.Option(False, "--all", help="Include proposals a human already decided."),
@@ -147,8 +147,7 @@ def review_list(
         queue = _review_queue(opened)
         rows = queue.decided() if all_ else queue.pending()
         proposals = [
-            (row.id, row.kind.value, row.target, row.confidence, row.status.value)
-            for row in rows
+            (row.id, row.kind.value, row.target, row.confidence, row.status.value) for row in rows
         ]
     finally:
         opened.close()

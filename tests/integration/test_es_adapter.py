@@ -236,9 +236,7 @@ def test_request_against_the_alias_reads_across_monthly_indices(cluster: Cluster
     first, second = filled[0], filled[1]
     expected = cluster.count(first) + cluster.count(second)
 
-    stream = cluster.adapter.execute(
-        _month_fragment(cluster.adapter, first, months=2), LIMITS
-    )
+    stream = cluster.adapter.execute(_month_fragment(cluster.adapter, first, months=2), LIMITS)
 
     assert stream.touched_indices == (first, second)
     assert _rows(stream) == expected == stream.total_hits
@@ -304,9 +302,7 @@ def test_esql_path_and_dsl_path_answer_the_same_count(cluster: Cluster) -> None:
     expected = cluster.count(index)
     month = month_of(index)
     assert month is not None
-    fragment = cluster.adapter.fragment(
-        ALIAS, query=_month_range(month), esql=_esql_count(index)
-    )
+    fragment = cluster.adapter.fragment(ALIAS, query=_month_range(month), esql=_esql_count(index))
 
     assert cluster.adapter.features().esql is True
     esql_stream = cluster.adapter.execute(fragment, LIMITS)
@@ -367,8 +363,7 @@ def test_the_alias_is_the_table_and_the_monthly_indices_are_its_partitions(
     assert alias_partitioning.granularity.value == "month"
     assert tuple(bound.name for bound in alias_partitioning.bounds) == cluster.report.indices
     assert all(
-        bound.lower is not None and bound.upper is not None
-        for bound in alias_partitioning.bounds
+        bound.lower is not None and bound.upper is not None for bound in alias_partitioning.bounds
     )
 
 

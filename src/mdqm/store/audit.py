@@ -315,9 +315,7 @@ class AuditLog:
             )
         )
 
-    def _append(
-        self, conn: sqlite3.Connection, entry: AuditEntry, ts: datetime
-    ) -> AuditRecord:
+    def _append(self, conn: sqlite3.Connection, entry: AuditEntry, ts: datetime) -> AuditRecord:
         """Compute the chain fields inside the writer's transaction and insert one row."""
         prev_hash, next_id = self._head(conn)
         record = AuditRecord(
@@ -405,9 +403,13 @@ class AuditLog:
 
     def count(self) -> int:
         """How many audit rows the log holds."""
-        row = self._store.connect().execute(
-            f"SELECT COUNT(*) FROM {AUDIT_LOG_TABLE}"  # noqa: S608 - constant table name
-        ).fetchone()
+        row = (
+            self._store.connect()
+            .execute(
+                f"SELECT COUNT(*) FROM {AUDIT_LOG_TABLE}"  # noqa: S608 - constant table name
+            )
+            .fetchone()
+        )
         return int(row[0])
 
     def _checkpoint(self, conn: sqlite3.Connection) -> tuple[int, str] | None:

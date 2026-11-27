@@ -278,16 +278,17 @@ HOSTILE_TEXTS = (
     ("key value", "token=hunter2 api_key: hunter2 secret = hunter2", ("hunter2",)),
     (
         "bearer",
-        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature",
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature",  # pragma: allowlist secret
         ("eyJhbGciOiJIUzI1NiJ9",),
     ),
     ("bare jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkYW5hIn0.c2lnbmF0dXJl", ("eyJzdWIiOiJkYW5hIn0",)),
     (
         "private key",
+        # a fake key body: this fixture exists to prove redaction  # pragma: allowlist secret
         "-----BEGIN RSA PRIVATE KEY-----\nhunter2\n-----END RSA PRIVATE KEY-----",
         ("hunter2",),
     ),
-    ("aws key", "AKIAIOSFODNN7EXAMPLE", ("AKIAIOSFODNN7EXAMPLE",)),
+    ("aws key", "AKIAIOSFODNN7EXAMPLE", ("AKIAIOSFODNN7EXAMPLE",)),  # pragma: allowlist secret
     (
         "stack trace",
         'Traceback (most recent call last):\n  File "/srv/mdqm/run.py", line 42, in go\n'

@@ -404,9 +404,7 @@ def _run_sql(services: QueryServices, user: str, sql: str, source: str | None) -
         return _refused(
             services,
             user,
-            error=invalid_spec(
-                field="source", reason=reason, expected=sorted(services.adapters)
-            ),
+            error=invalid_spec(field="source", reason=reason, expected=sorted(services.adapters)),
             original_sql=sql,
             exec_ts=exec_ts,
         )
@@ -661,9 +659,7 @@ def _lint_context(services: QueryServices, exec_ts: datetime, dialect: str) -> L
 def _plan(summary: PlanSummary | None, partition_plan: PartitionPlan | None) -> PlanInfo:
     """The agent-facing plan: the static estimate, and the source's own plan when there is one."""
     estimate = None if partition_plan is None else partition_plan.estimate
-    notes = (
-        () if partition_plan is None else tuple(note.value for note in partition_plan.notes)
-    )
+    notes = () if partition_plan is None else tuple(note.value for note in partition_plan.notes)
     static_total = None if estimate is None else estimate.total
     if summary is None:
         scanned = None if estimate is None else estimate.partitions

@@ -333,16 +333,12 @@ def ensure_read_only_user(target: OracleTarget, admin: oracledb.Connection) -> N
     cur = admin.cursor()
     identifier = target.ro_user.upper()
     try:
-        cur.execute(
-            f"create user {identifier} identified by {_quote_password(target.ro_password)}"
-        )
+        cur.execute(f"create user {identifier} identified by {_quote_password(target.ro_password)}")
     except oracledb.DatabaseError as exc:
         # ORA-01920: the image already created it.
         if "ORA-01920" not in str(exc):
             raise
-    cur.execute(
-        "select granted_role from dba_role_privs where grantee = :1", [identifier]
-    )
+    cur.execute("select granted_role from dba_role_privs where grantee = :1", [identifier])
     for row in cur.fetchall():
         role = str(row[0]).upper()
         if not ROLE_NAME.match(role):

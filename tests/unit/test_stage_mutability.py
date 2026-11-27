@@ -605,9 +605,11 @@ def test_a_second_pass_sees_the_changed_oldest_rows(tmp_path: Path, store: Store
     ctx = make_ctx(tmp_path, store)
     first.run(ctx)
     ctx.commit()
-    baseline = store.connect().execute(
-        "SELECT value FROM mdqm_meta WHERE key = ?", (f"{BASELINE_PREFIX}.billing",)
-    ).fetchone()
+    baseline = (
+        store.connect()
+        .execute("SELECT value FROM mdqm_meta WHERE key = ?", (f"{BASELINE_PREFIX}.billing",))
+        .fetchone()
+    )
     assert baseline is not None
     assert json.loads(str(baseline["value"]))["checksums"], "a checksum must be kept for next time"
 

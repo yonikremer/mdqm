@@ -186,9 +186,7 @@ def test_constructor_argument_beats_env(monkeypatch: pytest.MonkeyPatch) -> None
     assert Settings(server={"port": 3333}).server.port == 3333
 
 
-def test_yaml_beats_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_yaml_beats_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)  # no mdqm.yaml here, so the default applies
     yaml_file = write_yaml(tmp_path / "mdqm.yaml", "server:\n  port: 4444\n")
     assert Settings.load(yaml_file).server.port == 4444
@@ -201,8 +199,10 @@ def test_yaml_beats_default(
         ("nope: 1\n", "nope"),
         ("server:\n  prot: 1\n", "server.prot"),
         ("sources:\n  - name: crm\n    adapter: pg\n    adapterr: pg\n", "sources.0.adapterr"),
-        ("quiet_windows:\n  - tz: Asia/Jerusalem\n    start: '21:00'\n    endd: '07:00'\n",
-         "quiet_windows.0.endd"),
+        (
+            "quiet_windows:\n  - tz: Asia/Jerusalem\n    start: '21:00'\n    endd: '07:00'\n",
+            "quiet_windows.0.endd",
+        ),
     ],
 )
 def test_unknown_key_is_rejected_with_its_path(
@@ -248,9 +248,7 @@ def test_non_mapping_root_is_rejected(tmp_path: Path) -> None:
     assert "top level must be a mapping" in str(caught.value)
 
 
-def test_default_yaml_file_is_picked_up(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_default_yaml_file_is_picked_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     write_yaml(tmp_path / "mdqm.yaml", "server:\n  port: 5555\n")
     assert Settings.load().server.port == 5555

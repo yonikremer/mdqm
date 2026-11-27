@@ -102,16 +102,10 @@ _INSERT_FTS: Final[str] = (
     f"INSERT INTO {FTS_TABLE} (rowid, title, names, labels, body) "  # noqa: S608
     "VALUES (?, ?, ?, ?, ?)"
 )
-_INSERT_SYNONYM: Final[str] = (
-    f"INSERT OR IGNORE INTO {SYNONYM_TABLE} (label, grp) VALUES (?, ?)"  # noqa: S608
-)
-_SELECT_STATE: Final[str] = (
-    f"SELECT version_hash, documents, fts5 FROM {STATE_TABLE} WHERE id = 1"  # noqa: S608
-)
+_INSERT_SYNONYM: Final[str] = f"INSERT OR IGNORE INTO {SYNONYM_TABLE} (label, grp) VALUES (?, ?)"  # noqa: S608
+_SELECT_STATE: Final[str] = f"SELECT version_hash, documents, fts5 FROM {STATE_TABLE} WHERE id = 1"  # noqa: S608
 _COUNT_DOCS: Final[str] = f"SELECT COUNT(*) FROM {DOC_TABLE}"  # noqa: S608 - module constants
-_SEARCH_PREFIX: Final[str] = (
-    f"SELECT doc_id, kind, ref FROM {DOC_TABLE} WHERE "  # noqa: S608 - module constant
-)
+_SEARCH_PREFIX: Final[str] = f"SELECT doc_id, kind, ref FROM {DOC_TABLE} WHERE "  # noqa: S608 - module constant
 _SEARCH_SUFFIX: Final[str] = " ORDER BY doc_id LIMIT ?"
 
 #: bm25 weights for (title, names, labels, body): a name is worth more than prose, and the title
@@ -767,9 +761,7 @@ class ContextIndex:
     ) -> bool:
         """True when this exact semantic version, document count and search path were indexed."""
         # pi-lens-ignore: python-sql-injection
-        row = conn.execute(
-            _SELECT_STATE
-        ).fetchone()
+        row = conn.execute(_SELECT_STATE).fetchone()
         if row is None:
             return False
         return (

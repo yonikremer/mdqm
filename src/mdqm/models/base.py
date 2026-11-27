@@ -38,9 +38,7 @@ def _reject_non_json(value: Any) -> Any:
         if isinstance(item, dict):
             for key, nested in item.items():
                 if not isinstance(key, str):
-                    raise ValueError(
-                        f"JSON object keys must be strings, got {type(key).__name__}."
-                    )
+                    raise ValueError(f"JSON object keys must be strings, got {type(key).__name__}.")
                 stack.append(nested)
         elif isinstance(item, list):
             stack.extend(item)

@@ -149,12 +149,10 @@ def federated_plan(
                 field=f"joins.{index}",
                 reason=(
                     f'the approved join "{name}" connects {left_key} and {right_key}, and this '
-                    f'query starts from {anchor.key}'
+                    f"query starts from {anchor.key}"
                 ),
                 expected=[
-                    join.name
-                    for join in layer.approved_joins
-                    if anchor.key in join_tables(join)
+                    join.name for join in layer.approved_joins if anchor.key in join_tables(join)
                 ],
             )
         partner_key = right_key if left_key == anchor.key else left_key
@@ -252,13 +250,9 @@ def federated_plan(
         how = _how(
             partner_step=partner_step,
             used=used,
-            partner_is_many=_partner_is_many(
-                cardinality, name=name, layer=layer, partner=partner
-            ),
+            partner_is_many=_partner_is_many(cardinality, name=name, layer=layer, partner=partner),
         )
-        chain.append(
-            JoinStep(join=name, left=steps_of[anchor.key], right=partner_step, how=how)
-        )
+        chain.append(JoinStep(join=name, left=steps_of[anchor.key], right=partner_step, how=how))
 
     steps: list[FragmentStep] = []
     for table in scope:

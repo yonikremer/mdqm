@@ -231,9 +231,7 @@ class Admission:
                 counter.state() for counter in sorted(counters, key=lambda c: (c.scope, c.name))
             )
 
-    def _slots(
-        self, source: str, user: str
-    ) -> list[tuple[threading.BoundedSemaphore, _Counter]]:
+    def _slots(self, source: str, user: str) -> list[tuple[threading.BoundedSemaphore, _Counter]]:
         """The three (semaphore, counter) pairs in acquisition order, created lazily."""
         with self._lock:
             source_counter = self._sources.get(source)

@@ -179,10 +179,10 @@ def answers(
         ),
         "crm.customers.email_address": email_address
         or Labels(
-            name_he="כתובת דוא\"ל",
+            name_he='כתובת דוא"ל',
             name_en="Email address",
             description_en="The customer's contact address.",
-            description_he="כתובת הדוא\"ל של הלקוח.",
+            description_he='כתובת הדוא"ל של הלקוח.',
             synonyms_en=("Email",),
         ),
     }
@@ -200,7 +200,7 @@ def reply_from(
     """
 
     def reply(prompt: str) -> Labels:
-        sheet = json.loads(prompt[prompt.index("{"):])
+        sheet = json.loads(prompt[prompt.index("{") :])
         key = str(sheet["key"])
         if sheet.get("value") is not None:
             key = f"{key}::{sheet['value']}"
@@ -375,8 +375,9 @@ class TestRefusals:
                 )
             )
         )
-        missing = [item for item in harness.stage.rejections
-                   if item.code is RejectionCode.MISSING_COLUMN]
+        missing = [
+            item for item in harness.stage.rejections if item.code is RejectionCode.MISSING_COLUMN
+        ]
         assert missing, harness.stage.rejections
         assert "'customer_ref'" in missing[0].detail
         assert missing[0].target == "crm.customers.cust_id"
@@ -395,9 +396,7 @@ class TestRefusals:
                 )
             )
         )
-        assert codes(harness.stage.rejections) == {
-            RejectionCode.EMPTY_AFTER_NORMALISATION.value
-        }
+        assert codes(harness.stage.rejections) == {RejectionCode.EMPTY_AFTER_NORMALISATION.value}
         assert "no letters left" in harness.stage.rejections[0].detail
 
     def test_a_copied_identifier_is_refused_as_personal_data(self, harness: Harness) -> None:
@@ -405,7 +404,7 @@ class TestRefusals:
             both_runs(
                 answers(
                     email_address=Labels(
-                        name_he="כתובת דוא\"ל",
+                        name_he='כתובת דוא"ל',
                         name_en="Email address",
                         description_en="The customer's contact address.",
                         # a value D5 observed for this very column, copied into a synonym
@@ -464,15 +463,16 @@ class TestConfidence:
                 synonyms_en=("Condition",),
             )
         )
-        runs = {
-            key: (value, value) for key, value in answers().items()
-        }
-        runs["crm.customers.status_code"] = (answers()["crm.customers.status_code"],
-                                            differed["crm.customers.status_code"])
+        runs = {key: (value, value) for key, value in answers().items()}
+        runs["crm.customers.status_code"] = (
+            answers()["crm.customers.status_code"],
+            differed["crm.customers.status_code"],
+        )
         disagree_scores = agree_scores_of(disagree, runs=runs)
 
-        assert disagree_scores["crm.customers.status_code"] < (
-            agree_scores["crm.customers.status_code"]
+        assert (
+            disagree_scores["crm.customers.status_code"]
+            < (agree_scores["crm.customers.status_code"])
         )
         # Same scripted answers, run again from scratch: exactly the same numbers.
         assert agree_scores_of(Harness(tmp_path / "agree-again")) == agree_scores
@@ -609,7 +609,7 @@ class TestPureHelpers:
         )
         text = render_prompt(sheet)
         assert text.endswith("}"), "the sheet is the trailing JSON object"
-        document = json.loads(text[text.index("{"):])
+        document = json.loads(text[text.index("{") :])
         assert document["key"] == "crm.customers.cust_id"
         assert document["columns"] == ["cust_id", "status_code", "email_address"]
         assert document["observed_values"] == ["100012345"]

@@ -589,9 +589,7 @@ class ProposeNamesStage:
         self._profiles = dict(profiles or {})
         given_maps = dict(value_maps or {})
         self._value_maps = {key: given_maps[key] for key in sorted(given_maps)}
-        self._known = {
-            scope: dict(terms) for scope, terms in sorted((known_terms or {}).items())
-        }
+        self._known = {scope: dict(terms) for scope, terms in sorted((known_terms or {}).items())}
         self._base = self._registry()
         self._rejections: tuple[Rejection, ...] = ()
 
@@ -624,9 +622,7 @@ class ProposeNamesStage:
         for map_key, value_map in self._value_maps.items():
             source = _map_source(value_map)
             for value in value_map.canonical:
-                found.append(
-                    Target(kind=TargetKind.VALUE, key=map_key, source=source, value=value)
-                )
+                found.append(Target(kind=TargetKind.VALUE, key=map_key, source=source, value=value))
         return tuple(found)
 
     def inputs_hash(self, ctx: PipelineContext) -> str:
@@ -673,9 +669,7 @@ class ProposeNamesStage:
             {
                 "key": map_key,
                 "canonical": list(value_map.canonical),
-                "synonyms": {
-                    value: sorted(labels) for value, labels in value_map.synonyms.items()
-                },
+                "synonyms": {value: sorted(labels) for value, labels in value_map.synonyms.items()},
             }
             for map_key, value_map in self._value_maps.items()
         ]
@@ -979,9 +973,7 @@ class ProposeNamesStage:
             named: tuple[str, ...] = (
                 () if target.kind is TargetKind.VALUE else (first.name_he, first.name_en)
             )
-            found = collisions(
-                target, (*named, *synonyms), taken.get(self._namespace(target), {})
-            )
+            found = collisions(target, (*named, *synonyms), taken.get(self._namespace(target), {}))
             if found:
                 rejections.extend(found)
                 counts["rejected"] += 1

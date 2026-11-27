@@ -585,9 +585,9 @@ def _json_list(value: object) -> tuple[str, ...]:
 def _last_success(store: Store, stage: str) -> tuple[str, tuple[str, ...]] | None:
     """The input hash and outputs of a stage's last successful run, or ``None``."""
     # Constant statement, value bound: nothing is interpolated into the SQL text.
-    row = store.connect().execute(
-        _SELECT_LAST_RAN, (stage,)
-    ).fetchone()  # nosemgrep: python-sql-injection
+    row = (
+        store.connect().execute(_SELECT_LAST_RAN, (stage,)).fetchone()
+    )  # nosemgrep: python-sql-injection
     if row is None:
         return None
     return (str(row["inputs_hash"]), _json_list(row["outputs"]))

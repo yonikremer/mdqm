@@ -625,7 +625,7 @@ def test_an_index_on_a_default_time_column_is_breaking_when_dropped() -> None:
                     "start_time": TimeColumn(role=TimeRole.EVENT_TIME, use_by_default=True)
                 }
             )
-        }
+        },
     )
     usage = "usage_events"
     before = snapshot(

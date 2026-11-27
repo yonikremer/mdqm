@@ -280,9 +280,7 @@ def as_alice() -> Iterator[None]:
 
 
 def question(question_id: str) -> Mapping[str, Any]:
-    document = cast(
-        Mapping[str, Any], YAML(typ="safe").load(QUESTIONS.read_text(encoding="utf-8"))
-    )
+    document = cast(Mapping[str, Any], YAML(typ="safe").load(QUESTIONS.read_text(encoding="utf-8")))
     return {
         str(entry["id"]): entry for entry in cast(list[Mapping[str, Any]], document["questions"])
     }[question_id]
