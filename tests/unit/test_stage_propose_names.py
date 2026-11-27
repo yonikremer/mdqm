@@ -38,6 +38,7 @@ from mdqm.pipeline.stages.propose_names import (
     TEMPERATURE,
     Labels,
     ProposeNamesStage,
+    Rejection,
     RejectionCode,
     Target,
     TargetKind,
@@ -265,7 +266,7 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
     yield Harness(tmp_path)
 
 
-def codes(rejections: tuple[object, ...]) -> set[str]:
+def codes(rejections: tuple[Rejection, ...]) -> set[str]:
     """The rejection codes, so a test asserts on a set instead of on an ordering."""
     return {item.code.value for item in rejections}
 
