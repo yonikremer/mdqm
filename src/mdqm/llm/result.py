@@ -66,6 +66,11 @@ DEFAULT_PROMPT_VERSION = "1"
 class StructuredLLM(Protocol):
     """Ask the model for one closed JSON object and get it validated in code."""
 
+    @property
+    def model_name(self) -> str:
+        """The model id that answers. Recorded with every fact a call produced."""
+        ...
+
     def structured(
         self,
         prompt: str,
