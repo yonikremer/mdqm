@@ -920,7 +920,13 @@ class ElasticAdapter:
         limits: Limits,
         deadline: float,
     ) -> ArrowStream:
-        """The ES|QL path: ``POST /_query`` with the statement the fragment carries."""
+        """The ES|QL path: ``POST /_query`` with the statement the fragment carries.
+
+        ES|QL is not SQL and sqlglot cannot parse it, so the execution chokepoint
+        (:mod:`mdqm.sql.execution`) does not apply and no statement text is guarded here. What keeps
+        this read-only is structural: the transport allows ``GET`` and ``POST /_query`` only, and the
+        statement travels as a JSON *value* -- no value is ever interpolated into a request target.
+        """
         payload = self._json(
             "POST",
             ESQL_PATH,

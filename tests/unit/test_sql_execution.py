@@ -1,11 +1,10 @@
-"""Tests for the execution chokepoint (:mod:`mdqm.sql.execution`).
+"""The execution chokepoint (:mod:`mdqm.sql.execution`) refuses *at the driver boundary*.
 
-The chokepoint is the last thing between a compiled statement and a source, so these tests prove
-the refusal happens *there* -- after the statement was built, immediately before it would be sent --
-and that nothing is handed to the driver when it does.
-
-The spy cursor counts every ``execute`` call. A refusal that still executed would show up as one
-call, which is why the assertion is on the count and not only on the exception.
+``tests/unit/test_sql_injection_protection.py`` proves the guard refuses the injection payloads.
+This file proves the other half: that the refusal happens at the chokepoint -- after a statement was
+built, immediately before it would be sent -- and that nothing at all is handed to the driver when it
+does. The spy cursor counts every ``execute`` call, so a refusal that still executed would fail here
+even though the exception was raised.
 """
 
 from __future__ import annotations
@@ -25,26 +24,12 @@ from mdqm.sql.execution import (
 )
 from mdqm.sql.guard import MULTI_STATEMENT, WRITE_BLOCKED
 
-#: (case id, statement, expected guard code). Each one is valid SQL that a compiler bug, a
-#: hand-written fragment or a future code path could plausibly produce.
+#: The three shapes a statement injection takes, each reaching the driver as a *compiled fragment*
+#: would: a write, a second statement behind a `;`, and a denylisted server function.
 REFUSED_CASES: tuple[tuple[str, str, str], ...] = (
-    ("delete", "DELETE FROM customers WHERE cust_id = 1", WRITE_BLOCKED),
-    ("update", "UPDATE customers SET status = 'A'", WRITE_BLOCKED),
-    ("insert", "INSERT INTO customers (cust_id) VALUES (1)", WRITE_BLOCKED),
-    ("truncate", "TRUNCATE customers", WRITE_BLOCKED),
-    ("drop", "DROP TABLE customers", WRITE_BLOCKED),
-    # A second statement after a `;` is how a stacked write is smuggled onto a read.
-    (
-        "stacked",
-        "SELECT 1 FROM dual; DELETE FROM customers WHERE 1 = 1",
-        MULTI_STATEMENT,
-    ),
-    ("stacked_comment", "SELECT 1; -- and then\nDELETE FROM customers", MULTI_STATEMENT),
-    # Denylisted functions: they read files, sleep or write state. The guard's own list decides,
-    # so the case asserts a refusal, not a particular spelling of it.
-    ("denied_file_read", "SELECT pg_read_file('/etc/passwd')", WRITE_BLOCKED),
-    ("denied_sleep", "SELECT pg_sleep(10)", WRITE_BLOCKED),
-    ("denied_nextval", "SELECT nextval('customers_cust_id_seq')", WRITE_BLOCKED),
+    ("write", "DELETE FROM customers WHERE cust_id = 1", WRITE_BLOCKED),
+    ("stacked", "SELECT 1 FROM dual; DELETE FROM customers WHERE 1 = 1", MULTI_STATEMENT),
+    ("denied_function", "SELECT pg_sleep(10)", WRITE_BLOCKED),
 )
 
 
@@ -62,36 +47,21 @@ class SpyCursor:
 @pytest.mark.parametrize(
     ("case_id", "statement", "code"), REFUSED_CASES, ids=[case[0] for case in REFUSED_CASES]
 )
-def test_prepare_refuses_at_execution_time(case_id: str, statement: str, code: str) -> None:
-    """The guard runs when the statement is about to run, and its code reaches the caller."""
+def test_a_refused_statement_raises_before_anything_is_sent(
+    case_id: str, statement: str, code: str
+) -> None:
+    """The guard's own code reaches the caller, with its fix, and no cursor is touched."""
+    cursor = SpyCursor()
+
     with pytest.raises(StatementRefused) as caught:
-        prepare(statement, dialect="postgres")
+        run(cursor, prepare(statement, dialect="postgres"))
 
     refused = caught.value
     assert refused.code == code, case_id
     assert refused.result.ok is False
-    # The refusal carries the fix, so an agent gets something it can act on.
     assert refused.result.error is not None
     assert refused.result.error.fix
-
-
-@pytest.mark.parametrize(
-    ("case_id", "statement"),
-    [
-        ("delete", "DELETE FROM customers WHERE cust_id = 1"),
-        ("stacked", "SELECT 1 FROM dual; DELETE FROM customers WHERE 1 = 1"),
-        ("denied_sleep", "SELECT pg_sleep(10)"),
-    ],
-    ids=["delete", "stacked", "denied_sleep"],
-)
-def test_refused_statement_never_reaches_the_driver(case_id: str, statement: str) -> None:
-    """Nothing is sent: the refusal is raised, so no cursor is touched at all."""
-    cursor = SpyCursor()
-
-    with pytest.raises(StatementRefused):
-        run(cursor, prepare(statement, dialect="postgres"))
-
-    assert cursor.calls == [], f"{case_id} was sent to the driver"
+    assert cursor.calls == [], f"{case_id} reached the driver"
 
 
 def test_a_read_reaches_the_driver_once_through_the_chokepoint() -> None:
@@ -123,13 +93,9 @@ def test_an_unbound_read_passes_no_parameters() -> None:
 
 
 def test_a_prefix_cannot_launder_a_write() -> None:
-    """``prefix`` exists for EXPLAIN; it must not let a write through behind a command word."""
+    """``prefix`` exists for EXPLAIN; a write behind a command word is still refused."""
     with pytest.raises(StatementRefused) as caught:
-        prepare(
-            "DELETE FROM customers",
-            dialect="postgres",
-            prefix="EXPLAIN (FORMAT JSON) ",
-        )
+        prepare("DELETE FROM customers", dialect="postgres", prefix="EXPLAIN (FORMAT JSON) ")
 
     assert caught.value.code == WRITE_BLOCKED
 
@@ -142,18 +108,8 @@ def test_the_prefix_is_added_after_the_guard_inspected_the_statement() -> None:
     assert prepared.dialect == "postgres"
 
 
-def test_a_prepared_statement_cannot_be_built_by_hand_into_run_local() -> None:
-    """The two doors stay apart: a source statement is not a local statement and vice versa."""
-    assert not isinstance(prepare("SELECT 1", dialect="postgres"), LocalStatement)
-
-    cursor = SpyCursor()
-    run_local(cursor, local("INSERT INTO query_history (id) VALUES (?)", ("q1",)))
-
-    assert cursor.calls == [("INSERT INTO query_history (id) VALUES (?)", ("q1",))]
-
-
 def test_local_sql_writes_and_is_not_guarded() -> None:
-    """Our own metadata SQL writes on purpose; the guard would rightly refuse it."""
+    """Our own metadata SQL writes on purpose: the guard would rightly refuse it."""
     statement = local("DELETE FROM query_history WHERE id = ?", ("q1",))
 
     assert isinstance(statement, LocalStatement)
@@ -161,6 +117,12 @@ def test_local_sql_writes_and_is_not_guarded() -> None:
     assert statement.params == ("q1",)
 
 
-def test_run_rejects_nothing_but_takes_only_prepared_statements() -> None:
-    """``run`` cannot be handed a raw string: the type is the guarantee, not the comment."""
+def test_the_two_doors_stay_apart() -> None:
+    """A source statement cannot be passed to ``run_local``, or a local one to ``run``."""
+    assert not isinstance(prepare("SELECT 1", dialect="postgres"), LocalStatement)
     assert isinstance(prepare("SELECT 1", dialect="postgres"), PreparedStatement)
+
+    cursor = SpyCursor()
+    run_local(cursor, local("INSERT INTO query_history (id) VALUES (?)", ("q1",)))
+
+    assert cursor.calls == [("INSERT INTO query_history (id) VALUES (?)", ("q1",))]
