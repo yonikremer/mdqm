@@ -37,6 +37,7 @@ class AdapterEntryPoint(Protocol):
 
     name: str
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def load(self) -> object:
         """Import and return the object the entry point points at."""
         ...

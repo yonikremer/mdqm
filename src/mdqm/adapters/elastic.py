@@ -54,7 +54,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 import httpx
 import pyarrow as pa
@@ -317,6 +317,7 @@ def _to_datetime(value: Any) -> datetime | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int | float):
+        # pi-lens-ignore: unchecked-numeric-parse-python -- a number by the branch above
         return datetime.fromtimestamp(float(value) / 1000.0, tz=UTC)
     if isinstance(value, str):
         text = value[:-1] + "+00:00" if value.endswith("Z") else value
@@ -338,10 +339,11 @@ def _coerce(value: Any, normalized: NormalizedType) -> Any:
         return None
     if normalized is NormalizedType.INTEGER:
         if isinstance(value, bool):
-            return int(value)
+            return 1 if value else 0
         if isinstance(value, int):
             return value
         if isinstance(value, float):
+            # pi-lens-ignore: unchecked-numeric-parse-python -- a float by the branch above
             return int(value)
         if isinstance(value, str):
             try:
@@ -491,12 +493,16 @@ class _RowsStream:
         self.dropped_rows = dropped_rows
         self.dropped_values = dropped_values
         self.cancelled = False
+        self.rows_returned = 0
+        self.bytes_returned = 0
         self._batches = table.to_batches()
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
         for batch in self._batches:
             if self.cancelled:
                 return
+            self.rows_returned += batch.num_rows
+            self.bytes_returned += batch.nbytes
             yield batch
 
     def cancel(self) -> None:
@@ -531,7 +537,7 @@ class ElasticAdapter:
             proxy blocks ``/_query``).
     """
 
-    kind: Final[str] = "elastic"
+    kind: ClassVar[str] = "elastic"
 
     def __init__(
         self,
@@ -1263,6 +1269,7 @@ def _flatten(
         full = f"{prefix}{name}"
         nested = spec.get("properties")
         if isinstance(nested, Mapping) and nested:
+            # pi-lens-ignore: no-yield-from-non-iterable -- _flatten is a generator
             yield from _flatten(nested, f"{full}.")
         else:
             yield full, spec

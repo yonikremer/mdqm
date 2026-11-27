@@ -636,6 +636,7 @@ class SqlServerArrowStream:
         if batch.num_rows == 0 or batch.nbytes <= remaining_bytes:
             return batch
         per_row = batch.nbytes / batch.num_rows
+        # pi-lens-ignore: unchecked-numeric-parse-python -- int/float division, never text
         keep = int(remaining_bytes / per_row) if per_row > 0 else batch.num_rows
         return batch.slice(0, min(batch.num_rows, max(keep, 0)))
 
@@ -979,7 +980,9 @@ class SqlServerAdapter:
                 )
             )
         for row in count_rows:
-            rows_by_table[(str(row[0]), str(row[1]))] = int(row[2])
+            row_count = _as_int(row[2])
+            if row_count is not None:
+                rows_by_table[(str(row[0]), str(row[1]))] = row_count
 
         tables: list[Table] = []
         for row in table_rows:
@@ -1046,10 +1049,14 @@ class SqlServerAdapter:
                 tuples.setdefault(str(row[0]), []).append(parsed)
         filegroups: dict[str, dict[int, str]] = {}
         for row in destination_rows:
-            filegroups.setdefault(str(row[0]), {})[int(row[1])] = str(row[2])
+            destination_id = _as_int(row[1])
+            if destination_id is not None:
+                filegroups.setdefault(str(row[0]), {})[destination_id] = str(row[2])
         counts: dict[tuple[str, str, int], int] = {}
         for row in row_rows:
-            counts[(str(row[0]), str(row[1]), int(row[2]))] = int(row[3])
+            boundary_id, row_count = _as_int(row[2]), _as_int(row[3])
+            if boundary_id is not None and row_count is not None:
+                counts[(str(row[0]), str(row[1]), boundary_id)] = row_count
 
         out: list[Partitioning] = []
         for row in table_rows:
@@ -1060,7 +1067,7 @@ class SqlServerAdapter:
                     function=str(row[3]),
                     function_type=str(row[4]),
                     boundary_on_right=bool(row[5]),
-                    fanout=int(row[6]),
+                    fanout=_as_int(row[6]) or 0,
                     parameter_type=str(row[7]),
                     key=tuple(keys.get((str(row[0]), str(row[1])), ())),
                     boundaries=tuple(tuples.get(str(row[3]), ())),
@@ -1152,7 +1159,7 @@ class SqlServerAdapter:
                 return None
             finally:
                 cursor.close()
-        return None if row is None else int(row[0])
+        return None if row is None else _as_int(row[0])
 
     # --- SourceAdapter: execute / cancel -------------------------------------------------
 
@@ -1285,7 +1292,12 @@ class SqlServerAdapter:
                 rows = self._fetch_all(cursor, _MUTABILITY_ROWS_SQL)
             finally:
                 cursor.close()
-        return [(str(row[0]), str(row[1]), int(row[2])) for row in rows]
+        out: list[tuple[str, str, int]] = []
+        for row in rows:
+            row_count = _as_int(row[2])
+            if row_count is not None:
+                out.append((str(row[0]), str(row[1]), row_count))
+        return out
 
     def _mutability_counters(self) -> dict[str, tuple[int | None, datetime | None]]:
         """``schema.table`` -> (rows changed since the statistics were updated, that time)."""
@@ -1547,8 +1559,12 @@ def _partition_id(text: str | None) -> int | None:
     match = _PARTITION_ID_RE.match(text.strip())
     if match is None:
         return None
-    first, subtract = int(match.group(1)), match.group(2)
-    return first if subtract is None else first - int(subtract)
+    try:
+        first = int(match.group(1))
+        subtract = match.group(2)
+        return first if subtract is None else first - int(subtract)
+    except ValueError:  # the regex captures digits only; a parse failure is still "no number"
+        return None
 
 
 #: ``(9)`` or ``(11)-(1)``: the two literal shapes a partition-id range expression takes.
@@ -1682,8 +1698,10 @@ def _arrays_from_rows(schema: pa.Schema, rows: Sequence[Sequence[Any]]) -> list[
 
 def _as_int(value: object) -> int | None:
     """An int from a driver value, or ``None`` (never a silent 0)."""
-    if value is None or isinstance(value, bool):
-        return None if value is None else int(value)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1 if value else 0
     if isinstance(value, int):
         return value
     try:
@@ -1694,9 +1712,12 @@ def _as_int(value: object) -> int | None:
 
 def _as_float(value: object) -> float | None:
     """A float from a driver value or from an XML attribute, or ``None``."""
-    if value is None or isinstance(value, bool):
-        return None if value is None else float(value)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
     if isinstance(value, int | float | Decimal):
+        # pi-lens-ignore: unchecked-numeric-parse-python -- a number by the branch above
         return float(value)
     try:
         return float(str(value))

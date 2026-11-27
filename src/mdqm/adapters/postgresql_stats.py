@@ -268,7 +268,9 @@ def statements(cursor: psycopg.Cursor[Any], state: QueryStoreState) -> list[Stat
         if _is_plumbing(text):
             dropped += 1
             continue
-        calls, total_ms, rows = int(row[1] or 0), float(row[2] or 0.0), int(row[3] or 0)
+        calls = _as_int(row[1]) or 0
+        total_ms = _as_float(row[2]) or 0.0
+        rows = _as_int(row[3]) or 0
         if row[4] is not None:
             users.setdefault(text, set()).add(str(row[4]))
         seen = totals.get(text)
@@ -414,4 +416,29 @@ def _as_int(value: object) -> int | None:
     """``int`` or ``None``: these counters are NULL for a table nobody has touched yet."""
     if value is None or isinstance(value, bool):
         return None
-    return int(value) if isinstance(value, int | float | str) else None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        # pi-lens-ignore: unchecked-numeric-parse-python -- a float by the branch above
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _as_float(value: object) -> float | None:
+    """``float`` or ``None``: a cumulative timer that arrived as text may not be a number."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        # pi-lens-ignore: unchecked-numeric-parse-python -- a number by the branch above
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None

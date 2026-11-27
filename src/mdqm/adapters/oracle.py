@@ -368,6 +368,7 @@ def interval_granularity(interval: object) -> PartitionGranularity | None:
     match = _INTERVAL_RE.search(str(interval))
     if match is None:
         return None
+    # pi-lens-ignore: unchecked-numeric-parse-python -- the regex group is \d+, never text
     count = int(match.group("count"))
     unit = match.group("unit").upper()
     months = _UNIT_MONTHS[unit] * count
@@ -624,6 +625,7 @@ class OracleArrowStream:
         if batch.num_rows == 0 or batch.nbytes <= remaining_bytes:
             return batch
         per_row = batch.nbytes / batch.num_rows
+        # pi-lens-ignore: unchecked-numeric-parse-python -- int/float division, never text
         keep = int(remaining_bytes / per_row) if per_row > 0 else batch.num_rows
         return batch.slice(0, min(batch.num_rows, max(keep, 0)))
 
@@ -1405,7 +1407,8 @@ def _raw_queries(rows: Sequence[Sequence[Any]]) -> list[RawQuery]:
         if not body:
             continue
         calls = _as_int(executions) or 0
-        total_ms = None if elapsed is None else float(elapsed) / 1000.0
+        elapsed_ms = _as_float(elapsed)
+        total_ms = None if elapsed_ms is None else elapsed_ms / 1000.0
         out.append(
             RawQuery(
                 text=body,
@@ -1517,6 +1520,7 @@ def _code(exc: BaseException) -> int:
     """Oracle's numeric error code, or 0 (a thin-mode client error carries none)."""
     if isinstance(exc, oracledb.DatabaseError) and exc.args:
         code = getattr(exc.args[0], "code", None)
+        # pi-lens-ignore: unchecked-numeric-parse-python -- isinstance narrows it to an int
         return int(code) if isinstance(code, int) else 0
     return 0
 
@@ -1544,7 +1548,7 @@ def _query_store_state(cur: oracledb.Cursor) -> tuple[bool, str]:
         if _is_no_privilege(exc):
             return False, f"this account may not read V$SQL: {_message(exc)}"
         return False, f"V$SQL could not be read: {_message(exc)}"
-    count = 0 if row is None else int(row[0])
+    count = _as_int(None if row is None else row[0]) or 0
     return True, f"V$SQL is readable ({count} cached statements)"
 
 

@@ -292,18 +292,42 @@ class PgPlan:
         return self.subplans_removed > 0
 
 
+def _as_int(value: object) -> int | None:
+    """``int`` or ``None``: a plan counter that arrived as text may not be a number at all."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        # pi-lens-ignore: unchecked-numeric-parse-python -- a float by the branch above
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _as_float(value: object) -> float | None:
     """``float`` or ``None``: a plan may omit a cost, and a missing number is not zero."""
     if value is None or isinstance(value, bool):
         return None
-    return float(value) if isinstance(value, int | float | str) else None
+    if isinstance(value, int | float):
+        # pi-lens-ignore: unchecked-numeric-parse-python -- a number by the branch above
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def _as_count(value: object) -> int:
     """A small non-negative counter from the plan (``Subplans Removed``), ``0`` when absent."""
-    if isinstance(value, bool) or value is None:
-        return 0
-    return int(value) if isinstance(value, int | float | str) and int(value) > 0 else 0
+    count = _as_int(value)
+    return count if count is not None and count > 0 else 0
 
 
 def _root(document: object) -> Mapping[str, Any] | None:
@@ -326,6 +350,7 @@ def _walk(node: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
     if isinstance(children, list):
         for child in children:
             if isinstance(child, Mapping):
+                # pi-lens-ignore: no-yield-from-non-iterable -- _walk is a generator
                 yield from _walk(child)
 
 

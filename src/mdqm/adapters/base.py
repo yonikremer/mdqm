@@ -81,10 +81,18 @@ class ArrowStream(Protocol):
     #: Arrow schema of the batches, known before the first batch arrives.
     schema: pa.Schema
 
+    #: Rows and bytes this stream has produced so far. Universal: the governor's row and byte caps
+    #: are enforced with them, so every implementation counts, whatever it reads from. The
+    #: source-specific counters (a cache hit, an Elasticsearch index set) stay on their own class.
+    rows_returned: int
+    bytes_returned: int
+
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def __iter__(self) -> Iterator[pa.RecordBatch]:
         """Yield ``pyarrow.RecordBatch`` values until exhausted."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def close(self) -> None:
         """Release the cursor/connection. Idempotent."""
         ...
@@ -99,39 +107,48 @@ class SourceAdapter(Protocol):
     #: ``ClassVar`` fail the protocol check.
     kind: ClassVar[str]
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def dialect(self) -> str:
         """sqlglot dialect name for this source, or ``"dsl"`` for Elasticsearch and APIs."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def probe(self) -> Capabilities:
         """Detect what this source supports. Optional features that raise :class:`NotSupported`
         must come back as unsupported here (never as supported)."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def extract_catalog(self) -> CatalogSnapshot:
         """Read tables, columns, indexes and keys. Never empty for a healthy source."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def execute(self, fragment: Fragment, limits: Limits) -> ArrowStream:
         """Run one already-compiled fragment, respecting ``limits`` (rows, bytes, timeout)."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def cancel(self, handle: ArrowStream) -> None:
         """Abort the query behind ``handle`` (the stream ``execute`` returned). Idempotent."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def extract_partitions(self) -> list[Partitioning]:
         """Partition metadata per table, or raise :class:`NotSupported`."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def explain(self, fragment: Fragment) -> PlanSummary:
         """The source's own plan for ``fragment``, or raise :class:`NotSupported`."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def mine_queries(self, since: datetime) -> Iterator[RawQuery]:
         """Past queries from the source's query store, or raise :class:`NotSupported`."""
         ...
 
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def mutability_stats(self) -> list[TableStats]:
         """Change counters per table, or raise :class:`NotSupported`."""
         ...

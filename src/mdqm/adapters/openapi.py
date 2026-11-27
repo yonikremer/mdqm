@@ -56,7 +56,7 @@ from typing import Any, ClassVar, Final
 import httpx
 import pyarrow as pa
 
-from mdqm.adapters.base import ArrowStream
+from mdqm.adapters.base import OPTIONAL_METHODS, ArrowStream, NotSupported
 from mdqm.config.secrets import SecretNotFound, SecretProvider
 from mdqm.config.settings import SourceConfig
 from mdqm.errors import (
@@ -75,8 +75,12 @@ from mdqm.models import (
     Index,
     Limits,
     NormalizedType,
+    Partitioning,
+    PlanSummary,
+    RawQuery,
     Table,
     TableKind,
+    TableStats,
 )
 from mdqm.ratelimit import RateLimiter, denial_error, parse_retry_after
 
@@ -554,11 +558,15 @@ class _RowsStream:
         self.cached = cached
         """True when no HTTP request was made for this stream."""
         self.cancelled = False
+        self.rows_returned = 0
+        self.bytes_returned = 0
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
         for batch in self._batches:
             if self.cancelled:
                 return
+            self.rows_returned += batch.num_rows
+            self.bytes_returned += batch.nbytes
             yield batch
 
     def cancel(self) -> None:
@@ -704,9 +712,12 @@ class OpenApiAdapter:
     def probe(self) -> Capabilities:
         """Report what this source can do: HTTP, so no plan, no partition metadata, no query store.
 
-        Nothing is claimed that the adapter cannot serve: it implements no optional method, so no
-        optional capability is reported as supported (``docs/DESIGN.md`` "Capabilities and
-        fallbacks" then runs each feature's declared fallback).
+        Nothing is claimed that the adapter cannot serve. Every optional capability is left
+        *unprobed* rather than reported as a probed ``False``: an HTTP endpoint has no plan or
+        query store to go and look for, and ``Capabilities.supports()`` is ``False`` for an
+        unprobed name either way, so each feature still runs its declared fallback. The four
+        optional methods raise :class:`NotSupported` with the same capability names, so the probe
+        and the methods cannot disagree.
         """
         info = self._spec.get("info")
         version = info.get("version") if isinstance(info, Mapping) else None
@@ -716,6 +727,32 @@ class OpenApiAdapter:
             version=str(version) if version is not None else None,
             retrieved_at=self._clock(),
             capabilities={},
+        )
+
+    def _unavailable(self, what: str) -> str:
+        """Why this source cannot serve an optional method: one text, probe and method agree."""
+        return f"an OpenAPI source answers HTTP requests only: it has no {what}"
+
+    # --- SourceAdapter: the optional methods, all absent by construction --------------------
+
+    def extract_partitions(self) -> list[Partitioning]:
+        """Refused: an endpoint's paging is not a partition, and the adapter cannot prune it."""
+        raise NotSupported(
+            OPTIONAL_METHODS["extract_partitions"], self._unavailable("partition metadata")
+        )
+
+    def explain(self, fragment: Fragment) -> PlanSummary:
+        """Refused: HTTP has no server plan, so there is nothing to read a pruning proof from."""
+        raise NotSupported(OPTIONAL_METHODS["explain"], self._unavailable("server plan"))
+
+    def mine_queries(self, since: datetime) -> Iterator[RawQuery]:
+        """Refused: the API keeps no query store the adapter may read."""
+        raise NotSupported(OPTIONAL_METHODS["mine_queries"], self._unavailable("query store"))
+
+    def mutability_stats(self) -> list[TableStats]:
+        """Refused: an HTTP source reports no per-table change counters."""
+        raise NotSupported(
+            OPTIONAL_METHODS["mutability_stats"], self._unavailable("change counters")
         )
 
     # --- SourceAdapter: catalog -------------------------------------------------------------

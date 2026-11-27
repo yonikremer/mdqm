@@ -174,6 +174,7 @@ def _as_int(value: object) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
+        # pi-lens-ignore: unchecked-numeric-parse-python -- a float by the branch above
         return int(value)
     if isinstance(value, str):
         try:
@@ -188,6 +189,7 @@ def _as_float(value: object) -> float | None:
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, int | float):
+        # pi-lens-ignore: unchecked-numeric-parse-python -- a number by the branch above
         return float(value)
     if isinstance(value, str):
         try:
@@ -552,6 +554,7 @@ class PgArrowStream:
         if batch.num_rows == 0 or batch.nbytes <= remaining_bytes:
             return batch
         per_row = batch.nbytes / batch.num_rows
+        # pi-lens-ignore: unchecked-numeric-parse-python -- int/float division, never text
         keep = int(remaining_bytes / per_row) if per_row > 0 else batch.num_rows
         return batch.slice(0, min(batch.num_rows, max(keep, 0)))
 
@@ -627,6 +630,7 @@ class PostgresAdapter:
             DEFAULT_STATEMENT_TIMEOUT_MS,
             "statement_timeout_ms",
         )
+        # pi-lens-ignore: unchecked-numeric-parse-python -- _positive_int returned an int
         self._connect_wait_s = float(self._statement_timeout_ms) / 1000.0
         self._clock = clock or (lambda: datetime.now(UTC))
         self._monotonic = monotonic or time.monotonic
@@ -781,10 +785,14 @@ class PostgresAdapter:
                     name=str(row[2]),
                     native_type=str(row[3]),
                     normalized_type=_normalized_type(
-                        str(row[4]), str(row[5]), str(row[6]), int(row[7])
+                        str(row[4]),
+                        str(row[5]),
+                        str(row[6]),
+                        # attndims is NOT NULL; 0 is also what "not an array" means.
+                        _as_int(row[7]) or 0,
                     ),
                     nullable=not bool(row[8]),
-                    ordinal=int(row[9]),
+                    ordinal=_as_int(row[9]),
                     comment=_text(row[10]),
                 )
             )
