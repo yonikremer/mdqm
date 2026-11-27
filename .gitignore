@@ -22,3 +22,4 @@ wheelhouse/*
 .worktrees/
 docker/server/*
 !docker/server/tokens.example.json
+/bench/
