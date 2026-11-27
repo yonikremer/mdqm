@@ -152,6 +152,36 @@ class ContextPackSource:
         )
 
 
+def _has_semantic_files(root: Path) -> bool:
+    """True when ``root`` holds a semantic YAML file **in a place the loader reads**.
+
+    The loader merges ``generated/*.yaml`` then ``curated/*.yaml`` and ignores the directory root,
+    so this check must ignore it too -- otherwise the server would decide "there is a layer" and
+    then fail to load the same files. A YAML file at the root is reported rather than ignored,
+    because it is almost always a deployment mistake, but it does not stop the server.
+    """
+    strays = sorted(
+        entry
+        for pattern in ("*.yaml", "*.yml")
+        for entry in root.glob(pattern)
+        if entry.is_file()
+    )
+    if strays:
+        logger.warning(
+            "semantic files at the root of the semantic dir are not loaded; put them under "
+            "generated/ or curated/",
+            extra={"semantic_dir": str(root), "ignored": [str(p.name) for p in strays]},
+        )
+    for sub in ("generated", "curated"):
+        directory = root / sub
+        if not directory.is_dir():
+            continue
+        for pattern in ("*.yaml", "*.yml"):
+            if any(entry.is_file() for entry in directory.glob(pattern)):
+                return True
+    return False
+
+
 def context_source_from_settings(settings: Settings | None = None) -> ContextPackSource | None:
     """The pack source this deployment serves from, or ``None`` when it has no semantic layer.
 
@@ -163,9 +193,13 @@ def context_source_from_settings(settings: Settings | None = None) -> ContextPac
     """
     resolved = settings if settings is not None else Settings()
     root = resolved.paths.semantic_dir
-    if not root.is_dir():
+    if not root.is_dir() or not _has_semantic_files(root):
+        # Two states share one answer, and both are normal on a fresh installation: the directory
+        # is absent, or it exists and the bootstrap pipeline has not written any facts yet. The
+        # server starts either way and /context says NOT_SUPPORTED with a fix. A layer that has
+        # files but does not load still raises below: absence of facts is normal, corruption is not.
         logger.warning(
-            "no semantic layer, so /context answers NOT_SUPPORTED",
+            "no semantic layer yet, so /context answers NOT_SUPPORTED",
             extra={"semantic_dir": str(root)},
         )
         return None

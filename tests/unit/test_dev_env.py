@@ -51,6 +51,9 @@ SERVICES: dict[str, ServiceSpec] = {
     "mariadb": ServiceSpec(("oss",), "mariadb:", 3306),
     "opensearch": ServiceSpec(("oss",), "opensearchproject/opensearch:", 9200),
     "opensearch-init": ServiceSpec(("oss",), "curlimages/curl:", None, healthcheck=False),
+    # The server itself, from this repo's Dockerfile: the only service that runs mdqm, so
+    # `--profile server` is what makes a local end-to-end deployment possible.
+    "server": ServiceSpec(("server",), "mdqm/server:", 8765),
 }
 
 OSS_PROFILE = {"pg", "mariadb", "opensearch", "opensearch-init", "api"}
@@ -95,7 +98,7 @@ def services() -> dict[str, Any]:
     return dict(document["services"])
 
 
-def test_compose_parses_and_declares_the_five_profiles() -> None:
+def test_compose_parses_and_declares_every_service() -> None:
     document = load_yaml(COMPOSE_PATH)
     assert document["name"] == "mdqm", "the project name keeps container/volume names in mdqm_*"
     assert set(document["services"]) == set(SERVICES)
@@ -106,6 +109,8 @@ def test_compose_parses_and_declares_the_five_profiles() -> None:
         "es-data",
         "mariadb-data",
         "opensearch-data",
+        "server-data",
+        "server-cache",
     }
 
 
@@ -129,8 +134,8 @@ def test_oss_profile_is_the_open_source_stack_only() -> None:
 def test_each_image_is_pinned_and_never_latest(service: str) -> None:
     definition = services()[service]
     if "build" in definition:
-        # The mock API is the only image this repo builds itself.
-        assert service == "api"
+        # Images this repo builds itself are tagged by us, so they carry no upstream version.
+        assert service in {"api", "server"}, f"{service} builds an image nobody expected"
         assert (REPO_ROOT / definition["build"]["dockerfile"]).is_file()
     image = definition["image"]
     assert image.startswith(SERVICES[service].image_prefix), f"{service}: unexpected image {image}"

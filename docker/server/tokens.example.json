@@ -1,0 +1,9 @@
+{
+  "tokens": [
+    {
+      "token": "CHANGE-ME-dev-only-token",
+      "user_id": "dev",
+      "display_name": "Developer"
+    }
+  ]
+}

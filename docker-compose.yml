@@ -1,31 +1,46 @@
-# mdqm development services (task D01). See docs/dev-env.md for how to use this file.
+# mdqm development services (task D01). See docs/dev-env.md for how to use this
+# file.
 #
-# Every service sits behind a Compose *profile* so a task starts only what it needs:
+# Every service sits behind a Compose *profile* so a task starts only what it
+# needs:
 #
 #     python scripts/dev.py up pg          # the MVP target, ~1 GB of RAM
-#     python scripts/dev.py down           # stops everything and removes the volumes
+#     python scripts/dev.py down           # stops everything and removes the
+# volumes
 #
-# The `oss` profile is the open-source-only stack (Postgres + MariaDB + OpenSearch + the mock API)
+# The `oss` profile is the open-source-only stack (Postgres + MariaDB +
+# OpenSearch + the mock API)
 # for machines with no Oracle/SQL Server/Elasticsearch licence:
 #
 #     docker compose --profile oss up -d   # or: python scripts/dev.py up oss
 #
-# A service may belong to several profiles (Compose spec, `services.<name>.profiles`; assumed
-# Compose file format: the spec, no top-level `version:` key, Docker Compose v2.20 or newer as
-# docs/dev-env.md requires). `pg` and `api` therefore belong to their own profile *and* to `oss`.
-# Nothing proprietary is in `oss`: Oracle, SQL Server and Elasticsearch keep their own profiles.
+# A service may belong to several profiles (Compose spec,
+# `services.<name>.profiles`; assumed
+# Compose file format: the spec, no top-level `version:` key, Docker Compose
+# v2.20 or newer as
+# docs/dev-env.md requires). `pg` and `api` therefore belong to their own
+# profile *and* to `oss`.
+# Nothing proprietary is in `oss`: Oracle, SQL Server and Elasticsearch keep
+# their own profiles.
 #
-# Conventions this file keeps, because integration tests and adapters rely on them:
-#   * no `latest` tag: every image is pinned to a major (or an exact patch) version;
-#   * every published port is bound to 127.0.0.1 on a non-default host port, so a locally
+# Conventions this file keeps, because integration tests and adapters rely on
+# them:
+#   * no `latest` tag: every image is pinned to a major (or an exact patch)
+# version;
+#   * every published port is bound to 127.0.0.1 on a non-default host port, so
+# a locally
 #     installed database is never shadowed and nothing listens on the network;
-#   * every service has a healthcheck, so `dev.py up` can wait for real readiness;
-#   * no credential is written here: the values live in `.env` (copy of `.env.example`), and a
-#     missing one makes Compose fail loudly instead of starting a service with a blank password.
+#   * every service has a healthcheck, so `dev.py up` can wait for real
+# readiness;
+#   * no credential is written here: the values live in `.env` (copy of
+# `.env.example`), and a
+#     missing one makes Compose fail loudly instead of starting a service with a
+# blank password.
 name: mdqm
 
 services:
-  # PostgreSQL 16: the MVP target. crm/billing/erp are three databases in one server, so the
+  # PostgreSQL 16: the MVP target. crm/billing/erp are three databases in one
+  # server, so the
   # cross-source conversions are testable with Postgres alone.
   pg:
     profiles: ["pg", "oss"]
@@ -39,10 +54,11 @@ services:
       - -c
       - track_io_timing=on
     environment:
-      POSTGRES_PASSWORD: ${MDQM_PG_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      POSTGRES_PASSWORD: ${MDQM_PG_PASSWORD:?required, see .env.example}
       POSTGRES_DB: crm
-      # The init script creates the other two databases and the read-only role from this value.
-      MDQM_RO_PASSWORD: ${MDQM_RO_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      # The init script creates the other two databases and the read-only role
+      # from this value.
+      MDQM_RO_PASSWORD: ${MDQM_RO_PASSWORD:?required, see .env.example}
       POSTGRES_INITDB_ARGS: --encoding=UTF8
       TZ: UTC
     ports:
@@ -58,15 +74,16 @@ services:
       start_period: 10s
     shm_size: 256mb
 
-  # Oracle Free in Thin mode. Slow first start (a few minutes) and the largest single consumer.
+  # Oracle Free in Thin mode. Slow first start (a few minutes) and the largest
+  # single consumer.
   oracle:
     profiles: ["oracle"]
     image: gvenzl/oracle-free:23-slim-faststart
     environment:
-      ORACLE_PASSWORD: ${MDQM_ORACLE_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      ORACLE_PASSWORD: ${MDQM_ORACLE_PASSWORD:?required, see .env.example}
       ORACLE_DATABASE: MDQM
       APP_USER: mdqm_ro
-      APP_USER_PASSWORD: ${MDQM_RO_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      APP_USER_PASSWORD: ${MDQM_RO_PASSWORD:?required, see .env.example}
       TZ: UTC
     ports:
       - "127.0.0.1:${MDQM_ORACLE_PORT:-51521}:1521"
@@ -80,14 +97,16 @@ services:
       start_period: 300s
     shm_size: 1gb
 
-  # SQL Server 2022 (Developer edition). The image has no mssql-tools, so the probe uses bash's
-  # /dev/tcp instead of sqlcmd: it proves the listener accepts a connection, nothing more.
+  # SQL Server 2022 (Developer edition). The image has no mssql-tools, so the
+  # probe uses bash's
+  # /dev/tcp instead of sqlcmd: it proves the listener accepts a connection,
+  # nothing more.
   mssql:
     profiles: ["mssql"]
     image: mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: ${MDQM_MSSQL_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      MSSQL_SA_PASSWORD: ${MDQM_MSSQL_PASSWORD:?required, see .env.example}
       MSSQL_PID: Developer
       TZ: UTC
     ports:
@@ -101,7 +120,8 @@ services:
       retries: 30
       start_period: 30s
 
-  # Elasticsearch 8.x, single node, security off (dev only). 1 GB heap on purpose: the default
+  # Elasticsearch 8.x, single node, security off (dev only). 1 GB heap on
+  # purpose: the default
   # would take 50% of the container memory and starve the other engines.
   es:
     profiles: ["es"]
@@ -117,15 +137,20 @@ services:
     volumes:
       - es-data:/usr/share/elasticsearch/data
     healthcheck:
-      # `green` is not required: a single node with one index reports `yellow` for a while.
-      test: ["CMD-SHELL", "curl -fsS 'http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=1s'"]
+      # `green` is not required: a single node with one index reports `yellow`
+      # for a while.
+      test:
+        - CMD-SHELL
+        - "curl -fsS 127.0.0.1:9200 >/dev/null"
       interval: 10s
       timeout: 10s
       retries: 30
       start_period: 60s
 
-  # The mock internal API from D04 (src/mdqm/testing/mock_api.py): a served OpenAPI document plus
-  # endpoints with an API key, filters, cursor paging and a 429. Also runs in process in unit tests;
+  # The mock internal API from D04 (src/mdqm/testing/mock_api.py): a served
+  # OpenAPI document plus
+  # endpoints with an API key, filters, cursor paging and a 429. Also runs in
+  # process in unit tests;
   # this service exists for the cases that need a real port.
   api:
     profiles: ["api", "oss"]
@@ -134,30 +159,38 @@ services:
       dockerfile: docker/api.Dockerfile
     image: mdqm/mock-api:dev
     environment:
-      MDQM_MOCK_API_KEY: ${MDQM_MOCK_API_KEY:?copy .env.example to .env (python scripts/dev.py env)}
+      MDQM_MOCK_API_KEY: ${MDQM_MOCK_API_KEY:?required, see .env.example}
       MDQM_MOCK_API_HOST: 0.0.0.0
       MDQM_MOCK_API_PORT: "8000"
       TZ: UTC
     ports:
       - "127.0.0.1:${MDQM_API_PORT:-58000}:8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as r;r.urlopen('http://localhost:8000/health', timeout=2)"
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 5s
 
-  # --- the open-source-only stack (`oss`) ------------------------------------------------
+  # --- the open-source-only stack (`oss`)
+  # ------------------------------------------------
 
-  # MariaDB 11 (GPL) as a *second SQL dialect*: MySQL-style quoting, DATETIME and DECIMAL, and one
-  # InnoDB table for the mutable/hist dataset. It is NOT Oracle and NOT T-SQL: it proves the
-  # compiler can emit a second dialect and the loader can push the world through it, nothing more.
+  # MariaDB 11 (GPL) as a *second SQL dialect*: MySQL-style quoting, DATETIME
+  # and DECIMAL, and one
+  # InnoDB table for the mutable/hist dataset. It is NOT Oracle and NOT T-SQL:
+  # it proves the
+  # compiler can emit a second dialect and the loader can push the world through
+  # it, nothing more.
   # The seed is generated from src/mdqm/testing/world.py by scripts/seed_oss.py.
   mariadb:
     profiles: ["oss"]
     image: mariadb:11.4.4
     environment:
-      MARIADB_ROOT_PASSWORD: ${MDQM_MARIADB_ROOT_PASSWORD:?copy .env.example to .env (python scripts/dev.py env)}
+      MARIADB_ROOT_PASSWORD: ${MDQM_MARIADB_ROOT_PASSWORD:?required}
       MARIADB_DATABASE: mdqm
       TZ: UTC
     ports:
@@ -166,17 +199,23 @@ services:
       - mariadb-data:/var/lib/mysql
       - ./docker/oss/maria:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      # The password is read inside the container, so it never appears in this file. `$$` is a
+      # The password is read inside the container, so it never appears in this
+      # file. `$$` is a
       # literal `$` for Compose.
-      test: ["CMD-SHELL", "mariadb-admin ping --protocol=tcp -h 127.0.0.1 -u root -p$$MARIADB_ROOT_PASSWORD"]
+      test:
+        - CMD-SHELL
+        - "mariadb-admin ping -h127.0.0.1 -u root -p$$MARIADB_ROOT_PASSWORD"
       interval: 5s
       timeout: 5s
       retries: 40
       start_period: 30s
 
-  # OpenSearch 2.x (Apache-2.0): the open-source stand-in for Elasticsearch. It serves the same
-  # REST API the repo's httpx-based search adapter speaks, so the adapter has something to run
-  # against without the Elastic licence. Single node, security off, 512 MB heap on purpose.
+  # OpenSearch 2.x (Apache-2.0): the open-source stand-in for Elasticsearch. It
+  # serves the same
+  # REST API the repo's httpx-based search adapter speaks, so the adapter has
+  # something to run
+  # against without the Elastic licence. Single node, security off, 512 MB heap
+  # on purpose.
   opensearch:
     profiles: ["oss"]
     image: opensearchproject/opensearch:2.17.1
@@ -194,20 +233,25 @@ services:
     volumes:
       - opensearch-data:/usr/share/opensearch/data
     ulimits:
-      # bootstrap.memory_lock needs an unlimited memlock limit, else the node refuses to start.
+      # bootstrap.memory_lock needs an unlimited memlock limit, else the node
+      # refuses to start.
       memlock:
         soft: -1
         hard: -1
     healthcheck:
       # `yellow` is enough: one node with one index is never green.
-      test: ["CMD-SHELL", "curl -fsS 'http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=1s'"]
+      test:
+        - CMD-SHELL
+        - "curl -fsS 127.0.0.1:9200 >/dev/null"
       interval: 10s
       timeout: 10s
       retries: 30
       start_period: 60s
 
-  # One-shot loader: puts the index template (with its alias), bulk-loads the generated NDJSON and
-  # then prints what exists. `restart: "no"` and no ports: it runs, reports, exits.
+  # One-shot loader: puts the index template (with its alias), bulk-loads the
+  # generated NDJSON and
+  # then prints what exists. `restart: "no"` and no ports: it runs, reports,
+  # exits.
   opensearch-init:
     profiles: ["oss"]
     image: curlimages/curl:8.11.1
@@ -222,7 +266,65 @@ services:
     entrypoint: ["sh", "/seeds/load.sh"]
     restart: "no"
 
+  # The server itself, from the image this repo builds. Nothing else in compose
+  # ran `mdqm`, so the
+  # first real start used to be in production. Opt-in, and it needs a source, so
+  # enable both:
+  #   docker compose --profile pg --profile server up -d --build
+  server:
+    profiles: ["server"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mdqm/server:dev
+    # The image makes /data, /cache and /semantic group-writable instead of
+    # owned by a fixed UID,
+    # so an arbitrary UID with GID 0 can write (that is what OpenShift assigns).
+    # Compose runs the
+    # declared non-root user with GID 0 for the same reason; without it the
+    # volume is read-only
+    # and the server dies with "unable to open database file".
+    user: "10001:0"
+    depends_on:
+      pg:
+        condition: service_healthy
+    environment:
+      MDQM_SERVER__HOST: 0.0.0.0
+      MDQM_SERVER__PORT: "8765"
+      # No sources yet: the PostgreSQL adapter (A02) is what makes one usable.
+      # Keeping this list
+      # empty is honest -- the server starts, serves /healthz and /mcp, and
+      # answers "no source"
+      # rather than pretending to have one. Fill it in with the shape
+      # SourceConfig declares:
+      #   [{"name":"crm","adapter":"postgresql","secret":"pg_ro_password",
+      #     "options":{"host":"pg","port":5432,"dbname":"crm"}}]
+      MDQM_SOURCES: "[]"
+      MDQM_PATHS__METADATA_DB: /data/metadata.sqlite
+      MDQM_PATHS__SEMANTIC_DIR: /semantic
+      MDQM_PATHS__CACHE_DIR: /cache
+      MDQM_SECRETS__DIR: /run/secrets
+      MDQM_TOKENS_FILE: /run/secrets/tokens.json
+    ports:
+      - "127.0.0.1:${MDQM_SERVER_PORT:-58765}:8765"
+    volumes:
+      - server-data:/data
+      - server-cache:/cache
+      - ./docker/server:/run/secrets:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as r;r.urlopen('http://localhost:8765/healthz')"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
 volumes:
+  server-data:
+  server-cache:
   pg-data:
   oracle-data:
   mssql-data:

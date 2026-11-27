@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 ENV_FILE = REPO_ROOT / ".env"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
-PROFILES = ("pg", "oracle", "mssql", "es", "api", "oss")
+PROFILES = ("pg", "oracle", "mssql", "es", "api", "oss", "server")
 """Compose profiles. `oss` is the open-source-only stack (Postgres + MariaDB + OpenSearch + api)."""
 HELP_PROFILES = ", ".join(PROFILES)
 
