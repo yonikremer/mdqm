@@ -217,6 +217,20 @@ class PlanInfo(MDQMModel):
     )
     uses_index: bool | None = None
     est_rows: float | None = Field(default=None, ge=0)
+    est_bytes: int | None = Field(
+        default=None,
+        ge=0,
+        description="Bytes the window would read, when a measured size profile answered.",
+    )
+    estimate_source: str | None = Field(
+        default=None,
+        description="'profile' when measured sizes answered (mdqm sizes measure), 'catalog' when "
+        "the source's own estimates did. Never silently one or the other.",
+    )
+    estimate_incomplete: bool = Field(
+        default=False,
+        description="A partition in the window reported no size, so est_rows is a lower bound.",
+    )
     pruning_proof: PruningProof = PruningProof.UNKNOWN
     notes: tuple[str, ...] = ()
 
@@ -676,6 +690,9 @@ def _plan(summary: PlanSummary | None, partition_plan: PartitionPlan | None) -> 
             partitions_total=static_total,
             partitions_if_fixed=None if estimate is None else estimate.label,
             est_rows=est_rows,
+            est_bytes=None if estimate is None else estimate.bytes,
+            estimate_source=None if estimate is None else estimate.estimated_from,
+            estimate_incomplete=False if estimate is None else estimate.incomplete,
             notes=notes,
         )
     return PlanInfo(
@@ -686,6 +703,9 @@ def _plan(summary: PlanSummary | None, partition_plan: PartitionPlan | None) -> 
         partitions_if_fixed=None if estimate is None else estimate.label,
         uses_index=summary.uses_index,
         est_rows=summary.est_rows,
+        est_bytes=None if estimate is None else estimate.bytes,
+        estimate_source=None if estimate is None else estimate.estimated_from,
+        estimate_incomplete=False if estimate is None else estimate.incomplete,
         pruning_proof=summary.pruning_proof,
         notes=notes,
     )
