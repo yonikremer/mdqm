@@ -13,6 +13,7 @@ from datetime import datetime
 import duckdb
 from sqlglot import exp
 
+from mdqm.sql.execution import run_local
 from mdqm.stats.association import choose_pairs, measure_association
 from mdqm.stats.measure import (
     DEFAULT_TOP_K,
@@ -227,7 +228,9 @@ def collect_duckdb(
         method = CollectionMethod.SAMPLE
         complete = False if covers_table is None else covers_table
         sampled = sample_rows
-    cursor = connection.execute(query)
+    # Our own generated statement over a table this process already holds: the local-engine
+    # chokepoint, not a driver call, so the one place that builds SQL stays the one place.
+    cursor = run_local(connection, query)
     description = cursor.description
     headers = [str(item[0]) for item in description] if description else names
     fetched = cursor.fetchall()
