@@ -2,7 +2,7 @@
   "generated_by": "scripts/gen_tool_schemas.py",
   "tools": [
     {
-      "description": "Rate a previous answer so the semantic layer learns which tables and measures work.\n\n    Call this once per answered question when the user says the answer was right or wrong. The\n    rating is queued, not applied: a human approves anything derived from it.\n    Example: feedback({\"query_id\": \"12\", \"ok\": false, \"corrected\": \"status S means suspended\"})\n    ",
+      "description": "Rate a previous answer so the semantic layer learns which tables and measures work.\n\nCall this once per answered question when the user says the answer was right or wrong. The\nrating is queued, not applied: a human approves anything derived from it.\nExample: feedback({\"query_id\": \"12\", \"ok\": false, \"corrected\": \"status S means suspended\"})",
       "inputSchema": {
         "properties": {
           "corrected": {
@@ -268,7 +268,7 @@
       }
     },
     {
-      "description": "Look up the tables, columns, values and measures a question is about. Call this first.\n\n    Returns the Context Pack (what matched, ranked, with what was omitted) and a spec skeleton built\n    from the best measure. Never guess a table, column or value name: ask here first. An empty pack\n    with a `hint` means nothing matched, which is not an error.\n    Example: find_data({\"question\": \"credit limit by customer status\"})\n    ",
+      "description": "Look up the tables, columns, values and measures a question is about. Call this first.\n\nReturns the Context Pack (what matched, ranked, with what was omitted) and a spec skeleton built\nfrom the best measure. Never guess a table, column or value name: ask here first. An empty pack\nwith a `hint` means nothing matched, which is not an error.\nExample: find_data({\"question\": \"credit limit by customer status\"})",
       "inputSchema": {
         "properties": {
           "question": {
@@ -1009,7 +1009,7 @@
       }
     },
     {
-      "description": "Page the rest of a result that `query` returned with a handle.\n\n    Call this only with a `handle` from a previous answer, never to re-run a query: the rows come\n    from the cached result, so a repeated call is cheap. Your own handles only; someone else's is\n    reported exactly like one that expired.\n    Example: get_more({\"result_handle\": \"h_8f21\", \"offset\": 100, \"limit\": 100})\n    ",
+      "description": "Page the rest of a result that `query` returned with a handle.\n\nCall this only with a `handle` from a previous answer, never to re-run a query: the rows come\nfrom the cached result, so a repeated call is cheap. Your own handles only; someone else's is\nreported exactly like one that expired.\nExample: get_more({\"result_handle\": \"h_8f21\", \"offset\": 100, \"limit\": 100})",
       "inputSchema": {
         "properties": {
           "limit": {
@@ -1266,7 +1266,7 @@
       }
     },
     {
-      "description": "List your own recent queries, search them, or show what a re-run would send.\n\n    Call this when the user refers to something asked before, to get a run `id` for `feedback`, or\n    with `rerun_id` to repeat an old question exactly: `rerun_mode` 'frozen' keeps the original time\n    window, 'relative' moves it to now. Only your own runs are listed.\n    Example: history({\"text\": \"credit limit\", \"limit\": 5}) or history({\"rerun_id\": 12,\n    \"rerun_mode\": \"relative\"})\n    ",
+      "description": "List your own recent queries, search them, or show what a re-run would send.\n\nCall this when the user refers to something asked before, to get a run `id` for `feedback`, or\nwith `rerun_id` to repeat an old question exactly: `rerun_mode` 'frozen' keeps the original time\nwindow, 'relative' moves it to now. Only your own runs are listed.\nExample: history({\"text\": \"credit limit\", \"limit\": 5}) or history({\"rerun_id\": 12,\n\"rerun_mode\": \"relative\"})",
       "inputSchema": {
         "properties": {
           "limit": {
@@ -2085,7 +2085,7 @@
       }
     },
     {
-      "description": "Run one query spec and get a summary, a small sample and a handle. This is the main tool.\n\n    Send `spec`, never SQL. The server lints it, prunes the partitions and the time window, picks\n    the source, and answers with `summary`, `sample` and `result_handle` (page it with `get_more`).\n    A `dry_run` in the spec stops after the plan; `fresh` skips the cache. Errors carry `code`,\n    `problem` and an exact `fix`.\n    Example: query({\"spec\": {\"from\": \"billing.accounts\", \"select\": [\"customer_status\"],\n    \"limit\": 5}})\n    ",
+      "description": "Run one query spec and get a summary, a small sample and a handle. This is the main tool.\n\nSend `spec`, never SQL. The server lints it, prunes the partitions and the time window, picks\nthe source, and answers with `summary`, `sample` and `result_handle` (page it with `get_more`).\nA `dry_run` in the spec stops after the plan; `fresh` skips the cache. Errors carry `code`,\n`problem` and an exact `fix`.\nExample: query({\"spec\": {\"from\": \"billing.accounts\", \"select\": [\"customer_status\"],\n\"limit\": 5}})",
       "inputSchema": {
         "$defs": {
           "Agg": {

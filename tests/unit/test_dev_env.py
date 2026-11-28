@@ -266,6 +266,20 @@ def test_dev_py_explains_a_missing_container_runtime(tmp_path: Path) -> None:
     assert dev.MISSING_DOCKER in result.stderr
 
 
+def test_status_rejects_an_unknown_profile() -> None:
+    """Profile names are still checked, including on Python 3.11 where argparse cannot."""
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [sys.executable, str(REPO_ROOT / "scripts" / "dev.py"), "status", "nope"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "nope" in result.stderr
+    assert "unknown profile" in result.stderr
+
+
 def test_find_docker_reports_none_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     dev = load_script("dev")
     monkeypatch.setattr(dev.shutil, "which", lambda _name: None)

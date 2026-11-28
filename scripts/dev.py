@@ -111,10 +111,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("down", help="stop every service and remove the volumes")
 
     status = sub.add_parser("status", help="show the state of the services")
+    # No choices= here. On Python 3.11, nargs='*' plus choices checks the default
+    # empty list as one value and rejects `status` with "invalid choice: []".
     status.add_argument(
         "profiles",
         nargs="*",
-        choices=PROFILES,
         metavar="profile",
         help=f"default: all ({HELP_PROFILES})",
     )
@@ -122,6 +123,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("env", help="create .env from .env.example if it is missing")
 
     args = parser.parse_args(argv)
+
+    if args.action == "status":
+        unknown = [name for name in args.profiles if name not in PROFILES]
+        if unknown:
+            parser.error(f"unknown profile(s): {', '.join(unknown)} (choose from {HELP_PROFILES})")
 
     if args.action == "env":
         return cmd_env()
