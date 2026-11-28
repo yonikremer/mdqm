@@ -664,9 +664,11 @@ class SemanticLayer(MDQMModel):
 
     @model_validator(mode="after")
     def _fill_version_hash(self) -> SemanticLayer:
-        if self.version_hash:
-            return self
-        return self.model_copy(update={"version_hash": compute_version_hash(self)})
+        if not self.version_hash:
+            # A top-level model validator must return self, so the frozen field is set in place
+            # rather than returning a copy (pydantic warns on, and does not support, a copy).
+            object.__setattr__(self, "version_hash", compute_version_hash(self))
+        return self
 
 
 def compute_version_hash(layer: SemanticLayer) -> str:
