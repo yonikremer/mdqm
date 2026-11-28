@@ -19,7 +19,7 @@ fast, before it completes. Everything else is secondary. Position of the three:
 |---|---|
 | size profile → query optimization | **done and measured** (§4a) |
 | fast feedback before completion | **unit-tested, not yet run against live services** — async job + poll, `progress/ASYNC-QUERY.md` (§4b) |
-| model endpoint (so A1+A2 can propose names, incl. Hebrew labels) | **not started** (§4c) |
+| model endpoint (so A1+A2 can propose names, incl. Hebrew labels) | **wired, labels proposed; the real endpoint unverified** — `progress/LLM-WIRING.md` (§4c) |
 
 ---
 
@@ -116,12 +116,17 @@ Two invariants worth keeping: **without sizes the behaviour is byte-for-byte the
 pins it), and **a partition the profile does not know falls back to the catalog**, so a partition
 created after last night's measurement is never estimated as free.
 
-Open items, in the order they matter: the `PartitionNote.FAT_PARTITION` note is declared but **not
-emitted** (one line in `plan_partitions`, needs the table's whole profile not just the touched
-partitions); **nothing schedules** `sizes measure` (not in the bootstrap pipeline, no cron); **only
-Postgres** reports sizes (Oracle/SQL Server/Elasticsearch return the capability as unsupported and the
-plan falls back, saying `estimate_source: "catalog"`); and **no benchmark** yet compares plan cost with
-and without the profile.
+Closed since: `PartitionNote.FAT_PARTITION` is emitted (median over the table's whole measured profile,
+names on `PartitionPlan.fat_partitions`); a `sizes` bootstrap stage schedules the measurement once a
+day per source (heavy: quiet window + per-source gate); Oracle, SQL Server and Elasticsearch have size
+readers behind the same `parse_sizes`. See `progress/SIZES-FOLLOWUP.md`.
+
+Open items, in the order they matter: the three new size readers have **never run against a live
+engine** (the privileges are the open question: Oracle segment grant for bytes, SQL Server
+`VIEW DATABASE STATE`, Elasticsearch alias visibility); `bootstrap run` with the new `sizes` stage is
+unit-tested only; `PartitionNote.SIZE_PROFILE_APPLIED` is still never emitted; the fat partitions' names
+reach `PartitionPlan.fat_partitions` but not yet `plan.notes` in `server/tools/query.py`; and **no
+benchmark** compares plan cost with and without the profile.
 
 ## 4b. Fast feedback before the query completes — implemented (_ASYNC-QUERY_)
 
@@ -150,22 +155,30 @@ Constraints to respect:
 * 5 acceptance tests in `tests/integration/test_acceptance_e2e.py` assert the blocking shape; they
   must keep passing (a `wait` mode) or be updated deliberately.
 
-### 4c. Model endpoint — not started
+### 4c. Model endpoint — wired (_LLM-WIRING_), real endpoint unverified
 
-A1+A2 runs but answers `no model client configured: nothing proposed`, so the semantic layer is still
-built by deterministic stages plus human labels. `mdqm/llm/` already has an OpenAI-compatible client and
-`FakeLLM`; what is missing is settings → client → `PipelineContext.llm` in `pipeline/cli.py`
-(`context_for` does not set it). Unknowns from `AGENTS.md` §9 stay unknown: the on-prem GLM endpoint is
-assumed OpenAI-compatible, its context window and tool-calling reliability unverified. There is **no
-endpoint in this environment**, so this can only be verified against `FakeLLM` here; say so in the note.
+`mdqm/llm/factory.py:model_client(settings)` is the one translation from `settings.model` to a client;
+`pipeline/cli.py:context_for` puts it on `PipelineContext.llm`, and `bootstrap run` prints
+`describe_model` **before** the stage list. Configure with `MDQM_MODEL__BASE_URL` / `MDQM_MODEL__MODEL`
+(env or `mdqm.yaml`); the key is a secret *reference* (`MDQM_SECRET_MODEL_API_KEY` or `secrets.dir`),
+resolved lazily on the first call, never logged, never in YAML. Nothing configured → no client, which is
+a supported deployment; half configured → no client plus one line naming the missing field.
 
-Once wired, the natural first target is **labels**: `SemanticLayer.labels` exists (§6) but nothing
-proposes into it, so Hebrew names are hand-written per thing.
+A1+A2 now proposes `SemanticLayer.labels` per table, column and measure (keyed `table:`/`column:`/
+`measure:`), i.e. the payload whose approval actually loads and that answers a Hebrew prompt (§6).
+Garbage words are refused (`RejectionCode.NOT_WORDS`), a per-key cap is counted in `applied_fixes`, and
+a model failure fails the stage instead of producing a green run that hid an outage.
+
+Unverified, and unverifiable here: there is no endpoint in this environment, so answer quality, context
+window and `response_format`/tool-calling support stay guesses; every test drives `FakeLLM`. A
+deployment must run `mdqm bootstrap run` against the real server and read the rejections. A
+`name`/`synonym` proposal still cannot be approved — it targets a `names` section `SemanticLayer` does
+not declare; that needs a design decision (see `progress/LLM-WIRING.md`, Deviations).
 
 ## 5. Bootstrap pipeline — proven end to end
 
 `available_stages()` orders what the caller built against one declared `STAGE_ORDER`
-(`D1+D2, D4, D5, D6, D7, D8, D10, A1+A2`); core imports no stage. `build_stages()` in
+(`D1+D2, D4, D5, D6, D7, D8, D10, A1+A2, sizes`); core imports no stage. `build_stages()` in
 `pipeline/cli.py` is the wiring: `registry.discover()` first, then adapters → catalogs → layer →
 OpenAPI documents → stage list. Which stage appears is **derived, never invented**, and anything
 undeliverable is named in the output.
@@ -281,22 +294,26 @@ Not done: nothing **proposes** labels (§4c), and A1+A2 has no target/validator 
 
 ## 11. Suggested order for the next session
 
-1. ~~**Async query handle + poll** (§4b)~~ — built (branch `task/async-query`); it still needs a run
-   against live services, so rebuild the image and run `tests/integration/test_async_query_e2e.py`
-   with `--require-services`.
-2. **Model endpoint** (§4c) — the third ask; verify with `FakeLLM` here and say that the real endpoint
-   is unverified.
-3. **Emit the fat-partition note** (§4a) — the numbers exist; the note needs the table's whole profile.
-4. **Schedule `sizes measure`** (§4a) — a bootstrap stage or a cron entry, so the profile is fresh.
-5. **Size readers for Oracle / SQL Server / Elasticsearch** (§4a) — each is one query per engine.
-6. **`pyright` in `scripts/check.py`** (§8) so the cleared backlog cannot grow back silently.
-7. **A proposal nobody answers** — 30 join candidates and 2 measure conversions sit pending with no
+1. **Run the async path against live services** (§4b) — rebuild the image and run
+   `tests/integration/test_async_query_e2e.py` with `--require-services`; nothing about the job/poll
+   shape has met a real Postgres yet.
+2. **The real model endpoint** (§4c) — wiring and label proposals are in, but only `FakeLLM` verified
+   them; run `mdqm bootstrap run` against the on-prem server and read what the validator rejected.
+3. **Live proof for the three new size readers** (§4a) — Oracle/SQL Server/Elasticsearch readers are
+   written and parse-tested; the privilege questions are open.
+4. **A `names` section** (§4c Deviations) — until the layer can hold a display name and a one-sentence
+   description, A1's first two fields pay for model calls whose answer cannot be approved.
+5. **`plan.notes` carries the fat partitions** (§4a) — the names exist on
+   `PartitionPlan.fat_partitions`; one line in `server/tools/query.py::_plan` exposes them.
+6. **A proposal nobody answers** — 30 join candidates and 2 measure conversions sit pending with no
    ageing or escalation.
+7. **`A10`** (P2) — a server image built with the `mssql` extra actually logging into SQL Server.
 
 ## 12. Where the history lives
 
-`progress/<TASK-ID>.md` is the ledger: 69 backlog tasks are `status: done`, plus
-`BOOTSTRAP-PIPELINE.md`, `SQLI-CHECKER.md`, `PYRIGHT-TESTS2.md`, `HEBREW-LABELS.md` and `SIZES.md`
-(`status: partial` — the measurement and the plan are wired; the note, the scheduler and the other
-engines' readers are not). `docs/DESIGN.md` is the design. The task board being closed does **not** mean
-every feature is proven end to end; §4b and §4c are features nobody has started.
+`progress/<TASK-ID>.md` is the ledger: the backlog tasks are `status: done` except `A10`, plus the
+notes written outside the board — `BOOTSTRAP-PIPELINE.md`, `SQLI-CHECKER.md`, `PYRIGHT-TESTS2.md`,
+`HEBREW-LABELS.md`, `SIZES.md`, `ASYNC-QUERY.md`, `LLM-WIRING.md`, `SIZES-FOLLOWUP.md` (the last three
+say `partial` only where a live service was needed to prove something). `docs/DESIGN.md` is the design.
+The task board being closed does **not** mean every feature is proven end to end: `A10`, the live async
+run, the real model endpoint and the three unproven size readers are the honest gaps.

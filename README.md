@@ -83,7 +83,12 @@ security off, so it has no read-only account; the search adapter still issues se
   that was built installs `libltdl7` (the library the driver needs on Debian) and loads it, and the
   host venv connected to SQL Server after the same library was installed. The extra itself was
   not selected for that image.
-- The on-prem model endpoint. It has only been spoken to through a mock transport.
+- The on-prem model endpoint. It has only been spoken to through a mock transport, so the label
+  proposals A1+A2 now write are unverified in quality (`progress/LLM-WIRING.md`).
+- The asynchronous query path (`query` with `mode: "async"` plus `get_more(query_id=…)`,
+  `progress/ASYNC-QUERY.md`). The blocking path is the one the live runs above exercised.
+- The size readers for Oracle, SQL Server and Elasticsearch (`progress/SIZES-FOLLOWUP.md`). Only
+  PostgreSQL's was measured against a real engine.
 
 `TASKS.md` holds the backlog and `progress/` holds one short report per finished task, including what
 each one could not verify.
