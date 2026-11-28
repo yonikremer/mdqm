@@ -91,6 +91,8 @@ ERROR_LIMIT: Final[int] = 400
 #: A section is a file stem, not a path -- the same rule :mod:`mdqm.semantic.writer` enforces. It is
 #: repeated here so a bad name fails *before* a commit has written anything.
 _SECTION_NAME: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_.-]+$")
+#: One directory level is allowed (``profiles/crm``): evidence the loader must not read as facts.
+_SECTION_PATH: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
 
 _INSERT_RUN: Final[str] = _statement(
     "INSERT INTO ",
@@ -499,10 +501,10 @@ class PipelineContext:
         Returns the path the file will have, relative to the semantic root, so a stage can name its
         own output in :attr:`StageReport.outputs` without knowing the root.
         """
-        if not _SECTION_NAME.match(section):
+        if not (_SECTION_NAME.match(section) or _SECTION_PATH.match(section)):
             raise ValueError(
                 f"{section!r} is not a section name: use letters, digits, '_', '-' or '.' "
-                "(a section is a file stem under generated/, never a path)"
+                "(one directory level is allowed, e.g. 'profiles/crm'; more is a path)"
             )
         self._pending[section] = dict(payload)
         return f"{GENERATED_DIR}/{section}.yaml"
@@ -512,7 +514,7 @@ class PipelineContext:
         if not self._pending:
             return ()
         for section in self._pending:
-            if not _SECTION_NAME.match(section):
+            if not (_SECTION_NAME.match(section) or _SECTION_PATH.match(section)):
                 raise ValueError(f"{section!r} is not a section name")
         written = tuple(
             write_generated(self.semantic_root, section, self._pending[section]).relative_to(

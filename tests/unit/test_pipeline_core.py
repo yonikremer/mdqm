@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from pydantic import BaseModel
@@ -48,6 +48,7 @@ from mdqm.pipeline.core import (
     run_pipeline,
 )
 from mdqm.pipeline.stages.mining import MINED_QUERY_TABLE, batch_digest, ingest
+from mdqm.sql.execution import run_local
 from mdqm.store.db import Store
 
 #: One instant for every test: 2026-05-01 10:00 UTC = 13:00 in Asia/Jerusalem (DST, so UTC+3).
@@ -155,14 +156,20 @@ def snapshot(root: Path) -> dict[str, tuple[int, bytes]]:
     }
 
 
+#: The ledger's table name, spelled out so the statements below are literals. Checked against the
+#: constant once, so a rename fails at import instead of leaving this helper reading nothing.
+_LEDGER: Final = "pipeline_run"
+assert PIPELINE_RUN_TABLE == _LEDGER, "the ledger table was renamed: update the statements here"
+
+_RUNS_ALL: Final = "SELECT * FROM pipeline_run ORDER BY id"
+_RUNS_FOR_STAGE: Final = "SELECT * FROM pipeline_run WHERE stage = ? ORDER BY id"
+
+
 def rows(store: Store, stage: str | None = None) -> list[Any]:
     """The pipeline ledger, oldest first, optionally for one stage."""
-    sql = f"SELECT * FROM {PIPELINE_RUN_TABLE}"
-    params: tuple[object, ...] = ()
-    if stage is not None:
-        sql += " WHERE stage = ?"
-        params = (stage,)
-    return list(store.connect().execute(sql + " ORDER BY id", params))
+    statement = _RUNS_ALL if stage is None else _RUNS_FOR_STAGE
+    params: tuple[object, ...] = () if stage is None else (stage,)
+    return list(run_local(store.connect(), statement, params))
 
 
 # --- hashing --------------------------------------------------------------------------------
@@ -550,8 +557,14 @@ def test_a_section_name_cannot_escape_generated(ctx: PipelineContext) -> None:
     with pytest.raises(ValueError, match="not a section name"):
         ctx.write_generated("../../etc/passwd", {"x": 1})
     with pytest.raises(ValueError, match="not a section name"):
-        ctx.write_generated("nested/profile", {"x": 1})
+        ctx.write_generated("a/b/c", {"x": 1})
     assert ctx.pending == ()
+
+
+def test_one_directory_level_is_allowed_for_evidence(ctx: PipelineContext) -> None:
+    """``profiles/crm`` is evidence the loader must not read as a layer fact."""
+    assert ctx.write_generated("profiles/crm", {"x": 1}) == "generated/profiles/crm.yaml"
+    assert ctx.pending == ("profiles/crm",)
 
 
 def test_a_context_can_read_a_committed_section(ctx: PipelineContext) -> None:

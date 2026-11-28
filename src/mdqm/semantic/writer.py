@@ -26,6 +26,9 @@ from mdqm.semantic.loader import GENERATED_DIR
 __all__ = ["update_curated", "write_generated"]
 
 _SECTION_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+#: A section may name **one** subdirectory: ``profiles/crm`` is evidence kept beside the layer, and
+#: the loader only reads ``generated/*.yaml``, so a directory is how a stage says "not a fact".
+_SECTION_PATH = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
 
 _HEADER = "# Written by mdqm's bootstrap pipeline. Do not edit: every run replaces this file.\n"
 
@@ -33,12 +36,17 @@ _HEADER = "# Written by mdqm's bootstrap pipeline. Do not edit: every run replac
 def write_generated(root: Path, section: str, payload: Mapping[str, Any]) -> Path:
     """Write ``root/generated/<section>.yaml`` and never touch ``root/curated/``.
 
-    ``section`` is a file stem, not a path: a name that could escape the directory is rejected
-    instead of silently writing outside the semantic tree.
+    ``section`` is a file stem or one directory level below ``generated/`` (``profiles/crm``), never a
+    path that could escape the tree: the loader reads only ``generated/*.yaml``, so a directory is how
+    a stage keeps evidence *beside* the layer instead of inventing fields the layer would refuse.
     """
-    if not _SECTION_NAME.match(section):
-        raise ValueError(f"{section!r} is not a file name: use letters, digits, '_', '-', '.'")
+    if not (_SECTION_NAME.match(section) or _SECTION_PATH.match(section)):
+        raise ValueError(
+            f"{section!r} is not a file name: use letters, digits, '_', '-', '.' "
+            "(or one directory level, e.g. 'profiles/crm')"
+        )
     path = root / GENERATED_DIR / f"{section}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
     _write_text(path, dump(payload, header=_HEADER))
     return path
 

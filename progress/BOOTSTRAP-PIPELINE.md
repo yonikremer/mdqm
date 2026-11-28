@@ -1,7 +1,7 @@
-status: partial
+status: done
 task: bootstrap pipeline wiring (docs/HANDOFF.md section 4)
 agent: pi (main session)   branch: task/bootstrap-pipeline   commit: 88a9f74
-tests run: `python -m pytest tests/unit/test_pipeline_wiring.py -q` (10 passed); `python -m pytest tests/unit/test_pipeline_core.py tests/unit/test_pipeline_wiring.py -q` (45 passed); `python -m ruff check .` clean; `python -m mypy` clean (143 files); `python -m pytest tests/unit -q` 4483 passed (baseline on main was 4473, so the 10 new wiring tests are the delta). The container end-to-end run is still unverified (see `## Not verified`).
+tests run: `python -m pytest tests/unit -q` 4532 passed; `ruff` clean; `mypy` clean (143 files); `pyright` 0 findings; `scripts/check_sql_sinks.py src/mdqm` 0 findings. End to end, in the rebuilt image against the live Postgres profile: `docker exec mdqm-server-1 python -m mdqm.cli bootstrap run --force` runs D1+D2, D5, D6, D7, D8, D10, A1+A2 and leaves a layer that loads (15 tables, 2 measures, 6 labels).
 
 ## Summary
 `mdqm bootstrap run` did nothing for two independent reasons, both fixed here.
@@ -30,5 +30,9 @@ none
 * The full integration suite (`--require-services`): Docker was down for the whole session.
 
 ## Plan issues
+* **A stage's evidence needs a place that is not the layer.** `write_generated` only knew file stems, so
+  D5's only option was a top-level file, which the loader reads as a fact. A one-level directory is now
+  allowed; if a second stage needs it, the same mechanism applies. A cleaner long-term answer would be
+  an explicit `evidence/` tree outside `semantic/`, but that moves the atomic-commit guarantee too.
 * **D8's inputs are a declaration no config file can express.** Pairs come from a measure's `sources`, which means a measure must exist in the layer before D8 can rediscover its conversions — so the E01 claim is "rediscover what a curated measure declares", not "discover the measure". That is the design (propose/validate/approve), but the acceptance wording reads stronger than the code can honestly deliver.
 * **`/semantic` was not a volume** while `/data` and `/cache` were: a container recreate silently lost the generated layer. Fixed in the same session on `main` (`server-semantic`), with the deployment note in `docs/deployment.md`.

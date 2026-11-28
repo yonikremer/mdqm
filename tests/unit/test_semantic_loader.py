@@ -724,8 +724,21 @@ def test_written_generated_facts_load_back(tmp_path: Path) -> None:
 
 
 def test_write_generated_refuses_a_name_that_escapes_the_directory(tmp_path: Path) -> None:
+    """One directory level is allowed (evidence beside the layer); a path is not."""
     with pytest.raises(ValueError, match="not a file name"):
         write_generated(tmp_path, "../escape", {})
+    with pytest.raises(ValueError, match="not a file name"):
+        write_generated(tmp_path, "a/b/c", {})
+
+
+def test_write_generated_keeps_evidence_out_of_the_layer(tmp_path: Path) -> None:
+    """``generated/profiles/crm.yaml`` is written, and the loader ignores it, so a profile can never
+    make the layer unloadable (measured: it did, and ``/context`` went with it)."""
+    write_generated(tmp_path, "profiles/crm", {"source": "crm", "tables": []})
+    write_generated(tmp_path, "tables", {"tables": {"crm.customers": {"key": ["cust_id"]}}})
+
+    assert (tmp_path / "generated" / "profiles" / "crm.yaml").is_file()
+    assert list(load(tmp_path).tables) == ["crm.customers"]
 
 
 def test_update_curated_preserves_comments(tmp_path: Path) -> None:

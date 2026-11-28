@@ -751,7 +751,13 @@ class ProfilingStage:
         )
 
     def run(self, ctx: PipelineContext) -> StageReport:
-        """Measure every selected source and buffer one ``generated/profile_<source>.yaml`` each."""
+        """Measure every selected source and buffer one ``generated/profiles/<source>.yaml`` each.
+
+        Under a subdirectory on purpose: a profile is *evidence* for a later proposal, not a fact the
+        layer declares. A profile at ``generated/`` top level made the whole layer unloadable -- the
+        loader merges every file there into one document, and ``source``/``captured_at``/``notes`` are
+        not layer fields. Measured: before this, a single bootstrap run broke ``/context``.
+        """
         if not ctx.force and not quiet_allows(ctx.quiet_windows, ctx.exec_ts):
             raise QuietWindowClosed(self._refusal(ctx))
         selected = (ctx.source,) if ctx.source is not None else self.sources
@@ -1116,6 +1122,6 @@ def _rows_of(batch: pa.RecordBatch) -> list[Mapping[str, Any]]:
 
 
 def _section(source: str) -> str:
-    """The generated section name for a source: its name, made safe for a file stem."""
+    """The generated section for a source: ``profiles/<slug>``, evidence beside the layer."""
     slug = re.sub(r"[^A-Za-z0-9_.-]", "_", source).strip(".") or "source"
-    return f"profile_{slug}"
+    return f"profiles/{slug}"

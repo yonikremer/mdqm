@@ -121,7 +121,7 @@ def _sheets(
     assert result.reports[0].status is StageStatus.RAN, result.describe()
     sheets: dict[str, dict[str, Any]] = {}
     for source in adapters:
-        path = tmp_path / "semantic" / "generated" / f"profile_{source}.yaml"
+        path = tmp_path / "semantic" / "generated" / "profiles" / f"{source}.yaml"
         sheets[source] = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
     return sheets
 
@@ -219,7 +219,7 @@ def test_hebrew_text_is_profiled_without_mojibake(tmp_path: Path, store: Store, 
         )
         shape = _column(sheets["crm"], "customers_crm", "full_name")["format"]
         assert shape["kind"] == FormatKind.LETTERS
-        rendered = (tmp_path / "semantic" / "generated" / "profile_crm.yaml").read_text(
+        rendered = (tmp_path / "semantic" / "generated" / "profiles" / "crm.yaml").read_text(
             encoding="utf-8"
         )
         assert "\\u" not in rendered
@@ -581,7 +581,7 @@ def test_detect_granularity_tables(
     else:
         assert detected is not None
         assert detected.value == granularity
-        assert detected.share == pytest.approx(share)  # type: ignore[arg-type]
+        assert detected.share == pytest.approx(share)
 
 
 def test_detect_granularity_ignores_a_single_stray_value() -> None:
@@ -755,7 +755,7 @@ def test_two_runs_on_the_same_data_produce_the_same_fact_sheet(tmp_path: Path, w
                 tables=("customers_crm",),
             )
             rendered.append(
-                (root / "semantic" / "generated" / "profile_crm.yaml").read_text(encoding="utf-8")
+                (root / "semantic" / "generated" / "profiles" / "crm.yaml").read_text(encoding="utf-8")
             )
         finally:
             adapter.close()
@@ -806,7 +806,7 @@ def test_the_report_counts_what_was_measured_and_what_was_left_out(
         assert report.counts["tables"] >= 1
         assert report.counts["columns"] >= 1
         assert report.counts["sampled_tables"] >= 1
-        assert report.outputs == ("generated/profile_crm.yaml",)
+        assert report.outputs == ("generated/profiles/crm.yaml",)
         assert report.inputs_hash
     finally:
         adapter.close()
