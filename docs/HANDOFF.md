@@ -18,7 +18,7 @@ fast, before it completes. Everything else is secondary. Position of the three:
 | ask | state |
 |---|---|
 | size profile → query optimization | **done and measured** (§4a) |
-| fast feedback before completion | **not started** — design agreed: async handle + poll (§4b) |
+| fast feedback before completion | **unit-tested, not yet run against live services** — async job + poll, `progress/ASYNC-QUERY.md` (§4b) |
 | model endpoint (so A1+A2 can propose names, incl. Hebrew labels) | **not started** (§4c) |
 
 ---
@@ -123,7 +123,11 @@ Postgres** reports sizes (Oracle/SQL Server/Elasticsearch return the capability 
 plan falls back, saying `estimate_source: "catalog"`); and **no benchmark** yet compares plan cost with
 and without the profile.
 
-### 4b. Fast feedback before the query completes — not started
+## 4b. Fast feedback before the query completes — implemented (_ASYNC-QUERY_)
+
+The paragraphs below are the agreement; the code now does it. `query` takes `mode: "blocking"`
+(the default, unchanged) or `"async"`; the state lives in the `query_job` table (migration 0011) and
+`progress/ASYNC-QUERY.md` records what is verified and what is not.
 
 Today `query` blocks until the whole result is in; the only early exit is a `dry_run` spec (plan +
 estimate, no rows). The agreed design (owner's choice):
@@ -275,7 +279,9 @@ Not done: nothing **proposes** labels (§4c), and A1+A2 has no target/validator 
 
 ## 11. Suggested order for the next session
 
-1. **Async query handle + poll** (§4b) — the owner's second ask, design already agreed.
+1. ~~**Async query handle + poll** (§4b)~~ — built (branch `task/async-query`); it still needs a run
+   against live services, so rebuild the image and run `tests/integration/test_async_query_e2e.py`
+   with `--require-services`.
 2. **Model endpoint** (§4c) — the third ask; verify with `FakeLLM` here and say that the real endpoint
    is unverified.
 3. **Emit the fat-partition note** (§4a) — the numbers exist; the note needs the table's whole profile.

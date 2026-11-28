@@ -219,6 +219,14 @@ Identical concurrent calls are coalesced (single flight).
 
 - Context Pack in every answer and error, and from the client hook: tables, values, approved joins, time column and partition key, approved example specs. bm25 ranked, default budget 1,500 tokens, relevance threshold so non-data prompts get nothing.
 - Five coarse tools: `find_data`, `query`, `get_more`, `history`, `feedback`. `query` does most of the work.
+- Long queries answer early (`mode: "async"`): `query` returns `status: "started"`, a `query_id` and the
+  plan (partitions, estimated rows/bytes), the work continues on a job thread, `get_more(query_id=…)`
+  reports phase/`rows_read`/`partitions_done` (null until the source's own plan said what it will
+  scan) and, when done, the same `summary` + `sample` + `result_handle` a blocking call returns; the
+  same call with `cancel: true` asks the governor to stop, which calls the adapter's own `cancel` on
+  the live stream. Blocking stays the default. The two references are separate fields on purpose:
+  `result_handle` pages rows that exist, `query_id` watches work that is still running (a `j_` id),
+  and a history run id stays `q_`/`<n>`; each namespace keeps its own prefix.
 - Default time window and enforced pruning; EXPLAIN gate (expensive query gets a suggested fix, not a run).
 - Semaphores per source and user, quotas, row/byte caps; result = summary + sample + handle (`get_more` pages).
 - Feedback to the agent: error with exact `fix`, `applied_fixes` on every auto-correction.
