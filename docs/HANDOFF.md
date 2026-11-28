@@ -129,17 +129,23 @@ Design (agreed with the owner, do not re-litigate):
 **Unverified:** `tests/integration --require-services`. The loaders' emitted DDL did not change (the
 conversions were mechanical), but that is a claim until it runs against real services.
 
-## 6. `/context` and Hebrew: a real gap, and it is a model question
+## 6. `/context` and Hebrew: decided, and implemented
 
-The endpoint works: English prompts return 500–1100 characters of measures, joins, value maps and
-table facts. Hebrew returns `""` — because the only place the layer can hold Hebrew today is
-`value_maps.synonyms`. "פעיל" and "עזב" match; "מסגרת אשראי ממוצעת" matches nothing, since a measure
-and a table have no name or label per language.
+A Hebrew prompt used to answer `""` because `value_maps.synonyms` was the only section that could
+hold a Hebrew word; a measure or a table had no name in any language but the source's.
 
-**Decision needed from you:** should `Measure` and `TableSemantics` carry per-language labels
-(`he`/`en`) that the context index matches, or is a Hebrew question expected to go through value
-synonyms and English identifiers only? The code cannot pick for you, and inventing a field name would
-be a design change.
+**Decided and shipped** (`progress/HEBREW-LABELS.md`): the semantic layer has a `labels` section —
+the deployment's own words for a thing, keyed `table:<source.table>`, `measure:<name>` or
+`column:<qualified>`, with a list of words per key. The context index reads it from the layer itself
+(a caller can still override per key), a key that names nothing is refused at build time, and labels
+enter `version_hash`, so changing a word invalidates the index. Nothing is language-specific: the same
+field carries a Hebrew name, an internal nickname or an abbreviation.
+
+Measured on `examples/semantic_example.yaml`: `מסגרת אשראי ממוצעת לפי סטטוס` went from 0 to 5 items;
+the English question is unchanged; a prompt naming nothing still injects nothing.
+
+What is **not** done: A1+A2 proposes names but has no target/validator for a label, so Hebrew labels
+are hand-written until that proposal flow grows one.
 
 ## 7. Deployment facts and gaps
 
@@ -161,14 +167,15 @@ be a design change.
 * Five rules are **ratcheted** in `pyproject.toml` with counts and reasons (`PERF401`, `BLE001`,
   `TRY004`, `RUF043`, `DTZ001`). `TRY003` and `RUF001-3` are off with reasons. Burn the ratchet down;
   do not add to it without a count and a reason.
-* **pyright** still reports findings, almost all in `tests/`: literals where pydantic wants enums or
-  typed models, fixtures annotated `-> X` that are generators, and doubles that do not satisfy their
-  protocol. Measure with `python -m pyright`; none of it gates CI.
-  `progress/PYRIGHT-TESTS2.md` records what was cleared and lists what is left, file by file. The one
-  structural fix already landed: `SourceAdapter` no longer requires the four optional methods (they
-  are `OptionalSourceMethods`), so the type model now matches `REQUIRED_METHODS` and the probe.
-  A worktree needs its own `pyrightconfig.json` (`venvPath` pointing at the main checkout), because
-  the repo config excludes `.worktrees` — delete that file before committing.
+* **pyright reports nothing** (`python -m pyright` → 0 errors, 0 warnings). Getting there changed
+  `src` in three ways worth knowing: `SourceAdapter` no longer requires the four optional methods
+  (they are `OptionalSourceMethods`), `mdqm.testing.loaders` imports its engines lazily so a
+  deployment without an extra can still import the package, and `ConversionStage.pairs` is a public
+  read-only property. `progress/PYRIGHT-TESTS2.md` has the detail.
+  pyright is **not** in `scripts/check.py`, so this can grow back: adding it is one line plus a
+  decision about the latency. A worktree needs its own `pyrightconfig.json` (`venvPath` pointing at
+  the main checkout), because the repo config excludes `.worktrees` — delete that file before
+  committing.
 
 ## 9. Traps that cost time (avoid repeating them)
 
@@ -196,16 +203,16 @@ be a design change.
 
 1. **Run the bootstrap end to end** (§4) — the last unproven acceptance claim, and the command is
    written out for you.
-2. **Finish the pyright debt in `tests/`** (§8) — the remainder is listed per file in
-   `progress/PYRIGHT-TESTS2.md`; every entry is the same shape as the classes already cleared.
-3. **Decide the Hebrew labelling question** (§6), then either extend the layer models or document that
-   Hebrew questions are matched through value synonyms only.
-4. Re-run `tests/integration --require-services` (§5) once Docker is back, to turn the loader claim
-   into a measurement.
+2. **Re-run `tests/integration --require-services`** (§5) once Docker is back, to turn the loader and
+   cache claims into measurements.
+3. **Give A1+A2 a label target** (§6): the layer can hold a per-thing word list now, but nothing
+   proposes into it, so Hebrew labels are hand-written.
+4. **Add `pyright` to `scripts/check.py`** (§8) so the cleared backlog cannot grow back silently.
 
 ## 11. Where the history lives
 
 `progress/<TASK-ID>.md` is the ledger: 69 backlog tasks are `status: done`, plus
-`BOOTSTRAP-PIPELINE.md` and `SQLI-CHECKER.md` from this session. The task board being closed does not
+`BOOTSTRAP-PIPELINE.md` (partial: the end-to-end run is unproven), `SQLI-CHECKER.md`,
+`PYRIGHT-TESTS2.md` and `HEBREW-LABELS.md` from this session. The task board being closed does not
 mean every feature is proven end to end — §4 and §5 are the proof that the two are not the same
 thing. `docs/DESIGN.md` is the design.
