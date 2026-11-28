@@ -57,35 +57,33 @@ A dropped row is never a silent row.
 ## Status: honest
 
 This is an early build, and it is built so that every claim can be checked by running something.
+The ledger for the live run is `progress/LIVE-SERVICES.md`.
 
-**Verified against real services** (Docker Desktop, real containers; the commands are in
-`docs/dev-env.md`, `docs/deployment.md` and each `progress/*.md`):
+**Proven against real services** (`python -m pytest tests/integration --require-services`, Docker
+29.1.3, the commands in `docs/dev-env.md`):
 
-- **PostgreSQL**: the D03 schema loads (three databases, monthly range partitions, a read-only role
-  that the server itself refuses to write through), the A02 adapter passes the conformance kit, and
-  the canonical cross-source question -- average credit limit by status, with the 5000 half-up
-  rounding and the erp division-by-ten form -- reproduces ground truth on the real database.
-  `tests/integration/test_postgres_e2e.py` answers it three ways: the compiled spec, hand-written
-  SQL, and E01's offline answer.
-- **Elasticsearch**: monthly indices, the alias, the index template and the bulk load run against a
-  real node; the search adapter is exercised against the same data.
-- **The container**: `docker build` succeeds, the image runs as a non-root user with GID 0 (the
-  OpenShift pattern), `GET /healthz` answers, `mdqm probe` reaches the database, and a first boot
-  with no semantic layer starts and says so instead of crash-looping.
-- **The claims**: `tests/integration/test_claims_e2e.py` asserts each problem this README opens with
-  -- the rounding, the refused query with zero source calls, the cache hit with no new fetch, the
-  late-arriving row kept by the derived bound, the audited refusal, the context pack inside its
-  budget, and the governor's concurrency cap with a real cancellation.
-- **Benchmarks**: `scripts/bench.py` measures each stage and asserts only invariants; the model
-  benchmark (`scripts/bench_glm.py`) scores a real weak model's answers against E01's ground truth.
+| service | what was proven |
+| --- | --- |
+| PostgreSQL 16 | three databases, the read-only role (SQLSTATE 25006 and 42501), partitions, stats, the cross-source credit-limit answer through the MCP client, cache, the refused unbounded scan, column-share collection (`test_stats_postgres.py`) |
+| Oracle Free 23ai | seed, interval partitions, read-only account (ORA-41900) and read-only transaction (ORA-01456), the adapter conformance kit |
+| SQL Server 2022 | seed, partition function/scheme, read-only login (error 229), `SHOWPLAN`, Query Store, the adapter conformance kit |
+| Elasticsearch 8.15.3 | monthly indices, alias, search-only adapter |
+| Mock OpenAPI | the compose container on port 58000: open `/health`, key required, POST not served, planted USD rates |
+| MariaDB 11.4 + OpenSearch 2.17 | the `oss` profile: `mdqm_ro` can `SELECT` and is refused `CREATE` (error 1142); the usage-events alias and document count match the small world |
+| Server image | `docker build` succeeds; Compose runs it as uid 10001 / gid 0 against the three Postgres databases; `tests/integration/test_acceptance_e2e.py` is 5 passed on port 58765. The same image started as uid 1000990000 / gid 0 (OpenShift's arbitrary-uid pattern), read a mode-0440 group-0 token file, answered `GET /healthz`, and wrote under `/data` |
 
-**Not proven yet** (each is a named task, not a guess):
+Read-only holds at the database on every dialect that was started: the account is denied the
+privilege, and (where the engine has it) a read-only transaction is a second refusal. Elasticsearch
+and the mock API refuse writes at the HTTP method. OpenSearch in the `oss` profile runs with
+security off, so it has no read-only account; the search adapter still issues search requests only.
 
-- The MCP `query` tool that ties the compiled pipeline together (`M03`/`M04`) and the end-to-end
-  acceptance that runs it over real PostgreSQL (`E03`) are still open. Until they land, "end to end"
-  means the pipeline, not the tool surface.
-- Oracle and SQL Server support is written and unexercised (`D05`/`D06`, `A07`/`A08`).
-- The on-prem model endpoint has only been spoken to through a mock transport.
+**Not proven on a live service in that run:**
+
+- A server image built with the `mssql` extra actually logging into SQL Server. The image that
+  was built installs `libltdl7` (the library the driver needs on Debian) and loads it, and the
+  host venv connected to SQL Server after the same library was installed. The extra itself was
+  not selected for that image.
+- The on-prem model endpoint. It has only been spoken to through a mock transport.
 
 `TASKS.md` holds the backlog and `progress/` holds one short report per finished task, including what
 each one could not verify.

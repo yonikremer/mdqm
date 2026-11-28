@@ -372,6 +372,9 @@ def test_oss_search_settings_are_single_node_and_secure_by_dev_only_switch() -> 
 
 def test_mariadb_init_hooks_and_loader_are_wired() -> None:
     services = compose_services()
+    # 10-readonly-user.sh reads this from the container environment. Without the pass-through
+    # the entrypoint exits during init and the read-only account is never created.
+    assert "MDQM_RO_PASSWORD" in str(services["mariadb"]["environment"]["MDQM_RO_PASSWORD"])
     mariadb_mounts = [str(volume) for volume in services["mariadb"]["volumes"]]
     assert any("docker/oss/maria:/docker-entrypoint-initdb.d:ro" in m for m in mariadb_mounts)
     init = services["opensearch-init"]

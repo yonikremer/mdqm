@@ -235,6 +235,20 @@ def test_read_only_login_can_read(seed: Seed) -> None:
     assert row is not None and row[0] == seed.world.config.event_count
 
 
+def test_read_only_login_can_capture_a_plan(seed: Seed) -> None:
+    """``GRANT SHOWPLAN`` is part of the read-only login: explain has nothing to read without it.
+
+    ``SET SHOWPLAN_XML ON`` itself succeeds for anyone. The permission is checked when the
+    statement is compiled, so the proof is a plan document, not the SET.
+    """
+    with connect(seed.target, read_only=True, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute("SET SHOWPLAN_XML ON")
+        cur.execute("SELECT 1 AS one")
+        row = cur.fetchone()
+        cur.execute("SET SHOWPLAN_XML OFF")
+    assert row is not None and "ShowPlanXML" in str(row[0])
+
+
 @pytest.mark.parametrize(
     ("statement", "code", "needle"),
     [

@@ -105,6 +105,14 @@ RUN groupadd --gid 10001 mdqm \
     && chgrp -R 0 /data /cache /semantic \
     && chmod -R g=u /data /cache /semantic
 
+# mssql-python's bundled libodbcinst.so.2 is linked against libltdl.so.7, which the wheel does
+# not ship. Without it every SQL Server connection fails with "Failed to load the driver" on
+# Debian/Ubuntu, including this image when it is built with the mssql extra. Installed here, at
+# build time, so the runtime stage still has no pip and no package index.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libltdl7 \
+    && rm -rf /var/lib/apt/lists/*
+
 # The venv only: no compiler, no build tools, no wheels, no pip in the runtime layer.
 COPY --from=builder /opt/venv /opt/venv
 

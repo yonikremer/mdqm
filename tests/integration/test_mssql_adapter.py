@@ -76,13 +76,15 @@ NOW: Final = datetime(2026, 1, 1, tzinfo=UTC)
 
 LIMITS: Final = Limits(timeout_s=20.0, max_rows=100_000, max_bytes=50_000_000, max_partitions=8)
 
-#: A read that keeps the server busy past any deadline here: a three-way cross join is 125 billion
-#: rows, so it cannot finish before the watchdog fires. It must be a *read* -- since the execution
-#: chokepoint guards every statement, only a read can reach the driver at all, which is the point of
-#: the guard and the reason this is no longer a ``WAITFOR DELAY``.
+#: A read that keeps the server busy past any deadline here. ``COUNT_BIG(*)`` of this cross join is
+#: not enough: SQL Server rewrites it to the product of the three cardinalities and answers in
+#: about half a second, which is the same size as ``timeout_s`` and flakes. A checksum of every
+#: triple cannot be answered from the cardinalities, so the scan is still running when the
+#: watchdog fires. It must be a *read* -- the execution chokepoint guards every statement, so only
+#: a read can reach the driver, which is why this is not a ``WAITFOR DELAY``.
 SLOW_SQL: Final = (
-    "SELECT COUNT_BIG(*) AS n FROM dbo.usage_events a "
-    "CROSS JOIN dbo.usage_events b CROSS JOIN dbo.usage_events c"
+    "SELECT CHECKSUM_AGG(BINARY_CHECKSUM(a.event_id, b.event_id, c.event_id)) AS n "
+    "FROM dbo.usage_events a CROSS JOIN dbo.usage_events b CROSS JOIN dbo.usage_events c"
 )
 
 #: A filter on the partition key as a ``datetime2`` literal: prunable to two of eighteen partitions.

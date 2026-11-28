@@ -9,6 +9,7 @@ the compose services cannot be started on a machine without Docker. Starting the
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -201,6 +202,43 @@ def test_env_example_holds_only_throwaway_dev_credentials() -> None:
     assert re.search(r"[A-Z].*[a-z0-9]", values["MDQM_MSSQL_PASSWORD"])
     assert re.search(r"[^A-Za-z0-9]", values["MDQM_MSSQL_PASSWORD"])
     assert not values["MDQM_ORACLE_PASSWORD"][0].isdigit()
+
+
+def test_env_creates_server_secrets_once_and_does_not_overwrite(tmp_path: Path) -> None:
+    """`dev.py env` must produce the files the server profile mounts, and leave a rotation alone."""
+    dev = load_script("dev")
+    server = tmp_path / "docker" / "server"
+    server.mkdir(parents=True)
+    example = server / "tokens.example.json"
+    example.write_text('{"tokens":[{"token":"throwaway","user_id":"dev"}]}\n', encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text("MDQM_RO_PASSWORD=MqmDevReadOnly2026\n", encoding="utf-8")
+    tokens = server / "tokens.json"
+    secret = server / "pg_ro_password"
+    originals = {
+        "SERVER_DIR": dev.SERVER_DIR,
+        "TOKENS_EXAMPLE": dev.TOKENS_EXAMPLE,
+        "TOKENS_FILE": dev.TOKENS_FILE,
+        "PG_RO_SECRET": dev.PG_RO_SECRET,
+        "ENV_FILE": dev.ENV_FILE,
+    }
+    dev.SERVER_DIR = server
+    dev.TOKENS_EXAMPLE = example
+    dev.TOKENS_FILE = tokens
+    dev.PG_RO_SECRET = secret
+    dev.ENV_FILE = env_file
+    try:
+        dev.ensure_server_secrets()
+        assert json.loads(tokens.read_text(encoding="utf-8"))["tokens"][0]["user_id"] == "dev"
+        assert secret.read_text(encoding="utf-8").strip() == "MqmDevReadOnly2026"
+        tokens.write_text("rotated\n", encoding="utf-8")
+        secret.write_text("rotated-password\n", encoding="utf-8")
+        dev.ensure_server_secrets()
+        assert tokens.read_text(encoding="utf-8") == "rotated\n"
+        assert secret.read_text(encoding="utf-8") == "rotated-password\n"
+    finally:
+        for name, value in originals.items():
+            setattr(dev, name, value)
 
 
 def test_env_file_itself_is_git_ignored() -> None:

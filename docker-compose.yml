@@ -192,6 +192,9 @@ services:
     environment:
       MARIADB_ROOT_PASSWORD: ${MDQM_MARIADB_ROOT_PASSWORD:?required}
       MARIADB_DATABASE: mdqm
+      # The read-only account's password. The init script refuses to start without it, and
+      # Compose must pass it: a missing variable is not visible inside the container.
+      MDQM_RO_PASSWORD: ${MDQM_RO_PASSWORD:?required, see .env.example}
       TZ: UTC
     ports:
       - "127.0.0.1:${MDQM_MARIADB_PORT:-53306}:3306"
