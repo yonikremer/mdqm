@@ -124,6 +124,12 @@ class CompileContext:
     max_rows: int = DEFAULT_MAX_ROWS
     max_partitions: int | None = None
     lag_unverified: frozenset[str] = frozenset()
+    sizes: Mapping[str, tuple[int | None, int | None]] = field(default_factory=dict)
+    """The measured size profile of the table being compiled, ``{partition name: (rows, bytes)}``.
+
+    Filled from ``mdqm sizes measure`` when the deployment ran it; empty means the estimate falls
+    back to the catalog's own ``reltuples``, exactly as before.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,6 +610,7 @@ class _Compilation:
             table=anchor.key,
             default_window=_spec_duration(anchor.semantics.default_window),
             max_partitions=self.context.max_partitions,
+            sizes=self.context.sizes or None,
         )
         self.partition_plan = partition_plan
         if not partition_plan.ok:

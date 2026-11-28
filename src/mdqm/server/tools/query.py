@@ -67,6 +67,7 @@ from mdqm.spec.validate import parse_spec
 from mdqm.sql.exec_ts import ExecTsMode, rewrite_sql
 from mdqm.store.audit import AuditEntry, AuditLog, AuditOutcome
 from mdqm.store.history import CacheInfo, HistoryEntry, HistoryStore, RecordedFragment
+from mdqm.store.sizes import SizeStore
 
 __all__ = [
     "PlanInfo",
@@ -127,6 +128,11 @@ class QueryServices:
     limits: Limits = _DEFAULT_LIMITS
     executor: FederatedExecutor | None = None
     spill_dir: Path | None = None
+    sizes: SizeStore | None = None
+    """Where the measured table/partition sizes live (``mdqm sizes measure``), or ``None``.
+
+    ``None`` is the honest default: a deployment that never measured sizes plans exactly as it did
+    before, from the catalog's own estimates."""
 
     def now(self) -> datetime:
         """The one instant of this execution (C02), normalised to UTC."""
@@ -360,6 +366,7 @@ def _run_spec(services: QueryServices, user: str, spec: QuerySpec) -> QueryAnswe
             columns=services.columns,
             max_rows=services.limits.max_rows,
             max_partitions=services.limits.max_partitions,
+            sizes=_sizes_for(services, target.source, repaired.from_table),
         ),
     )
     fixes = _fixes(lint.applied_fixes, compiled.applied_fixes)
@@ -749,6 +756,26 @@ def _summarise(services: QueryServices, user: str, source: str, table: pa.Table)
 def _table_of(anchor: TableRef | None, source: str) -> str:
     """The table the answer is about, for the freshness report."""
     return source if anchor is None else anchor.key
+
+
+def _sizes_for(
+    services: QueryServices, source: str, table: str
+) -> Mapping[str, tuple[int | None, int | None]]:
+    """The measured profile of ``table``, as ``{partition name: (rows, bytes)}``.
+
+    Empty when this deployment never measured sizes (``mdqm sizes measure``) or when the measurement
+    failed: the estimate then falls back to the catalog, which is what it always did. A measured
+    profile that exists is preferred, because it is ours, it is dated, and it knows bytes.
+    """
+    if services.sizes is None:
+        return {}
+    bare = table.split(".")[-1]
+    measured = services.sizes.latest(source, bare)
+    if measured is None:
+        return {}
+    return {
+        partition.name: (partition.rows, partition.bytes) for partition in measured.partitions
+    }
 
 
 def _fixes(*groups: Sequence[str]) -> tuple[str, ...]:

@@ -34,6 +34,7 @@ from mdqm.store.audit import AuditLog
 from mdqm.store.db import Store
 from mdqm.store.feedback import FeedbackStore
 from mdqm.store.history import HistoryStore
+from mdqm.store.sizes import SizeStore
 
 _log = logging.getLogger(__name__)
 
@@ -176,4 +177,7 @@ def query_services(
         cache=open_cache(settings.paths.cache_dir, clock),
         clock=clock,
         limits=query_limits(settings),
+        # The measured sizes (`mdqm sizes measure`), so a plan counts what was measured instead of
+        # the catalog's own reltuples. An install that never measured plans exactly as before.
+        sizes=SizeStore(store, clock=None if clock is None else clock.now),
     )
