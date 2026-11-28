@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -59,6 +59,7 @@ __all__ = [
     "Settings",
     "SmtpSettings",
     "SourceConfig",
+    "StatsSettings",
     "find_literal_secrets",
     "pin_yaml_file",
     "resolve_yaml_file",
@@ -211,6 +212,25 @@ class SecretsSettings(_Section):
 
     env_prefix: str = "MDQM_SECRET_"
     dir: Path | None = None
+
+
+class StatsSettings(_Section):
+    """Continuous statistics collection. It is heavy, so the default window is overnight.
+
+    ``quiet`` is 21:00-07:00 Asia/Jerusalem. A deployment that sets ``Settings.quiet_windows``
+    uses those instead. ``sample_rows`` caps every sampled read.
+    """
+
+    enabled: bool = True
+    sample_rows: int = Field(default=5_000, ge=1)
+    top_k: int = Field(default=50, ge=1)
+    max_pairs: int = Field(default=12, ge=0)
+    null_warn_share: float = Field(default=0.2, ge=0.0, le=1.0)
+    result_warn_rows: int = Field(default=10_000, ge=1)
+    result_block_rows: int = Field(default=100_000, ge=1)
+    quiet: QuietWindow = Field(
+        default_factory=lambda: QuietWindow(tz="Asia/Jerusalem", start=time(21, 0), end=time(7, 0))
+    )
 
 
 class LimitsSettings(_Section):
@@ -385,6 +405,7 @@ class Settings(BaseSettings):
     limits: LimitsSettings = Field(default_factory=LimitsSettings)
     secrets: SecretsSettings = Field(default_factory=SecretsSettings)
     quiet_windows: list[QuietWindow] = Field(default_factory=list)
+    stats: StatsSettings = Field(default_factory=StatsSettings)
     sources: list[SourceConfig] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -455,6 +476,24 @@ class Settings(BaseSettings):
         if not self.quiet_windows:
             return True
         return any(window.is_quiet(now) for window in self.quiet_windows)
+
+    def stats_windows(self) -> tuple[QuietWindow, ...]:
+        """Windows for statistics collection: the deployment's, or the overnight default."""
+        if self.quiet_windows:
+            return tuple(self.quiet_windows)
+        return (self.stats.quiet,)
+
+    def stats_collection_open(self, now: datetime, *, force: bool = False) -> bool:
+        """True when a statistics pass may start. ``force`` is an operator override.
+
+        A disabled collector never runs, including under ``force``: force overrides the clock,
+        not the switch.
+        """
+        if not self.stats.enabled:
+            return False
+        if force:
+            return True
+        return any(window.is_quiet(now) for window in self.stats_windows())
 
     def secret_provider(self) -> SecretProvider:
         """The provider for this deployment: secret files when a directory is set, else env."""

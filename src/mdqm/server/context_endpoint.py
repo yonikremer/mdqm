@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
@@ -46,6 +46,7 @@ from mdqm.errors import from_validation_error, not_supported
 from mdqm.models import ErrorResponse
 from mdqm.models.base import MDQMModel
 from mdqm.semantic import SemanticLayer, load
+from mdqm.stats.surface import attach_briefs
 from mdqm.store import Store
 
 __all__ = [
@@ -93,6 +94,7 @@ class ContextPackSource:
     index: ContextIndex
     examples: Sequence[ApprovedExample] = ()
     budget_tokens: int = DEFAULT_PACK_BUDGET
+    column_briefs: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def build(
@@ -143,13 +145,14 @@ class ContextPackSource:
 
     def context_for(self, prompt: str) -> ContextPack:
         """The block for ``prompt``: the same call ``find_data`` (M02) makes, so the two agree."""
-        return build_pack(
+        pack = build_pack(
             prompt,
             layer=self.layer,
             index=self.index,
             examples=self.examples,
             budget_tokens=self.budget_tokens,
         )
+        return attach_briefs(pack, self.column_briefs)
 
 
 def _has_semantic_files(root: Path) -> bool:

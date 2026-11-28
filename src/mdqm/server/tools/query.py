@@ -65,6 +65,8 @@ from mdqm.spec.errors import SpecError
 from mdqm.spec.models import QuerySpec
 from mdqm.spec.validate import parse_spec
 from mdqm.sql.exec_ts import ExecTsMode, rewrite_sql
+from mdqm.stats.guard import ValueProbe, gate_spec
+from mdqm.stats.models import CategoryColumnStats, ColumnQuality, PartitionExtent
 from mdqm.store.audit import AuditEntry, AuditLog, AuditOutcome
 from mdqm.store.history import CacheInfo, HistoryEntry, HistoryStore, RecordedFragment
 from mdqm.store.sizes import SizeStore
@@ -133,6 +135,14 @@ class QueryServices:
 
     ``None`` is the honest default: a deployment that never measured sizes plans exactly as it did
     before, from the catalog's own estimates."""
+    column_stats: Mapping[str, CategoryColumnStats] = field(default_factory=dict)
+    """Categorical distributions keyed ``source.table.column``. Empty skips the value gate."""
+    column_quality: Mapping[str, ColumnQuality] = field(default_factory=dict)
+    sentinels: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    partition_extents: Mapping[str, tuple[PartitionExtent, ...]] = field(default_factory=dict)
+    table_rows: Mapping[str, int] = field(default_factory=dict)
+    value_probe: ValueProbe | None = None
+    """Bounded existence lookup used when category stats may be stale. ``None`` does not reject."""
 
     def now(self) -> datetime:
         """The one instant of this execution (C02), normalised to UTC."""
@@ -350,6 +360,25 @@ def _run_spec(services: QueryServices, user: str, spec: QuerySpec) -> QueryAnswe
     if lint.error is not None:
         return _refused(services, user, error=lint.error, spec=parsed, exec_ts=exec_ts)
     repaired = lint.spec if lint.spec is not None else parsed
+    # Stale category stats are not rejected by the linter (it has no source). A bounded lookup
+    # runs here, before compile, and only when the value might be newer than the last collection.
+    gated = gate_spec(
+        repaired,
+        layer=services.layer,
+        columns=services.columns,
+        stats=services.column_stats,
+        probe=services.value_probe,
+    )
+    if gated.error is not None:
+        return _refused(
+            services,
+            user,
+            error=gated.error,
+            spec=repaired,
+            exec_ts=exec_ts,
+            applied_fixes=lint.applied_fixes,
+        )
+    reported = _fixes(lint.applied_fixes, gated.notes)
     # A spec whose approved joins reach another source is not one statement: it becomes a
     # federated plan (M04). A single-source spec gets ``None`` here and compiles below, unchanged.
     from mdqm.server.tools.query_federated import federated_plan, run_federated
@@ -363,7 +392,7 @@ def _run_spec(services: QueryServices, user: str, spec: QuerySpec) -> QueryAnswe
             spec=repaired,
             exec_ts=exec_ts,
             sources=(target.source,),
-            applied_fixes=lint.applied_fixes,
+            applied_fixes=reported,
         )
     if federated is not None:
         return run_federated(
@@ -372,7 +401,7 @@ def _run_spec(services: QueryServices, user: str, spec: QuerySpec) -> QueryAnswe
             federated=federated,
             spec=repaired,
             exec_ts=exec_ts,
-            applied_fixes=lint.applied_fixes,
+            applied_fixes=reported,
         )
     compiled = compile_spec(
         repaired,
@@ -385,9 +414,10 @@ def _run_spec(services: QueryServices, user: str, spec: QuerySpec) -> QueryAnswe
             max_rows=services.limits.max_rows,
             max_partitions=services.limits.max_partitions,
             sizes=_sizes_for(services, target.source, repaired.from_table),
+            sentinels=services.sentinels,
         ),
     )
-    fixes = _fixes(lint.applied_fixes, compiled.applied_fixes)
+    fixes = _fixes(reported, compiled.applied_fixes)
     plan = _plan(None, compiled.partition_plan)
     if compiled.error is not None or compiled.fragment is None:
         return _refused(
@@ -678,6 +708,11 @@ def _lint_context(services: QueryServices, exec_ts: datetime, dialect: str) -> L
         dialect=dialect,
         max_rows=services.limits.max_rows,
         max_partitions=services.limits.max_partitions,
+        category_stats=services.column_stats,
+        column_quality=services.column_quality,
+        sentinels=services.sentinels,
+        partition_extents=services.partition_extents,
+        table_rows=services.table_rows,
     )
 
 

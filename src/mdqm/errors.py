@@ -85,6 +85,7 @@ __all__ = [
     "unknown_column",
     "unknown_table",
     "unknown_value",
+    "value_not_in_data",
     "write_blocked",
 ]
 
@@ -158,6 +159,7 @@ class ErrorCode(StrEnum):
     UNKNOWN_COLUMN = "UNKNOWN_COLUMN"
     AMBIGUOUS_VALUE = "AMBIGUOUS_VALUE"
     UNKNOWN_VALUE = "UNKNOWN_VALUE"
+    VALUE_NOT_IN_DATA = "VALUE_NOT_IN_DATA"
     JOIN_NOT_APPROVED = "JOIN_NOT_APPROVED"
     # Planning (C07, C08).
     INSERTION_TIME_NO_BOUND = "INSERTION_TIME_NO_BOUND"
@@ -373,6 +375,33 @@ def ambiguous_value(*, field: str, value: str, canonical: Sequence[str]) -> Erro
     )
 
 
+def value_not_in_data(
+    *,
+    column: str,
+    value: str,
+    suggestions: Sequence[str],
+    frequencies: Sequence[str],
+    checked: str,
+) -> ErrorResponse:
+    """A categorical filter value never occurs in the column (code ``VALUE_NOT_IN_DATA``).
+
+    ``suggestions`` are stored values the agent can retry with. ``frequencies`` is the same
+    list, each one as a count (``64 of 100, 64%``), so ``did_you_mean`` carries the frequency
+    and ``valid_values`` stays the value to paste.
+    """
+    pairs = list(zip(suggestions, frequencies, strict=False))
+    shown = ", ".join(f'"{_ident(name)}" ({_ident(freq)})' for name, freq in pairs)
+    if not shown:
+        shown = "a value this column actually holds"
+    return _build(
+        ErrorCode.VALUE_NOT_IN_DATA,
+        f'The value "{_ident(value)}" never occurs in "{_ident(column)}". {_safe(checked)}',
+        f'Replace "{_ident(value)}" with one of: {shown}.',
+        valid_values=tuple(suggestions),
+        did_you_mean=tuple(f"{name} ({freq})" for name, freq in pairs),
+    )
+
+
 def unknown_value(*, field: str, value: str, valid: Sequence[str]) -> ErrorResponse:
     """A label matches no source code and no canonical value (code ``UNKNOWN_VALUE``)."""
     name = _ident(field)
@@ -469,15 +498,26 @@ def partition_scan_all(
     )
 
 
-def cost_too_high(*, table: str, estimated: str, limit: str) -> ErrorResponse:
-    """The EXPLAIN gate refuses an expensive read (code ``COST_TOO_HIGH``)."""
+def cost_too_high(
+    *, table: str, estimated: str, limit: str, narrower: str | None = None
+) -> ErrorResponse:
+    """The EXPLAIN gate refuses an expensive read (code ``COST_TOO_HIGH``).
+
+    ``narrower`` is an optional window the statistics say stays under the limit. It is appended
+    to the fix; callers that do not have one leave it unset.
+    """
     relation = _ident(table)
+    fix = (
+        f'Narrow the filter, e.g. "time": {_window("7d")}, or add a "limit" or a "group_by"; the '
+        "estimate comes from table statistics, not from a run."
+    )
+    if narrower:
+        fix = f"{fix} A window under the limit is {_safe(narrower)}."
     return _build(
         ErrorCode.COST_TOO_HIGH,
         f'Reading "{relation}" would touch about {_ident(estimated)}, above the gate\'s '
         f"{_ident(limit)}.",
-        f'Narrow the filter, e.g. "time": {_window("7d")}, or add a "limit" or a "group_by"; the '
-        "estimate comes from table statistics, not from a run.",
+        fix,
     )
 
 
@@ -608,6 +648,7 @@ BUILDERS: Mapping[ErrorCode, Callable[..., ErrorResponse]] = MappingProxyType(
         ErrorCode.UNKNOWN_COLUMN: unknown_column,
         ErrorCode.AMBIGUOUS_VALUE: ambiguous_value,
         ErrorCode.UNKNOWN_VALUE: unknown_value,
+        ErrorCode.VALUE_NOT_IN_DATA: value_not_in_data,
         ErrorCode.JOIN_NOT_APPROVED: join_not_approved,
         ErrorCode.INSERTION_TIME_NO_BOUND: insertion_time_no_bound,
         ErrorCode.PARTITION_SCAN_ALL: partition_scan_all,

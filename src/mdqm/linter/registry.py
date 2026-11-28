@@ -21,6 +21,7 @@ from typing import Final
 from mdqm.linter.rules import Rule, RuleCase, Severity, Target
 from mdqm.linter.spec_rules import SPEC_RULES
 from mdqm.linter.sql_rules import SQL_RULES
+from mdqm.stats.linter_rules import STATS_RULES
 
 __all__ = ["REGISTRY", "Registry"]
 
@@ -110,7 +111,9 @@ def _validate_case(rule: Rule, case: RuleCase) -> None:
 
 
 #: The one registry the linter runs. ``spec`` rules first: the spec is the primary path.
-REGISTRY: Final[Registry] = Registry((*SPEC_RULES, *SQL_RULES))
+#: Statistics rules run before the spec rules so a value the column never holds is rejected with
+#: its frequency before the dictionary rule reports the same value as merely unknown.
+REGISTRY: Final[Registry] = Registry((*STATS_RULES, *SPEC_RULES, *SQL_RULES))
 
 
 def _iter_cases() -> Iterator[tuple[Rule, RuleCase]]:

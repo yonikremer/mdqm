@@ -48,6 +48,7 @@ EXPECTED_CODES = frozenset(
         "UNKNOWN_COLUMN",
         "AMBIGUOUS_VALUE",
         "UNKNOWN_VALUE",
+        "VALUE_NOT_IN_DATA",
         "JOIN_NOT_APPROVED",
         "INSERTION_TIME_NO_BOUND",
         "PARTITION_SCAN_ALL",
@@ -138,6 +139,20 @@ CASES: tuple[Case, ...] = (
         fix_must=('"filters.0.value"', '"active"'),
         problem_must=("פעיל",),
         valid_values=("active", "Active"),
+    ),
+    Case(
+        ErrorCode.VALUE_NOT_IN_DATA,
+        {
+            "column": "billing.accounts.state",
+            "value": "activ",
+            "suggestions": ("active", "closed"),
+            "frequencies": ("64 of 100, 64%", "30 of 100, 30%"),
+            "checked": "Stats collected 2026-11-01T00:00:00Z list every value of this column.",
+        },
+        fix_must=('"activ"', '"active" (64 of 100, 64%)', '"closed" (30 of 100, 30%)'),
+        problem_must=("never occurs", "activ", "billing.accounts.state"),
+        valid_values=("active", "closed"),
+        did_you_mean=("active (64 of 100, 64%)", "closed (30 of 100, 30%)"),
     ),
     Case(
         ErrorCode.UNKNOWN_VALUE,

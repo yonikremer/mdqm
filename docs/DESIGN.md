@@ -257,6 +257,25 @@ Human gate: **auto** for deterministic facts (catalog, indexes, partitions, endp
 The data team gets a weekly digest (email via internal SMTP if available, else a page on the server): at most 10 questions by impact, short yes/no/other. Answers are recorded (who/when) and become a PR on the YAML. Breaking schema changes go to the admin immediately.
 `generated/` is rewritten by the pipeline; `curated/` is edited by humans only and wins, so reruns never overwrite manual work.
 
+### Data statistics (continuous)
+
+D5 profiles a table once (null rate, distinct, min/max, top values, format, granularity) and the size store records partition rows and bytes. The statistics pass keeps that record current and adds what those two do not:
+
+* per column, the share of NULL, numeric 0, `''` and whitespace-only values, the distinct count, and min/max for numeric and time columns;
+* for a categorical column (low cardinality, or text whose distinct values are a small share of the rows), the top values with counts and an `other` tail, stored per partition or time bucket so a later reading can show drift;
+* for candidate pairs, how a category of X moves Y: NULL/0/`''`/whitespace share of Y inside each category, Cramér's V and mutual information when both are categorical, and per-category mean and nearest-rank quantiles when Y is numeric;
+* per partition, rows, bytes where the catalog reports them, and min/max of the time column.
+
+Collection is deterministic, read-only and incremental: a partition is read again only when it is new or its row or byte count changed. It runs in the quiet window, default 21:00-07:00 Asia/Jerusalem, or in `quiet_windows` when the deployment sets them. `force` overrides the clock, not a disabled collector. Catalog statistics come first (`pg_stats` / `pg_class`, Oracle `ALL_TAB_COL_STATISTICS`, SQL Server stats DMVs, Elasticsearch `_stats`). Zeros and blank strings are not in those views, so a sample (`TABLESAMPLE` or the dialect's equivalent, with the sample size recorded) fills them, and a table with no statistics is measured from a capped read. Every row stores `collected_at` and `method` (`catalog`, `sample`, `exact`, `mixed`) in the metadata database, not in the semantic layer, so a nightly refresh does not change the layer hash.
+
+The same numbers are what a weak agent sees, and only for columns the question already matched: one short line in the Context Pack and in `find_data`. No sixth tool. The linter then uses them:
+
+* a filter on a categorical value the column never holds is a hard error (`VALUE_NOT_IN_DATA`) before any query runs. The `fix` lists the closest real values, each with its frequency. Matching folds case and whitespace, strips Hebrew points, accepts a consonantal transliteration, and follows the value map's synonyms. When the stats are not a complete reading of every partition (a sample, a tail, or a partition that appeared after `collected_at`), a bounded `SELECT 1 ... LIMIT 1` checks the value before the error is raised. If that lookup cannot run, the filter is not rejected.
+* `''` and `0` that a sentinel file marks as missing are read through `NULLIF`. The compiler emits it and `applied_fixes` says so. The file is separate from the semantic layer so marking a sentinel does not change the version hash.
+* a join key whose NULL share is at least 20% is reported: those rows will be dropped.
+* measured partition sizes pick a window that stays under the row block, and a spec with no time filter that would read more than the block is refused with that window.
+* an unaggregated spec whose estimated row count (`table rows × filter selectivity`) exceeds the block is refused with `COST_TOO_HIGH` and told to aggregate or narrow. Between the warn threshold and the block the spec runs and the estimate is reported.
+
 ## 11. Learning from past queries (deterministic, no LLM)
 
 Sources decided by the probe: PostgreSQL `pg_stat_statements`, SQL Server Query Store, Oracle `V$SQL` (AWR needs a licence: not default), Elasticsearch slow logs if enabled, and always the MCP's own history (the only source of cross-source joins and of user identity).

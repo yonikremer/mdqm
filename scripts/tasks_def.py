@@ -700,6 +700,47 @@ task(
     UNIT.format("tests/unit/test_executor.py"),
 )
 
+task(
+    "C18",
+    "Column quality, categorical distributions and DuckDB collection",
+    MVP,
+    "P1",
+    ["C11", "S04"],
+    ["src/mdqm/stats/measure.py", "src/mdqm/stats/collect.py", "src/mdqm/stats/models.py", "tests/unit/test_stats.py"],
+    "Per column: share of NULL, numeric 0, '' and whitespace-only values, distinct count, min/max for numeric and time. "
+    "A column is categorical when its distinct count is low or a small share of the rows. Distributions keep the top values plus an 'other' tail, per partition or time bucket, so two readings show drift. "
+    "DuckDB unit tests measure a table exactly and through a repeatable reservoir sample that records the sample size. False is not zero and the string '0' is not numeric zero.",
+    [
+        "shares of a planted column match the inserted NULL, 0, '' and whitespace counts",
+        "a sample records method=sample and the number of rows actually returned",
+        "per-bucket distributions differ when the planted months differ",
+        "an empty column reports no share rather than zero",
+    ],
+    UNIT.format("tests/unit/test_stats.py"),
+)
+
+task(
+    "C19",
+    "Associations, category gate and result-size estimate",
+    MVP,
+    "P1",
+    ["C18", "C11"],
+    ["src/mdqm/stats/association.py", "src/mdqm/stats/guard.py", "src/mdqm/stats/similarity.py", "src/mdqm/stats/estimate.py", "tests/unit/test_stats.py"],
+    "Candidate pairs are same-table, low-cardinality X first, and columns co-used in mined queries ahead of the rest, capped. "
+    "Cramér's V and mutual information for categorical pairs; per-category NULL/0/'' rates and mean/quantiles for a numeric Y. "
+    "A filter on a categorical value that never occurs is a hard error (VALUE_NOT_IN_DATA) with the closest real values and their frequencies (case, whitespace, Hebrew, transliteration, dictionary synonyms). "
+    "Stale stats (unprofiled partition, sample, or a non-empty tail) verify with a bounded lookup before rejecting; a lookup that cannot run does not reject. "
+    "Result size is table rows times filter selectivity, and an unaggregated estimate over the block is COST_TOO_HIGH.",
+    [
+        "Cramér's V is 0 for an independent pair and 1 for a determined pair",
+        "a fresh complete distribution rejects a typo without calling the probe, and the fix contains the frequency",
+        "a Hebrew synonym of a stored code is allowed",
+        "an unprofiled partition calls the probe: found allows, absent rejects, unknown does not reject",
+        "co-used column pairs sort ahead of unused ones",
+    ],
+    UNIT.format("tests/unit/test_stats.py"),
+)
+
 # ------------------------------------------------------------------------------------- H
 task(
     "H01",
@@ -788,6 +829,23 @@ task(
         "the pack includes the `use_by_default` time column and partition key for each table",
     ],
     UNIT.format("tests/unit/test_context_pack.py"),
+)
+
+task(
+    "H06",
+    "Metadata store for column, category, association and partition statistics",
+    MVP,
+    "P1",
+    ["H01", "C18"],
+    ["src/mdqm/store/migrations/0010_data_stats.sql", "src/mdqm/stats/store.py", "tests/unit/test_stats.py"],
+    "Append-only statistics tables in the metadata database: column quality, categorical buckets (payload JSON, so a Hebrew value round-trips), associations and partition extents. "
+    "Each row has collected_at and method. Readers return the newest capture per column or partition. Not part of the semantic layer, so a nightly refresh does not change the version hash.",
+    [
+        "a collected pass round-trips: quality, per-bucket distributions, one association and one extent",
+        "a second capture of the same column does not delete the first; latest() returns the newer one",
+    ],
+    UNIT.format("tests/unit/test_stats.py"),
+    "The second acceptance is the store's query (MAX collected_at). A unit test that writes one capture is enough to lock the schema; a second write is covered by the same reader.",
 )
 
 # ------------------------------------------------------------------------------------- A
@@ -1198,6 +1256,34 @@ task(
         "never more than 10 questions; ordering is deterministic",
     ],
     UNIT.format("tests/unit/test_digest.py"),
+)
+
+task(
+    "S14",
+    "Statistics collection: catalog first, sample fallback, quiet window",
+    MVP,
+    "P1",
+    ["S04", "C19", "H06"],
+    [
+        "src/mdqm/stats/catalog.py",
+        "src/mdqm/stats/postgres.py",
+        "src/mdqm/stats/plan.py",
+        "src/mdqm/stats/sqlgen.py",
+        "tests/integration/test_stats_postgres.py",
+    ],
+    "Schedule collection in the quiet window (default 21:00-07:00 Asia/Jerusalem, or Settings.quiet_windows when set). "
+    "Read pg_stats and pg_class first; Oracle ALL_TAB_COL_STATISTICS, SQL Server stats DMVs and Elasticsearch index stats have parsers for the same shape. "
+    "Fall back to a capped read when the catalog has nothing. Incremental: only new or resized partitions. "
+    "Existence checks are SELECT 1 ... LIMIT 1. Sentinel YAML is separate from the semantic layer. "
+    "Context Pack and find_data append one short stats line for tables the question already matched. The linter rules in C19 consume the stored rows.",
+    [
+        "noon in Asia/Jerusalem does not collect; 23:00 does; force overrides the clock",
+        "pg_stats rows become null share, distinct count and a complete distribution when the most-common values are the whole column",
+        "against live Postgres, planted NULL/0/''/whitespace shares match and a missing value is reported absent by the bounded lookup",
+        "an unrelated question's empty Context Pack does not gain a statistics dump",
+    ],
+    UNIT.format("tests/unit/test_stats.py"),
+    "The live Postgres check is tests/integration/test_stats_postgres.py --require-services. The unit command above covers the parsers, the window and the pack.",
 )
 
 # ------------------------------------------------------------------------------------- M
