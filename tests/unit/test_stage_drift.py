@@ -148,8 +148,8 @@ def monthly(key: str = "start_time", *bounds: str) -> Partitioning:
 
 def credit_layer(*, table_key: str = "billing.accounts") -> SemanticLayer:
     """A layer whose measure, value map, time column and join all read the same two tables."""
-    # A stated version_hash keeps the layer's own validator quiet: it copies the model when the
-    # hash is empty, and creating a layer is not what this file tests.
+    # A stated version_hash keeps the layer's own validator from hashing the model when the hash
+    # is empty, and creating a layer is not what this file tests.
     return SemanticLayer(
         version_hash="credit-layer",
         measures={
