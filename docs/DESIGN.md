@@ -269,7 +269,9 @@ extract tables, join edges (including conversions like `LPAD`), filter columns, 
 
 See `examples/semantic_example.yaml` (complete worked example). Key ideas: sources with load limits; `value_maps` (canonical values, synonyms in both languages, per-source code mappings);
 `measures` (one canonical definition with rounding rule, plus a per-source `normalize` template: `{col}`, `ROUND({col} / 5000) * 5000`, `{col} * 10`);
-`tables` (key, default window, partitioning, time columns with role/indexed/lag, mutability class and approval status, cache override); `approved_joins` (with cardinality and usage counts).
+`tables` (key, default window, partitioning, time columns with role/indexed/lag, mutability class and approval status, cache override); `approved_joins` (with cardinality and usage counts);
+`labels` (the deployment's own words for a thing, keyed `table:<source.table>`, `measure:<name>` or `column:<qualified>`).
+Labels are how one field serves every language: the identifiers stay as the source spells them, a curated file adds the words people type (Hebrew for a Hebrew question, an internal nickname, an abbreviation), and the context index matches them. A label key that names nothing in the layer or a catalog is refused at index time, because a silently ignored label is a search that mysteriously misses.
 The version hash goes into cache keys and audit. Every item may carry `provenance` (who proposed, evidence, match rate, who approved).
 
 ### The motivating conversion case

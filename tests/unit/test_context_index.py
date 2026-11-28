@@ -453,3 +453,43 @@ def test_empty_searches_are_read_newest_first(store: Store) -> None:
     assert [entry.query for entry in logged] == ["the second miss", "the first miss"]
     assert all(entry.user_id is None for entry in logged)
     assert index(store).unmatched(limit=1)[0].query == "the second miss"
+
+
+# --- labels in the layer: the second language belongs to the semantic file --------------------
+
+
+def test_a_label_in_the_layer_is_searchable_without_the_caller_passing_anything(
+    store: Store,
+) -> None:
+    """A semantic file names a measure in Hebrew; the index reads the layer, so nobody has to
+    remember to hand the labels over. This is the whole point of the field."""
+    semantic = layer(labels={"measure:credit_limit_r5000": ["מסגרת אשראי"]})
+
+    build(store, semantic=semantic, labels=None)
+
+    hits = search(store, "מסגרת אשראי")
+    assert "measure:credit_limit_r5000" in refs(hits)
+
+
+def test_a_label_passed_by_the_caller_wins_over_the_layer(store: Store) -> None:
+    """One deployment overrides a shared file without editing it."""
+    semantic = layer(labels={"measure:credit_limit_r5000": ["מסגרת אשראי"]})
+
+    build(store, semantic=semantic, labels={"measure:credit_limit_r5000": ("פדיון",)})
+
+    assert "measure:credit_limit_r5000" in refs(search(store, "פדיון"))
+
+
+def test_a_label_key_in_the_layer_that_names_nothing_is_refused(store: Store) -> None:
+    semantic = layer(labels={"measure:nope": ["nothing"]})
+
+    with pytest.raises(ContextIndexError, match="unknown label key"):
+        build(store, semantic=semantic, labels=None)
+
+
+def test_labels_are_part_of_the_version_hash() -> None:
+    """A label is a semantic fact: changing a word must invalidate the index, not silently lag it."""
+    without = layer()
+    with_label = layer(labels={"measure:credit_limit_r5000": ["מסגרת אשראי"]})
+
+    assert without.version_hash != with_label.version_hash

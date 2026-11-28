@@ -65,6 +65,17 @@ tables:
     mutability: { class: mutable_critical, status: approved }
     cache: { mode: none }
 
+labels:
+  # The words people actually type, per thing, in whatever language they use. A curated file holds
+  # these; the context index matches them, so one field serves every language and no schema is
+  # language specific. Keys are 'table:<source.table>', 'measure:<name>' or 'column:<qualified>'.
+  measure:credit_limit_r5000: ["מסגרת אשראי", "credit limit", "מסגרת"]
+  measure:usage_units: ["יחידות שימוש", "usage units", "שימוש"]
+  table:crm.customers: ["לקוחות", "customers"]
+  table:billing.accounts: ["חשבונות", "accounts"]
+  table:erp.customers: ["לקוחות ERP", "customers"]
+  table:billing.usage_events: ["אירועי שימוש", "usage events"]
+
 approved_joins:
   - name: usage_to_customers
     left:  billing.usage_events.client_no          # zero-padded VARCHAR(10), e.g. '0000001234'

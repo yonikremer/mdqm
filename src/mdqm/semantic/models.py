@@ -641,6 +641,15 @@ class SemanticLayer(MDQMModel):
     measures: Frozen[Measure] = Field(default_factory=lambda: FrozenMapping())
     tables: Frozen[TableSemantics] = Field(default_factory=lambda: FrozenMapping())
     approved_joins: tuple[ApprovedJoin, ...] = ()
+    labels: Frozen[tuple[str, ...]] = Field(default_factory=lambda: FrozenMapping())
+    """The deployment's own words for a thing, keyed ``table:<source.table>``, ``measure:<name>`` or
+    ``column:<source.table.column>``.
+
+    This is how a layer names something in a second language: the identifiers stay as the source
+    spells them, and a curated file adds the words people actually type (``he`` for a Hebrew
+    question, an internal nickname, an abbreviation). The context index matches them, so one field
+    serves every language without a per-language schema -- nothing here is Hebrew specific.
+    """
     version_hash: str = ""
 
     @model_validator(mode="after")

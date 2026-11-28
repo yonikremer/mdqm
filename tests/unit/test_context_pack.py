@@ -462,3 +462,29 @@ def test_a_prompt_with_no_words_is_an_empty_pack(store: Store) -> None:
     built = pack(store, "?! ...")
     assert built.is_empty
     assert built.text == ""
+
+
+# --- the shipped example: one layer, two languages -----------------------------------------
+
+
+def test_the_examples_hebrew_question_gets_a_pack(tmp_path: Path) -> None:
+    """The gap this closes: an English prompt answered 1100 characters of facts and the same
+    question in Hebrew answered nothing, because a measure had no Hebrew name anywhere.
+    """
+    from mdqm.semantic.loader import load
+    from mdqm.server.context_endpoint import ContextPackSource
+
+    root = Path(__file__).resolve().parents[2] / "examples" / "semantic_example.yaml"
+    store = Store(tmp_path / "meta.sqlite")
+    store.initialize()
+    try:
+        source = ContextPackSource.build(load(root), store=store)
+        hebrew = source.context_for("מסגרת אשראי ממוצעת לפי סטטוס")
+        english = source.context_for("average credit limit by customer status")
+        unrelated = source.context_for("leaderboard")
+    finally:
+        store.close()
+
+    assert "credit_limit_r5000" in hebrew.text
+    assert "credit_limit_r5000" in english.text
+    assert unrelated.text == "", "a prompt that names nothing in the layer injects nothing"

@@ -955,19 +955,28 @@ def _checked_labels(
     catalogs: Sequence[CatalogSnapshot],
     labels: Mapping[str, Sequence[str]] | None,
 ) -> dict[str, tuple[str, ...]]:
-    """Validate the deployment's extra labels: a key must name something that exists."""
-    if not labels:
+    """The layer's own labels plus the deployment's, validated: a key must name something real.
+
+    ``labels`` in the layer is where a semantic file names a thing in a second language, so the
+    index reads it without any caller having to pass it. A caller that passes labels for the same
+    key wins, which is how one deployment overrides a shared file without editing it.
+    """
+    merged: dict[str, Sequence[str]] = {
+        **{key: tuple(values) for key, values in layer.labels.items()},
+        **(labels or {}),
+    }
+    if not merged:
         return {}
     known = _refs(layer, catalogs)
-    unknown = sorted(key for key in labels if key not in known)
+    unknown = sorted(key for key in merged if key not in known)
     if unknown:
         raise ContextIndexError(
             f"unknown label key(s) {unknown}: use 'table:<source.table>', 'measure:<name>' or "
             "'column:<source.table.column>' for something the layer or a catalog declares"
         )
     result: dict[str, tuple[str, ...]] = {}
-    for key in sorted(labels):
-        values = labels[key]
+    for key in sorted(merged):
+        values = merged[key]
         if not all(isinstance(value, str) and value.strip() for value in values):
             raise ContextIndexError(f"labels for {key!r} must be non-empty strings")
         result[key] = tuple(values)
