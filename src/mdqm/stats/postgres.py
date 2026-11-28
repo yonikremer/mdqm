@@ -16,7 +16,7 @@ import psycopg
 from mdqm.stats.catalog import PG_CLASS_SQL, PG_STATS_SQL, parse_pg_class, parse_pg_stats
 from mdqm.stats.collect import Collected, collect_rows
 from mdqm.stats.measure import ColumnRequest
-from mdqm.stats.models import CollectionMethod
+from mdqm.stats.models import CollectionMethod, ColumnQuality
 from mdqm.stats.sqlgen import existence_sql, require_ident
 
 __all__ = ["exists", "measure"]
@@ -39,10 +39,12 @@ def measure(
     require_ident(table)
     with connection.cursor(row_factory=psycopg.rows.dict_row) as cursor:
         cursor.execute(PG_CLASS_SQL, (table,))
-        class_row = cursor.fetchone()
+        # Without the pg extra these fetches are Any. Narrowing with isinstance keeps mypy
+        # quiet both when psycopg is installed and when CI type-checks without it.
+        class_row = _dict_row(cursor.fetchone())
         row_estimate, _bytes = parse_pg_class(class_row)
         cursor.execute(PG_STATS_SQL, (table,))
-        stats_rows = cursor.fetchall()
+        stats_rows = _dict_rows(cursor.fetchall())
     if stats_rows and row_estimate:
         qualities, categories = parse_pg_stats(
             stats_rows,
@@ -51,7 +53,21 @@ def measure(
             row_estimate=row_estimate,
             collected_at=collected_at,
         )
-        return Collected(qualities, categories, ())
+        # pg_stats has no share of 0, '' or whitespace. A capped read fills those three.
+        # The catalog keeps null share, distinct and bounds; the method becomes mixed.
+        sampled = collect_rows(
+            _read_rows(connection, table, columns, sample_rows),
+            columns,
+            source=source,
+            table=table,
+            collected_at=collected_at,
+            method=CollectionMethod.SAMPLE,
+            covers_table=False,
+            sample_rows=sample_rows,
+        )
+        by_sample = {item.column: item for item in sampled.quality}
+        merged = tuple(_merge_quality(item, by_sample.get(item.column)) for item in qualities)
+        return Collected(merged, categories, ())
     capped = _read_rows(connection, table, columns, sample_rows)
     method = CollectionMethod.EXACT if len(capped) < sample_rows else CollectionMethod.SAMPLE
     return collect_rows(
@@ -86,16 +102,66 @@ def exists(
         return None
 
 
+def _dict_row(value: object) -> dict[str, Any] | None:
+    """One driver row as a dict, or None. Anything else is treated as missing."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    return None
+
+
+def _dict_rows(value: object) -> list[dict[str, Any]]:
+    """Driver rows as dicts. A non-list (an untyped driver, or a failure) is an empty read."""
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in value:
+        row = _dict_row(item)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def _merge_quality(catalog: ColumnQuality, sample: ColumnQuality | None) -> ColumnQuality:
+    """Catalog numbers where the view had them, sample numbers for the shares it never stores."""
+    if sample is None:
+        return catalog
+    return ColumnQuality(
+        source=catalog.source,
+        table=catalog.table,
+        column=catalog.column,
+        partition=catalog.partition,
+        null_share=catalog.null_share if catalog.null_share is not None else sample.null_share,
+        zero_share=sample.zero_share if catalog.zero_share is None else catalog.zero_share,
+        empty_share=sample.empty_share if catalog.empty_share is None else catalog.empty_share,
+        whitespace_share=(
+            sample.whitespace_share
+            if catalog.whitespace_share is None
+            else catalog.whitespace_share
+        ),
+        distinct_count=(
+            catalog.distinct_count if catalog.distinct_count is not None else sample.distinct_count
+        ),
+        minimum=catalog.minimum if catalog.minimum is not None else sample.minimum,
+        maximum=catalog.maximum if catalog.maximum is not None else sample.maximum,
+        rows_seen=catalog.rows_seen or sample.rows_seen,
+        sample_rows=sample.rows_seen,
+        method=CollectionMethod.MIXED,
+        collected_at=catalog.collected_at,
+    )
+
+
 def _read_rows(
     connection: psycopg.Connection[tuple[Any, ...]],
     table: str,
     columns: Sequence[ColumnRequest],
     limit: int,
-) -> list[dict[str, object]]:
+) -> list[dict[str, Any]]:
     """Up to ``limit`` rows. Identifiers were checked; the limit is an integer."""
     selected = ", ".join(require_ident(request.name).sql(dialect="postgres") for request in columns)
     relation = require_ident(table).sql(dialect="postgres")
     statement = f"SELECT {selected} FROM {relation} LIMIT {int(limit)}"  # noqa: S608
     with connection.cursor(row_factory=psycopg.rows.dict_row) as cursor:
         cursor.execute(statement)
-        return list(cursor.fetchall())
+        return _dict_rows(cursor.fetchall())
