@@ -93,7 +93,7 @@ from mdqm.models import (
     TableSize,
     TableStats,
 )
-from mdqm.sql.execution import execute_one, prepare, wrapped
+from mdqm.sql.execution import StatementRefused, execute_one, prepare, wrapped
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
@@ -490,25 +490,35 @@ SELECT sql_fulltext, executions, elapsed_time, rows_processed, last_active_time
 #: :func:`~mdqm.adapters.sizes.parse_sizes` reads.
 #:
 #: ``NUM_ROWS`` is ``DBMS_STATS``' own row count and is NULL until the table has been analyzed;
-#: ``ALL_SEGMENTS.BYTES`` is the table's own segment, which is what a scan reads. Index segments are
+#: ``<view>.BYTES`` is the table's own segment, which is what a scan reads. Index segments are
 #: deliberately **not** summed: Oracle has no per-table total (a scan of the table does not read the
 #: index), and adding every index would inflate the estimate. A read-only account usually has no
 #: segment grant at all, so ``bytes`` legitimately arrives NULL there -- reported as "not reported",
 #: never as zero.
-_SIZES_SQL: Final = """
+#:
+#: The segment view is **not** a constant, because it changed under us: Oracle Free 23ai has no
+#: ``ALL_SEGMENTS`` at all (``ORA-00942: table or view "MDQM_RO"."ALL_SEGMENTS" does not exist``,
+#: measured), and older releases have no need for the ``DBA_`` one. :func:`_segment_view` asks the
+#: server which of the two answers, and the query is built around the answer -- or around a NULL
+#: byte column when neither does, which is the honest reading for an unprivileged account.
+_SEGMENT_VIEWS: Final = ("ALL_SEGMENTS", "DBA_SEGMENTS")
+
+#: One literal probe per candidate: whether the view exists *and* this account may read it.
+_SEGMENT_PROBES: Final[dict[str, str]] = {
+    "ALL_SEGMENTS": "SELECT 1 FROM all_segments WHERE ROWNUM < 2",
+    "DBA_SEGMENTS": "SELECT 1 FROM dba_segments WHERE ROWNUM < 2",
+}
+
+_SIZES_SQL_TEMPLATE: Final = """
 SELECT t.owner        AS schema_name,
        t.table_name   AS table_name,
        t.table_name   AS relation_name,
        0              AS is_partition,
        CASE WHEN t.partitioned = 'YES' THEN 1 ELSE 0 END AS is_partitioned_parent,
        t.num_rows     AS row_count,
-       seg.bytes      AS size_bytes
+       {table_bytes}  AS size_bytes
   FROM all_tables t
-  LEFT JOIN all_segments seg
-    ON seg.owner = t.owner
-   AND seg.segment_name = t.table_name
-   AND seg.segment_type = 'TABLE'
-   AND seg.partition_name IS NULL
+{table_join}
  WHERE t.owner NOT IN (SELECT username FROM all_users WHERE oracle_maintained = 'Y')
    AND t.temporary = 'N'
 UNION ALL
@@ -518,19 +528,69 @@ SELECT p.table_owner    AS schema_name,
        1                AS is_partition,
        CASE WHEN t.partitioned = 'YES' THEN 1 ELSE 0 END AS is_partitioned_parent,
        p.num_rows       AS row_count,
-       pseg.bytes       AS size_bytes
+       {part_bytes}     AS size_bytes
   FROM all_tab_partitions p
   JOIN all_tables t
     ON t.owner = p.table_owner
    AND t.table_name = p.table_name
-  LEFT JOIN all_segments pseg
-    ON pseg.owner = p.table_owner
-   AND pseg.segment_name = p.table_name
-   AND pseg.partition_name = p.partition_name
-   AND pseg.segment_type = 'TABLE PARTITION'
+{part_join}
  WHERE p.table_owner NOT IN (SELECT username FROM all_users WHERE oracle_maintained = 'Y')
  ORDER BY 1, 2, 3
 """
+
+_NO_BYTES: Final = "CAST(NULL AS NUMBER)"
+
+
+def _sizes_sql(segment_view: str | None) -> str:
+    """The size query, reading bytes from ``segment_view`` -- or reporting none when it is ``None``.
+
+    ``segment_view`` is one of :data:`_SEGMENT_VIEWS` (never caller text): the shape of the query
+    is fixed here, and only the view name is substituted, so nothing a source reports can reach the
+    statement.
+    """
+    if segment_view is None:
+        return _SIZES_SQL_TEMPLATE.format(
+            table_bytes=_NO_BYTES, table_join="", part_bytes=_NO_BYTES, part_join=""
+        )
+    if segment_view not in _SEGMENT_VIEWS:
+        raise ValueError(f"not a segment view: {segment_view!r}")
+    return _SIZES_SQL_TEMPLATE.format(
+        table_bytes="seg.bytes",
+        table_join=(
+            f"  LEFT JOIN {segment_view} seg\n"
+            "    ON seg.owner = t.owner\n"
+            "   AND seg.segment_name = t.table_name\n"
+            "   AND seg.segment_type = 'TABLE'\n"
+            "   AND seg.partition_name IS NULL"
+        ),
+        part_bytes="pseg.bytes",
+        part_join=(
+            f"  LEFT JOIN {segment_view} pseg\n"
+            "    ON pseg.owner = p.table_owner\n"
+            "   AND pseg.segment_name = p.table_name\n"
+            "   AND pseg.partition_name = p.partition_name\n"
+            "   AND pseg.segment_type = 'TABLE PARTITION'"
+        ),
+    )
+
+
+def _segment_view(cur: Any) -> str | None:
+    """Which segment view this server has and this account may read, or ``None``.
+
+    Two candidate names, one probe each: 23ai dropped ``ALL_SEGMENTS``, older releases carry both and
+    a plain read-only account is granted neither. A missing view is an answer, not a failure -- the
+    caller then reports bytes as "not reported" instead of handing the planner a zero.
+
+    The probes are two literals, not one built from ``view``: an identifier spelled by a loop is
+    still a statement assembled from a variable, and the sink checker is right to refuse it.
+    """
+    for view, probe in _SEGMENT_PROBES.items():
+        try:
+            execute_one(cur, prepare(probe, dialect="oracle"))
+        except (oracledb.Error, StatementRefused):
+            continue
+        return view
+    return None
 
 _MUTABILITY_UNSUPPORTED: Final = (
     "ALL_TAB_MODIFICATIONS is only refreshed by DBMS_STATS (FLUSH_DATABASE_MONITORING_INFO or a "
@@ -1354,15 +1414,17 @@ class OracleAdapter:
 
     def sizes(self) -> list[TableSize]:
         """Rows per table and per partition from ``ALL_TABLES``/``ALL_TAB_PARTITIONS``, bytes from
-        ``ALL_SEGMENTS``.
+        whichever segment view this account can read.
 
         Both numbers are the server's own: ``NUM_ROWS`` is ``DBMS_STATS``' row count (NULL until the
-        table is analyzed) and ``BYTES`` is the table segment. A read-only account is usually denied
-        the segment views, so ``bytes`` comes back ``None`` there, which reads as "not reported" --
-        never as a zero-byte table, which would make a scan look free.
+        table is analyzed) and ``BYTES`` is the table segment. :func:`_segment_view` decides the
+        source, because 23ai has no ``ALL_SEGMENTS`` and an unprivileged account may read no segment
+        view at all -- then ``bytes`` is ``None``, which reads as "not reported", never as a
+        zero-byte table that would make a scan look free.
         """
         with self._connection() as connection, connection.cursor() as cur:
-            execute_one(cur, prepare(_SIZES_SQL, dialect=self.dialect()))
+            view = _segment_view(cur)
+            execute_one(cur, prepare(_sizes_sql(view), dialect=self.dialect()))
             rows = cur.fetchall()
         return list(parse_sizes(rows, source=self.source, captured_at=datetime.now(UTC)))
 

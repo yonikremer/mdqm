@@ -116,6 +116,15 @@ RUN apt-get update \
 # The venv only: no compiler, no build tools, no wheels, no pip in the runtime layer.
 COPY --from=builder /opt/venv /opt/venv
 
+# The base image ships its own `pip` at /usr/local/bin/pip, which the builder's
+# `pip uninstall pip` never removed (it only cleared the venv). Delete it here, or the claim
+# "no installer in the runtime image" is false and a container that mounts a wheelhouse can
+# install anything at run time (AGENTS.md principle 7). Measured before this line existed:
+# `pip 25.0.1 from /usr/local/lib/python3.12/site-packages/pip`, reachable on the image's PATH.
+RUN rm -rf /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 \
+    /usr/local/lib/python3.12/site-packages/pip \
+    /usr/local/lib/python3.12/site-packages/pip-*.dist-info
+
 WORKDIR /app
 # Docker and Podman run as this uid; an OpenShift namespace overrides it with its own range, and
 # the GID 0 ownership above is what keeps the writable trees usable when it does.

@@ -87,8 +87,9 @@ security off, so it has no read-only account; the search adapter still issues se
   proposals A1+A2 now write are unverified in quality (`progress/LLM-WIRING.md`).
 - The asynchronous query path (`query` with `mode: "async"` plus `get_more(query_id=…)`,
   `progress/ASYNC-QUERY.md`). The blocking path is the one the live runs above exercised.
-- The size readers for Oracle, SQL Server and Elasticsearch (`progress/SIZES-FOLLOWUP.md`). Only
-  PostgreSQL's was measured against a real engine.
+- The Oracle bytes branch of the size reader: this compose Oracle grants the read-only account no
+  segment view, so the live run proves the "not reported" answer, not a measured byte figure
+  (`progress/SIZE-READERS-LIVE.md`). The other three engines' size readers are proven live.
 
 `TASKS.md` holds the backlog and `progress/` holds one short report per finished task, including what
 each one could not verify.

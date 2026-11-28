@@ -114,3 +114,40 @@ as `unproven` (a scan with no partition predicate reaches every partition).
 | Query Store | `sys.query_store_query_text` + `_query` + `_plan` + `_runtime_stats` (needs `VIEW DATABASE STATE`); durations are microseconds, converted to ms; `user` stays `None` because the store names no executor |
 | mutability | `sys.dm_db_partition_stats` row counts + `sys.dm_db_stats_properties.modification_counter` (rows changed since the statistics were last updated). Per-table insert/update/delete counters do not exist in SQL Server, so those stay `None` |
 | cancel / deadline | watchdog thread calls `cursor.cancel()`; `Connection.timeout` is a backstop `timeout_s + 5 s`; the stream's own flag guarantees the iteration stops; the session stays usable (proved twice in the integration test) |
+
+## 4. Inside the server image (task A10)
+
+The host spike above proved the driver; the image is a different question, because the runtime stage
+has no pip and installs one system library. Both halves were measured on `mdqm/server:mssql-a10`,
+built with `--build-arg MDQM_EXTRAS=pg,mssql` and run on the compose network:
+
+```
+docker build --build-arg MDQM_EXTRAS=pg,mssql -t mdqm/server:mssql-a10 .
+docker run --rm --network mdqm_default --env-file .env mdqm/server:mssql-a10 python -c '…'
+```
+
+* **It connects.** `mssql_python.connect(server="mssql", …, uid="mdqm_ro")` from inside the container
+  answers `('erp', 'mdqm_ro', 201)`, and `SELECT COUNT(*) FROM sys.dm_db_partition_stats` works, so the
+  size reader's `VIEW DATABASE STATE` grant survives the container's packaging too.
+* **The extra is registered.** `entry_points(group="mdqm.adapters")` inside the image lists
+  `elastic, openapi, oracle, postgresql, sqlserver` — a build without the `mssql` extra simply has no
+  `sqlserver` adapter and the probe reports it unavailable.
+* **`libltdl7` is what the wheel was missing.** Installed in the runtime stage at build time; no
+  `apt-get` and no `pip install` happens at container start.
+
+### The runtime image used to ship an installer
+
+`pip uninstall --yes pip setuptools wheel` in the **builder** stage only cleared the venv, so the base
+image's own pip survived into the runtime layer and sat on the container's `PATH`:
+
+```
+pip -> /usr/local/bin/pip      # pip 25.0.1 from /usr/local/lib/python3.12/site-packages/pip
+```
+
+That contradicts "no installer in the runtime image" and defeats the air-gap rule (AGENTS.md principle
+7) for anyone who can mount a wheelhouse. The runtime stage now deletes it, and the same probe answers
+`pip -> None`, `import pip -> No module named 'pip'`. Re-check an image with:
+
+```
+docker run --rm <image> python -c "import shutil; print(shutil.which('pip'), shutil.which('pip3'))"
+```

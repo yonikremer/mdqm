@@ -24,7 +24,7 @@ import pytest
 import sqlglot
 
 from mdqm.adapters.elastic import EsTable, parse_index_sizes, table_sizes
-from mdqm.adapters.oracle import _SIZES_SQL as ORACLE_SIZES_SQL
+from mdqm.adapters.oracle import _sizes_sql as oracle_sizes_sql
 from mdqm.adapters.sizes import SIZE_COLUMNS, parse_sizes
 from mdqm.adapters.sqlserver import (
     _SIZES_SQL as MSSQL_SIZES_SQL,
@@ -87,10 +87,38 @@ def test_oracle_a_number_the_dictionary_did_not_report_is_not_zero() -> None:
 
 
 def test_oracle_sizes_statement_parses_and_is_read_only() -> None:
-    """The statement half: one Oracle statement, accepted by sqlglot and by the guard."""
-    assert len(sqlglot.parse(ORACLE_SIZES_SQL, read="oracle")) == 1
-    checked = guard(ORACLE_SIZES_SQL, "oracle")
-    assert checked.ok, checked.error
+    """The statement half: one Oracle statement, accepted by sqlglot and by the guard.
+
+    Every variant is checked, because which one runs is decided at execution time by which segment
+    view the account can read (23ai has no ``ALL_SEGMENTS`` at all).
+    """
+    for view in (None, "ALL_SEGMENTS", "DBA_SEGMENTS"):
+        statement = oracle_sizes_sql(view)
+        assert len(sqlglot.parse(statement, read="oracle")) == 1
+        checked = guard(statement, "oracle")
+        assert checked.ok, checked.error
+
+
+def test_oracle_without_a_segment_view_reports_no_bytes_at_all() -> None:
+    """No readable segment view is a NULL byte column, never a join to a view that is not there."""
+    statement = oracle_sizes_sql(None)
+
+    assert "CAST(NULL AS NUMBER)" in statement
+    assert "segments" not in statement.lower()
+
+
+def test_oracle_reads_bytes_from_the_view_it_was_given() -> None:
+    statement = oracle_sizes_sql("DBA_SEGMENTS")
+
+    assert "LEFT JOIN DBA_SEGMENTS seg" in statement
+    assert "LEFT JOIN DBA_SEGMENTS pseg" in statement
+    assert "all_segments" not in statement.lower()
+
+
+def test_oracle_refuses_a_view_name_it_was_not_built_for() -> None:
+    """The substituted identifier comes from a closed set; anything else is a bug, not a query."""
+    with pytest.raises(ValueError, match="not a segment view"):
+        oracle_sizes_sql("USER_SEGMENTS; DROP TABLE x")
 
 
 # --- SQL Server: a partition has a number, not a name -------------------------------------

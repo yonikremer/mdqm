@@ -145,7 +145,13 @@ def test_the_live_catalog_produces_pending_proposals(
     assert len(pending) == report.counts["proposals"]
     assert {item.status for item in pending} == {ProposalStatus.PENDING}
     assert {item.proposed_by for item in pending} == {STAGE_NAME}
-    assert {item.section for item in pending} == {"names"}
+    # Both sections are expected: the stage proposes the words a thing answers to (`labels`, the one
+    # payload whose approval loads and that answers a Hebrew prompt) and, separately, a display name
+    # plus description (`names`). The latter still cannot be approved -- `SemanticLayer` declares no
+    # `names` section, so the queue rolls it back; `progress/LLM-WIRING.md` names that gap. Pinning
+    # the set here keeps either one from disappearing unnoticed.
+    assert {item.section for item in pending} == {"names", "labels"}
+    assert any(item.section == "labels" for item in pending)
     for item in pending:
         assert f"prompt_version: {PROMPT_VERSION}" in item.evidence
         assert 0.5 <= item.confidence <= 1.0
