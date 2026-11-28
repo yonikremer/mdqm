@@ -64,6 +64,7 @@ from typing import Any, NamedTuple
 
 import pytest
 import sqlglot
+import sqlglot.errors as sqlglot_errors
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlglot import exp
 
@@ -326,14 +327,14 @@ def _consistency_problems(stmt: CorpusStatement) -> list[str]:
                 )
             try:
                 sqlglot.parse_one(f"SELECT {edge.conversion_expr}", read=stmt.dialect)
-            except sqlglot.errors.SqlglotError as exc:
+            except sqlglot_errors.SqlglotError as exc:
                 problems.append(
                     f"{where}: conversion_expr {edge.conversion_expr!r} is not valid SQL: {exc}"
                 )
     for item in expect.rounding:
         try:
             sqlglot.parse_one(f"SELECT {item}", read=stmt.dialect)
-        except sqlglot.errors.SqlglotError as exc:
+        except sqlglot_errors.SqlglotError as exc:
             problems.append(f"{where}: rounding item {item!r} is not a valid expression: {exc}")
     return problems
 

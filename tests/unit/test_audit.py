@@ -416,7 +416,7 @@ def test_the_entry_model_has_no_payload_field() -> None:
                 tool="run_query",
                 outcome=AuditOutcome.OK,
                 # the unknown key is the thing under test
-                **{forbidden: "anything"},  # pyright: ignore[reportCallIssue]
+                **{forbidden: "anything"},  # type: ignore[arg-type]
             )
 
 

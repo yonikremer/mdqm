@@ -18,7 +18,9 @@ Pure, offline: no network, no Docker, no sleeping, no clock read (``exec_ts`` is
 from __future__ import annotations
 
 import itertools
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import duckdb
 import pytest
@@ -81,8 +83,9 @@ def _range_partitioning(**overrides: object) -> Partitioning:
     return Partitioning.model_validate(fields)
 
 
-def _pred(sql: str) -> sqlglot.exp.Expr:
-    return sqlglot.parse_one(sql, read="duckdb")
+def _pred(sql: str) -> sqlglot.exp.Expression:
+    """One predicate as the planner wants it: a parsed expression, never a bare statement."""
+    return cast(sqlglot.exp.Expression, sqlglot.parse_one(sql, read="duckdb"))
 
 
 def _plan(
@@ -289,8 +292,14 @@ def test_default_window_is_injected_when_the_table_allows_it() -> None:
     assert plan.estimate.partitions == 2  # the bound is counted, not assumed
     # 45 days from 2025-11-17 crosses one boundary, so the cache gets two aligned segments.
     assert len(plan.segments) == 2
-    assert plan.segments[0].lower == plan.scope.lower
-    assert plan.segments[-1].upper == plan.scope.upper
+    first, last = plan.segments[0], plan.segments[-1]
+    lower, upper = first.lower, last.upper
+    assert plan.scope is not None
+    scope = plan.scope
+    scope_lower, scope_upper = scope.lower, scope.upper
+    assert lower is not None and upper is not None
+    assert lower == scope_lower
+    assert upper == scope_upper
 
 
 def test_allowing_an_unfiltered_query_without_a_window_still_refuses() -> None:
@@ -560,7 +569,7 @@ REWRITE_CASES = [
 
 
 @pytest.fixture(scope="module")
-def duck() -> duckdb.DuckDBPyConnection:
+def duck() -> Iterator[duckdb.DuckDBPyConnection]:
     """The world's ``usage_events`` loaded into one in-process DuckDB connection."""
     connection = duckdb.connect(":memory:")
     adapter = FakeAdapter.for_world(_world())
@@ -678,7 +687,8 @@ def test_adding_a_key_filter_never_increases_the_estimate(
     )
     assert wide.partitions is not None and narrow.partitions is not None
     assert narrow.partitions <= wide.partitions
-    assert wide.partitions <= wide.total or wide.total is None
+    assert wide.total is not None, "a pruned plan knows the total it was pruned from"
+    assert wide.partitions <= wide.total
 
 
 @given(bounds=_bound_sets(), moment=_MOMENTS)

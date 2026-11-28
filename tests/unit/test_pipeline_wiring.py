@@ -24,7 +24,7 @@ from typer.testing import CliRunner
 
 from mdqm.cli import app
 from mdqm.config.settings import Settings
-from mdqm.models import CatalogSnapshot, Column, Table
+from mdqm.models import CatalogSnapshot, Column, NormalizedType, Table
 from mdqm.pipeline import cli as pipeline_cli
 from mdqm.pipeline.core import (
     STAGE_ORDER,
@@ -33,7 +33,7 @@ from mdqm.pipeline.core import (
     StageStatus,
     available_stages,
 )
-from mdqm.pipeline.stages.conversions import ColumnPair
+from mdqm.pipeline.stages.conversions import ColumnPair, ConversionStage
 from mdqm.semantic.loader import load
 from mdqm.store.db import Store
 
@@ -134,7 +134,9 @@ def _catalog(source: str, *tables: tuple[str, str]) -> CatalogSnapshot:
         tables=tuple(
             Table(
                 name=table,
-                columns=(Column(name=key, native_type="integer", normalized_type="integer"),),
+                columns=(
+                    Column(name=key, native_type="integer", normalized_type=NormalizedType.INTEGER),
+                ),
                 primary_key=(key,),
             )
             for table, key in tables
@@ -241,9 +243,9 @@ def test_one_conversion_stage_per_measure_and_it_compares_every_other_source(
 
     stages = pipeline_cli.build_stages(settings, store=store)
 
-    conversion = [stage for stage in stages if stage.name == "D8"]
+    conversion = [stage for stage in stages if isinstance(stage, ConversionStage)]
     assert len(conversion) == 1
-    pairs: Sequence[ColumnPair] = conversion[0]._pairs
+    pairs: Sequence[ColumnPair] = conversion[0].pairs  # the stage's declared input, read-only
     assert {pair.reference.label for pair in pairs} == {"crm.customers.credit_limit"}
     assert {pair.other.label for pair in pairs} == {
         "billing.accounts.credit_limit",

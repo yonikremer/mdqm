@@ -22,6 +22,7 @@ import pytest
 from pydantic import ValidationError
 
 from mdqm.models import ErrorResponse, Fragment, PlanSummary
+from mdqm.models.plan import PruningProof
 from mdqm.spec.models import QuerySpec
 from mdqm.sql.exec_ts import ExecTsMode, rewrite_es_query, rewrite_sql
 from mdqm.store import Store
@@ -601,7 +602,7 @@ def test_every_field_survives_the_round_trip(history: HistoryStore) -> None:
         uses_index=True,
         indexes_used=("accounts_status_idx",),
         est_rows=120.0,
-        pruning_proof="proven",
+        pruning_proof=PruningProof.PROVEN,
     )
     cache = CacheInfo(hit=True, fetched_at=BASE, fresh=False)
     recorded = history.record(

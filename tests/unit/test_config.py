@@ -183,7 +183,7 @@ def test_env_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_constructor_argument_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MDQM_SERVER__PORT", "2222")
-    assert Settings(server={"port": 3333}).server.port == 3333
+    assert Settings.model_validate({"server": {"port": 3333}}).server.port == 3333
 
 
 def test_yaml_beats_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -392,11 +392,13 @@ def test_quiet_windows_load_from_yaml(tmp_path: Path) -> None:
 )
 def test_settings_is_quiet_any_window(hhmm: str, expected: bool) -> None:
     hour, minute = (int(part) for part in hhmm.split(":"))
-    settings = Settings(
-        quiet_windows=[
-            {"tz": "Asia/Jerusalem", "start": "21:00", "end": "07:00"},
-            {"tz": "Asia/Jerusalem", "start": "01:00", "end": "03:00"},
-        ]
+    settings = Settings.model_validate(
+        {
+            "quiet_windows": [
+                {"tz": "Asia/Jerusalem", "start": "21:00", "end": "07:00"},
+                {"tz": "Asia/Jerusalem", "start": "01:00", "end": "03:00"},
+            ]
+        }
     )
     now = datetime(2026, 3, 10, hour, minute, tzinfo=ZoneInfo("Asia/Jerusalem"))
     assert settings.is_quiet(now) is expected
@@ -500,7 +502,8 @@ def test_file_provider_does_not_follow_symlink_out_of_root(tmp_path: Path) -> No
 def test_settings_choose_provider_by_configuration(tmp_path: Path) -> None:
     assert isinstance(Settings().secret_provider(), EnvSecretProvider)
     assert isinstance(
-        Settings(secrets={"dir": str(tmp_path)}).secret_provider(), FileSecretProvider
+        Settings.model_validate({"secrets": {"dir": str(tmp_path)}}).secret_provider(),
+        FileSecretProvider,
     )
 
 
@@ -542,7 +545,7 @@ def test_limits_come_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize("port", [0, 70000, -1])
 def test_out_of_range_port_is_rejected(port: int) -> None:
     with pytest.raises(ValidationError):
-        Settings(server={"port": port})
+        Settings.model_validate({"server": {"port": port}})
 
 
 def test_settings_are_frozen() -> None:
@@ -553,7 +556,7 @@ def test_settings_are_frozen() -> None:
 
 def test_model_base_url_must_be_http() -> None:
     with pytest.raises(ValidationError):
-        Settings(model={"base_url": "glm.internal:8080"})
-    assert Settings(model={"base_url": "http://glm.internal:8080/"}).model.base_url == (
-        "http://glm.internal:8080"
-    )
+        Settings.model_validate({"model": {"base_url": "glm.internal:8080"}})
+    assert Settings.model_validate(
+        {"model": {"base_url": "http://glm.internal:8080/"}}
+    ).model.base_url == ("http://glm.internal:8080")

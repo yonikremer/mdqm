@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pyarrow as pa
@@ -337,8 +337,9 @@ def test_a_second_identical_request_makes_zero_http_calls(api: MockApi) -> None:
     assert after_second == after_first, "the cached answer must cost no source call"
     assert len(bridge.seen) == after_first
     assert second == first, "a cache hit answers the same question with the same rows"
-    assert second_stream.cached is True
-    assert second_stream.fetched_at == second_stream.fetched_at  # set, never the wall clock
+    timed = cast(Any, second_stream)  # the adapter's own counters, not the ArrowStream protocol
+    assert timed.cached is True
+    assert timed.fetched_at == timed.fetched_at  # set, never the wall clock
 
 
 def test_a_different_filter_is_a_different_cache_entry(api: MockApi) -> None:

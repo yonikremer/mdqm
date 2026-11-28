@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import jsonschema
 import pytest
@@ -488,7 +488,7 @@ def test_invalid_json_and_wrong_root_type() -> None:
         parse_spec("{not json")
     assert caught.value.issues[0].path == "(root)"
     with pytest.raises(SpecError) as caught:
-        parse_spec(["from", "usage_events"])
+        parse_spec(cast(Any, ["from", "usage_events"]))  # the wrong root type is the subject
     assert caught.value.issues[0].path == "(root)"
 
 

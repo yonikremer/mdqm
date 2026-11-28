@@ -771,6 +771,16 @@ class ConversionStage:
         """The sources this instance reads, sorted (what the runner gates and filters on)."""
         return tuple(sorted(self._adapters))
 
+    @property
+    def pairs(self) -> tuple[ColumnPair, ...]:
+        """The declarations this instance tests, in the order it was given them.
+
+        Read-only and public because it *is* the stage's input: a caller that built the pairs (the
+        bootstrap wiring) and a test that asserts what was declared both need to see them, and
+        reaching into ``_pairs`` for that is how internals leak into tests.
+        """
+        return self._pairs
+
     def inputs_hash(self, ctx: PipelineContext) -> str:
         """sha256 over the declared inputs: the pairs, the caps, the measure and the day.
 

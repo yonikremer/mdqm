@@ -716,6 +716,7 @@ def test_erp_duplicate_records_are_deduped_on_the_declared_key(
     finally:
         adapter.close()
 
+    assert fragment.sql is not None
     assert "DISTINCT" in fragment.sql.upper(), fragment.sql
     assert columns == ["customer_status", "credit_limit_r5000_avg"]
     expected_rows = cast(

@@ -27,7 +27,12 @@ from mdqm.adapters.base import ArrowStream, NotSupported
 from mdqm.models.catalog import CatalogSnapshot, Column, NormalizedType, Table, TableKind
 from mdqm.models.fragment import Fragment
 from mdqm.models.limits import Limits
-from mdqm.models.partitioning import PartitionBound, Partitioning, PartitionStrategy
+from mdqm.models.partitioning import (
+    PartitionBound,
+    PartitionGranularity,
+    Partitioning,
+    PartitionStrategy,
+)
 from mdqm.models.stats import TableStats
 from mdqm.pipeline.core import PipelineContext, StageStatus
 from mdqm.pipeline.stages.mutability import (
@@ -501,7 +506,7 @@ def test_stage_measures_lag_and_writes_the_bound(tmp_path: Path, store: Store) -
     partitions = Partitioning(
         strategy=PartitionStrategy.RANGE,
         key=("start_time",),
-        granularity="month",
+        granularity=PartitionGranularity.MONTH,
         bounds=(
             PartitionBound(name="usage_events_p2025_05"),
             PartitionBound(name="usage_events_p2025_06"),
@@ -567,7 +572,7 @@ def test_stage_raises_lag_violated_and_keeps_the_declared_bound(
     partitions = Partitioning(
         strategy=PartitionStrategy.RANGE,
         key=("start_time",),
-        granularity="month",
+        granularity=PartitionGranularity.MONTH,
         bounds=(PartitionBound(name="usage_events_p2025_06"),),
     )
     adapter = StubAdapter(
@@ -597,7 +602,7 @@ def test_a_second_pass_sees_the_changed_oldest_rows(tmp_path: Path, store: Store
     partitions = Partitioning(
         strategy=PartitionStrategy.RANGE,
         key=("start_time",),
-        granularity="month",
+        granularity=PartitionGranularity.MONTH,
         bounds=(PartitionBound(name="usage_events_p2025_06"),),
     )
     counters = [

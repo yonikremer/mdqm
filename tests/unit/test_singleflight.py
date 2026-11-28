@@ -415,9 +415,11 @@ async def test_different_keys_run_concurrently() -> None:
         return tag
 
     async def run() -> list[str]:
-        return await asyncio.gather(
-            flight.do("a", lambda: work("a")),
-            flight.do("b", lambda: work("b")),
+        return list(
+            await asyncio.gather(
+                flight.do("a", lambda: work("a")),
+                flight.do("b", lambda: work("b")),
+            )
         )
 
     assert await within(run()) == ["a", "b"]
@@ -438,6 +440,7 @@ async def test_one_key_failing_does_not_affect_another() -> None:
         failed, fine = await asyncio.gather(
             flight.do("bad", boom), flight.do("good", ok), return_exceptions=True
         )
+        assert isinstance(fine, Segment), "the failing key must not take the healthy one with it"
         return failed, fine
 
     failed, fine = await within(run())

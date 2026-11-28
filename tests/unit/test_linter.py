@@ -18,7 +18,7 @@ import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from hypothesis import given, settings
@@ -438,7 +438,7 @@ class _FakeRule(Rule):
     autofix = False
     target = Target.SPEC
     title = "fake"
-    cases: tuple[RuleCase, ...] = ()
+    cases: ClassVar[tuple[RuleCase, ...]] = ()
 
     def run(self, state: LintState, ctx: LintContext) -> RuleOutcome | None:
         return None

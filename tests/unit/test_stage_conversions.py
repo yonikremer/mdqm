@@ -30,6 +30,7 @@ what was found is right.
 from __future__ import annotations
 
 from datetime import UTC, datetime, time
+from decimal import Decimal
 from typing import Any
 
 import pyarrow as pa
@@ -49,7 +50,7 @@ from mdqm.pipeline.stages.conversions import (
 )
 from mdqm.review.queue import ProposalKind, ReviewQueue
 from mdqm.semantic.measures import check_normalize_template, render_normalize, round_to_multiple
-from mdqm.semantic.models import Measure, MeasureSource, RoundingMode
+from mdqm.semantic.models import Measure, MeasureCanonical, MeasureSource, RoundingMode
 from mdqm.store.db import Store
 from mdqm.testing.fake_adapter import FakeAdapter
 from mdqm.testing.world import WorldConfig, build_world
@@ -240,8 +241,8 @@ def test_boundary_rows_decide_half_up_over_half_even() -> None:
     half_even = [rival for rival in detection.runner_ups if rival.mode is RoundingMode.HALF_EVEN]
     assert half_even, "the losing mode must be shown to the reviewer"
     assert half_even[0].matched == 2
-    assert half_even[0].apply(2500) == 0
-    assert half_even[0].apply(12500) == 10000
+    assert half_even[0].apply(Decimal(2500)) == 0
+    assert half_even[0].apply(Decimal(12500)) == 10000
 
 
 def test_without_a_boundary_row_the_two_modes_are_a_named_tie() -> None:
@@ -376,7 +377,7 @@ def test_the_recovered_rule_is_the_one_the_measure_module_renders(
     detection = _detect_billing(adapters, tmp_path, store)
     assert detection.best is not None
     measure = Measure(
-        canonical={"rounding": {"to": 5000, "mode": "half_up"}},
+        canonical=MeasureCanonical.model_validate({"rounding": {"to": 5000, "mode": "half_up"}}),
         sources={"billing.accounts.credit_limit": MeasureSource(normalize=detection.best.template)},
     )
     sql = render_normalize(

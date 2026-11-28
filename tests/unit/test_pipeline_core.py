@@ -691,7 +691,7 @@ def mining_stage(queries: Sequence[RawQuery]) -> FakeStage:
         )
 
     class MiningStage(FakeStage):
-        def inputs_hash(self, context: PipelineContext) -> str:
+        def inputs_hash(self, ctx: PipelineContext) -> str:
             return batch_digest(queries)
 
     return MiningStage(name="D9", heavy=True, body=body)

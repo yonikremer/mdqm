@@ -15,6 +15,7 @@ These are pure, offline unit tests: no network, no Docker, no clock, no sleeping
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import duckdb
@@ -386,7 +387,7 @@ def event_range(small_world: World) -> tuple[datetime, datetime]:
 
 
 @pytest.fixture(scope="module")
-def usage_db(small_world: World) -> duckdb.DuckDBPyConnection:
+def usage_db(small_world: World) -> Iterator[duckdb.DuckDBPyConnection]:
     """``usage_events`` from the world, loaded once into an in-memory DuckDB."""
     connection = duckdb.connect()
     connection.execute(
@@ -450,6 +451,7 @@ def test_derived_bound_never_loses_a_row(
     assert plan.ok
     assert plan.derived_bound == since - SIX_HOURS
 
+    assert plan.derived_bound is not None, "new_since derives the event-time bound"
     original = f"insertion_time >= TIMESTAMP '{since.replace(tzinfo=None).isoformat(sep=' ')}'"
     with_bound = (
         f"{original} AND start_time >= TIMESTAMP '"

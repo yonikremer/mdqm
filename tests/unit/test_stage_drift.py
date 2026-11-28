@@ -21,6 +21,7 @@ No clock is read (``exec_ts`` is injected) and every store test uses ``tmp_path`
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -161,7 +162,7 @@ def credit_layer(*, table_key: str = "billing.accounts") -> SemanticLayer:
         },
         value_maps={
             "customer_status": ValueMap(
-                canonical=["active", "churned"],
+                canonical=("active", "churned"),
                 sources={"billing.accounts.state": {"A": "active", "C": "churned"}},
             )
         },
@@ -476,7 +477,9 @@ def test_a_dropped_column_used_by_a_measure_lists_that_measure() -> None:
     assert change.refs[0].reference == "billing.accounts.credit_limit"
     assert report.blocked == change.refs
     assert report.is_blocked("measures.credit_limit_r5000")
-    assert "measures.credit_limit_r5000" in report.notification(created_at=EXEC_TS).body
+    notification = report.notification(created_at=EXEC_TS)
+    assert notification is not None
+    assert "measures.credit_limit_r5000" in notification.body
 
 
 def test_a_dropped_column_reaches_the_value_map_and_the_join_that_read_it() -> None:
@@ -661,7 +664,7 @@ def test_an_index_on_a_default_time_column_is_breaking_when_dropped() -> None:
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> Store:
+def store(tmp_path: Path) -> Iterator[Store]:
     opened = Store(tmp_path / "mdqm.sqlite")
     opened.initialize()
     try:

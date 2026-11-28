@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
 from mdqm.config.settings import Settings, SmtpSettings
 from mdqm.review.digest import (
@@ -232,7 +233,7 @@ def settings_with(
             port=port,
             sender=sender,
             username=username,
-            password=password,
+            password=None if password is None else SecretStr(password),
             starttls=starttls,
         )
     )

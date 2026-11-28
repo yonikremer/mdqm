@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from hypothesis import given, settings
@@ -456,9 +457,7 @@ BLOCKED_BY_DIALECT: dict[str, tuple[Case, ...]] = {
 }
 
 
-def _matrix(
-    common: tuple[Case, ...], per_dialect: dict[str, tuple[Case, ...]]
-) -> list[pytest.param]:
+def _matrix(common: tuple[Case, ...], per_dialect: dict[str, tuple[Case, ...]]) -> list[Any]:
     """Run every portable case in all three dialects, plus the dialect-specific extras."""
     params = []
     for dialect in DIALECTS:
@@ -471,7 +470,7 @@ ALLOWED_PARAMS = _matrix(ALLOWED_COMMON, ALLOWED_BY_DIALECT)
 BLOCKED_PARAMS = _matrix(BLOCKED_COMMON, BLOCKED_BY_DIALECT)
 
 
-def _cases_for(dialect: str, params: list[pytest.param]) -> list[pytest.param]:
+def _cases_for(dialect: str, params: list[pytest.ParameterSet]) -> list[Any]:
     return [param for param in params if param.values[0] == dialect]
 
 

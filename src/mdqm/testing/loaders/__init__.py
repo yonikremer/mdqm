@@ -8,4 +8,19 @@ Elasticsearch), plus a ``python -m`` entry point. The world itself is engine-agn
 
 from __future__ import annotations
 
-__all__ = ["elastic", "postgres"]
+import importlib
+from typing import Any
+
+#: The loaders this package provides, by module name (imported on first use, see below).
+_LOADERS = ("elastic", "postgres")
+
+
+def __getattr__(name: str) -> Any:
+    """Import a loader on first use (PEP 562).
+
+    Each loader needs its engine's driver, and a deployment installs only the extras it serves, so a
+    package that imported all of them eagerly would fail to import for a site with no Elasticsearch.
+    """
+    if name in _LOADERS:
+        return importlib.import_module(f"{__name__}.{name}")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

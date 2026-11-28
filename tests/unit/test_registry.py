@@ -11,7 +11,7 @@ import importlib.metadata
 import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pyarrow as pa
 import pytest
@@ -147,8 +147,9 @@ class FakeAdapter:
         return Stream(pa.table({"one": list(range(count))}))
 
     def cancel(self, handle: ArrowStream) -> None:
-        handle.cancelled = True
-        self.cancelled.append(handle)
+        stream = cast(Stream, handle)  # our own double, which carries the cancelled flag
+        stream.cancelled = True
+        self.cancelled.append(stream)
 
     def explain(self, query: Fragment) -> PlanSummary:
         if not self._explain_supported:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pyarrow as pa
 import pytest
@@ -415,7 +416,7 @@ def test_duplicate_erp_rows_survive_the_load() -> None:
     assert world.expected.duplicate_cust_nos
     dup = world.expected.duplicate_cust_nos[0]
     count = _rows(adapter, f"SELECT count(*) AS n FROM customers_erp WHERE cust_no = {dup}")
-    assert count[0]["n"] >= 2
+    assert cast(int, count[0]["n"]) >= 2
 
 
 def test_rounding_step_matches_the_world() -> None:
