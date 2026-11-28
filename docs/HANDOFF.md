@@ -233,12 +233,14 @@ Not done: nothing **proposes** labels (§4c), and A1+A2 has no target/validator 
 * `ruff check .` clean. Families: `E,F,I,W,S,B,BLE,TRY,RUF,A,DTZ,PERF,C4,PIE,RET,UP,SIM,ASYNC`.
 * Five rules are **ratcheted** in `pyproject.toml` with counts and reasons; `TRY003` and `RUF001-3` are
   off with reasons. Burn the ratchet down; do not add to it without a count and a reason.
-* **pyright reports nothing** (`python -m pyright` → 0 errors, 0 warnings). Getting there changed `src`
+* **pyright is clean** — run `python -m pyright` for the current state, never this sentence. Getting
+  there changed `src`
   in three ways worth knowing: `SourceAdapter` no longer requires the four optional methods (they are
   `OptionalSourceMethods`), `mdqm.testing.loaders` imports its engines lazily so a deployment without an
   extra can still import the package, and `ConversionStage.pairs` is a public read-only property.
-* pyright is **not** in `scripts/check.py`, so the debt can grow back: adding it is one line plus a
-  decision about latency.
+* pyright is **in** `scripts/check.py` now, and that is why the debt has to stay at zero: it was not,
+  and 17 errors (plus 3 `check_sql_sinks` findings) were sitting on `main` before it went in. Run
+  `python scripts/check.py` rather than trusting this bullet; `--fast` skips both type checkers.
 
 ## 9. Deployment facts
 
