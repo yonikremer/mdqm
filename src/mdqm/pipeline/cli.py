@@ -31,6 +31,8 @@ from ruamel.yaml import YAML
 from mdqm.adapters.base import SourceAdapter
 from mdqm.adapters.registry import AdapterRegistry
 from mdqm.config.settings import ConfigError, Settings, SourceConfig
+from mdqm.llm.factory import describe_model, model_client
+from mdqm.llm.result import StructuredLLM
 from mdqm.models import CatalogSnapshot, Partitioning
 from mdqm.pipeline.core import PipelineContext, Stage, available_stages, run_pipeline
 from mdqm.pipeline.stages.catalog import CatalogStage, partitions_by_table
@@ -61,14 +63,33 @@ _IDENTITY: str = "{col}"
 
 
 def context_for(
-    settings: Settings, *, store: Store, now: datetime | None = None
+    settings: Settings,
+    *,
+    store: Store,
+    now: datetime | None = None,
+    llm: StructuredLLM | None = None,
+    echo: Callable[[str], None] | None = None,
 ) -> PipelineContext:
-    """The context one pass runs in, derived from the settings (no silent defaults)."""
+    """The context one pass runs in, derived from the settings (no silent defaults).
+
+    ``llm`` is the model a stage may ask (A1+A2 is the only one that does). Left as ``None``, it is
+    built from ``settings.model`` through :func:`~mdqm.llm.factory.model_client`: an absent or
+    half-configured endpoint yields **no client** and one reported line, never an exception, so the
+    deterministic stages of the same pass still run. A caller that wants a different model (a test
+    with ``FakeLLM``, or a deployment with its own client) passes it and nothing here touches the
+    network.
+
+    The client is not closed here: it lives as long as the pass, and a pass ends with the process
+    (``mdqm bootstrap run``). Its key is resolved lazily on the first call, so building a context
+    never reads a secret.
+    """
+    client = llm if llm is not None else model_client(settings, report=echo)
     return PipelineContext(
         store=store,
         exec_ts=now or datetime.now(UTC),
         semantic_root=settings.paths.semantic_dir,
         quiet_windows=tuple(settings.quiet_windows),
+        llm=client,
     )
 
 
@@ -283,10 +304,14 @@ def build_stages(
                 catalogs,
                 profiles=None,
                 value_maps=dict(layer.value_maps) if layer is not None else None,
+                measures=dict(layer.measures) if layer is not None else None,
             )
         )
         if layer is None:
-            echo("A1+A2 runs without value maps: this deployment has no semantic layer yet")
+            echo(
+                "A1+A2 runs without value maps or measures: this deployment has no semantic "
+                "layer yet"
+            )
     else:
         echo("A1+A2 not registered: no catalog was read")
     return available_stages(stages)
@@ -356,6 +381,10 @@ def run(
 
     opened = Store(settings.paths.metadata_db)
     try:
+        # The model comes first: it decides whether A1+A2 can propose anything at all, and an
+        # operator diagnosing an empty run must see that before a list of stages.
+        ctx = context_for(settings, store=opened, echo=typer.echo)
+        typer.echo(describe_model(ctx.llm))
         registry = list(build_stages(settings, store=opened, echo=typer.echo))
         if not registry:
             typer.echo(
@@ -363,7 +392,6 @@ def run(
                 "is configured, so there is nothing to read"
             )
             return
-        ctx = context_for(settings, store=opened)
         if root is not None:
             ctx.semantic_root = Path(root)
         result = run_pipeline(registry, ctx, stage=stage, source=source, force=force)

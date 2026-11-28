@@ -21,6 +21,7 @@ from mdqm.llm.errors import (
     MODEL_UNAVAILABLE,
     ModelError,
 )
+from mdqm.llm.factory import NO_MODEL_LINE, describe_model, model_client
 from mdqm.llm.fake import FakeCall, FakeLLM
 from mdqm.llm.probe import (
     MODEL_ENDPOINT,
@@ -47,6 +48,7 @@ __all__ = [
     "MODEL_OUTPUT_INVALID",
     "MODEL_TIMEOUT",
     "MODEL_UNAVAILABLE",
+    "NO_MODEL_LINE",
     "Attempt",
     "AttemptOutcome",
     "CacheEntry",
@@ -58,6 +60,8 @@ __all__ = [
     "ResponseCache",
     "StructuredLLM",
     "context_window",
+    "describe_model",
+    "model_client",
     "probe_model_endpoint",
     "structured_output_state",
 ]

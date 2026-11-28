@@ -222,6 +222,11 @@ class ModelClient:
         """The configured model id (sent in every request; never assumed)."""
         return self._model.model
 
+    @property
+    def base_url(self) -> str:
+        """The configured API root, so a report can say which endpoint answers (never the key)."""
+        return self._model.base_url
+
     # --- one raw call -------------------------------------------------------------------------
 
     def chat(
