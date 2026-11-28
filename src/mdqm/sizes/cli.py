@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from typing import Annotated, cast
 
 import typer
@@ -54,6 +55,8 @@ def measure(
     try:
         adapters = build_adapters(settings)
         store = SizeStore(opened)
+        # One instant for the whole pass, so every source measured tonight is one capture.
+        captured_at = datetime.now(UTC)
         measured = 0
         for name, adapter in sorted(adapters.items()):
             if source is not None and name != source:
@@ -68,7 +71,7 @@ def measure(
             except Exception as exc:
                 typer.echo(f"source {name}: failed ({type(exc).__name__}: {exc})", err=True)
                 raise typer.Exit(code=1) from exc
-            store.record(sizes)
+            store.record(sizes, captured_at=captured_at)
             measured += len(sizes)
             typer.echo(describe(sizes))
     finally:

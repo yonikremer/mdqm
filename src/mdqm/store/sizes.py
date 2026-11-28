@@ -45,10 +45,21 @@ _SELECT_TABLE: Final = (
     "SELECT source, table_name, kind, name, rows, bytes, captured_at FROM size_sample"
     " WHERE source = ? AND table_name = ? AND captured_at = ? ORDER BY id"
 )
-_SELECT_ALL_AT: Final = (
-    "SELECT source, table_name, kind, name, rows, bytes, captured_at FROM size_sample"
-    " WHERE captured_at = ? ORDER BY source, table_name, kind, name"
+#: The newest capture **per table** (not per pass): each source records under its own timestamp, so
+#: "the newest capture" has to mean "the newest rows of this table", or the last source measured
+#: hides every other one.
+_SELECT_ALL_LATEST: Final = """
+WITH newest AS (
+    SELECT source, table_name, MAX(captured_at) AS captured_at
+      FROM size_sample
+     GROUP BY source, table_name
 )
+SELECT s.source, s.table_name, s.kind, s.name, s.rows, s.bytes, s.captured_at
+  FROM size_sample AS s
+  JOIN newest AS n
+    ON n.source = s.source AND n.table_name = s.table_name AND n.captured_at = s.captured_at
+ ORDER BY s.source, s.table_name, s.id
+"""
 _SELECT_TABLE_LATEST: Final = (
     "SELECT captured_at FROM size_sample WHERE source = ? AND table_name = ?"
     " ORDER BY id DESC LIMIT 1"
@@ -71,14 +82,16 @@ class SizeStore:
 
     # --- writing ----------------------------------------------------------------------
 
-    def record(self, sizes: Sequence[TableSize]) -> datetime:
+    def record(
+        self, sizes: Sequence[TableSize], *, captured_at: datetime | None = None
+    ) -> datetime:
         """Store one pass of samples under a single ``captured_at`` and return it.
 
         One timestamp for the whole pass, so "the newest capture" is a set of rows that were measured
         together and a partial failure cannot leave two halves of a pass looking like different
         nights.
         """
-        captured_at = self._clock()
+        instant = captured_at if captured_at is not None else self._clock()
         rows: list[tuple[object, ...]] = []
         for size in sizes:
             rows.append(
@@ -89,7 +102,7 @@ class SizeStore:
                     size.table,
                     size.rows,
                     size.bytes,
-                    captured_at.isoformat(),
+                    instant.isoformat(),
                 )
             )
             rows.extend(
@@ -100,12 +113,12 @@ class SizeStore:
                     partition.name,
                     partition.rows,
                     partition.bytes,
-                    captured_at.isoformat(),
+                    instant.isoformat(),
                 )
                 for partition in size.partitions
             )
         if not rows:
-            return captured_at
+            return instant
         with self._store.writing() as conn:
             for row in rows:
                 run_local(conn, _INSERT, row)
@@ -114,10 +127,10 @@ class SizeStore:
             extra={
                 "samples": len(rows),
                 "tables": len(sizes),
-                "captured_at": captured_at.isoformat(),
+                "captured_at": instant.isoformat(),
             },
         )
-        return captured_at
+        return instant
 
     # --- reading ----------------------------------------------------------------------
 
@@ -141,11 +154,12 @@ class SizeStore:
         return _table_size(rows)
 
     def latest_all(self) -> tuple[TableSize, ...]:
-        """Every table measured in the newest pass, sorted; ``()`` when nothing was measured."""
-        newest = self.latest_capture()
-        if newest is None:
-            return ()
-        rows = run_local(self._store.connect(), _SELECT_ALL_AT, (newest.isoformat(),)).fetchall()
+        """Every measured table at its own newest capture, sorted; ``()`` when nothing was measured.
+
+        Per table, not per pass: each source records under its own instant, so a global newest
+        capture would show only whichever source happened to be measured last.
+        """
+        rows = run_local(self._store.connect(), _SELECT_ALL_LATEST, ()).fetchall()
         grouped: dict[tuple[str, str], list[Any]] = {}
         for row in rows:
             grouped.setdefault((str(row["source"]), str(row["table_name"])), []).append(row)
