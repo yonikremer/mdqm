@@ -64,7 +64,7 @@ from mdqm.server.app import create_server
 from mdqm.server.auth import READ_SCOPE, StaticTokenVerifier, TokenEntry
 from mdqm.server.tools.misc import ToolServices
 from mdqm.server.tools.query import QueryServices, configure_query_services, reset_query_services
-from mdqm.sql.execution import StatementRefused
+from mdqm.sql.execution import StatementRefused, execute_one, prepare
 from mdqm.store.audit import AuditLog
 from mdqm.store.db import Store
 from mdqm.store.feedback import FeedbackStore
@@ -362,7 +362,7 @@ def _erp_average(pg: PgTarget) -> dict[str, float]:
 
 def _scalar(pg: PgTarget, database: str, statement: str) -> int:
     with psycopg.connect(pg.dsn(database)) as conn, conn.cursor() as cur:
-        cur.execute(statement)
+        execute_one(cur, prepare(statement, dialect="postgres"))
         row = cur.fetchone()
     assert row is not None
     return int(row[0])

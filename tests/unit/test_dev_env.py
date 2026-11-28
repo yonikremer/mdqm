@@ -222,11 +222,14 @@ def test_env_creates_server_secrets_once_and_does_not_overwrite(tmp_path: Path) 
         "PG_RO_SECRET": dev.PG_RO_SECRET,
         "ENV_FILE": dev.ENV_FILE,
     }
-    dev.SERVER_DIR = server
-    dev.TOKENS_EXAMPLE = example
-    dev.TOKENS_FILE = tokens
-    dev.PG_RO_SECRET = secret
-    dev.ENV_FILE = env_file
+    for name, value in (
+        ("SERVER_DIR", server),
+        ("TOKENS_EXAMPLE", example),
+        ("TOKENS_FILE", tokens),
+        ("PG_RO_SECRET", secret),
+        ("ENV_FILE", env_file),
+    ):
+        setattr(dev, name, value)
     try:
         dev.ensure_server_secrets()
         assert json.loads(tokens.read_text(encoding="utf-8"))["tokens"][0]["user_id"] == "dev"

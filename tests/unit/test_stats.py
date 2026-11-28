@@ -693,5 +693,7 @@ def test_compiler_wraps_a_marked_column_in_nullif() -> None:
     )
     assert compiled.ok
     assert compiled.fragment is not None
-    assert "NULLIF" in compiled.fragment.sql
+    sql = compiled.fragment.sql
+    assert sql is not None
+    assert "NULLIF" in sql
     assert any("NULLIF" in fix for fix in compiled.applied_fixes)

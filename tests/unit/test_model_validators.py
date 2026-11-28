@@ -34,7 +34,7 @@ def _is_after_model_validator(decorator: ast.expr) -> bool:
 
 def _own_returns(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterator[ast.Return]:
     """Return statements of this function only, never a nested function's."""
-    stack = list(node.body)
+    stack: list[ast.AST] = list(node.body)
     while stack:
         child = stack.pop()
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):

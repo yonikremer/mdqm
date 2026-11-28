@@ -12,7 +12,9 @@ from datetime import datetime
 from typing import Any
 
 import psycopg
+import psycopg.rows
 
+from mdqm.sql.execution import execute_one, prepare
 from mdqm.stats.catalog import PG_CLASS_SQL, PG_STATS_SQL, parse_pg_class, parse_pg_stats
 from mdqm.stats.collect import Collected, collect_rows
 from mdqm.stats.measure import ColumnRequest
@@ -38,12 +40,12 @@ def measure(
     """
     require_ident(table)
     with connection.cursor(row_factory=psycopg.rows.dict_row) as cursor:
-        cursor.execute(PG_CLASS_SQL, (table,))
+        execute_one(cursor, prepare(PG_CLASS_SQL, dialect="postgres", params=(table,)))
         # Without the pg extra these fetches are Any. Narrowing with isinstance keeps mypy
         # quiet both when psycopg is installed and when CI type-checks without it.
         class_row = _dict_row(cursor.fetchone())
         row_estimate, _bytes = parse_pg_class(class_row)
-        cursor.execute(PG_STATS_SQL, (table,))
+        execute_one(cursor, prepare(PG_STATS_SQL, dialect="postgres", params=(table,)))
         stats_rows = _dict_rows(cursor.fetchall())
     if stats_rows and row_estimate:
         qualities, categories = parse_pg_stats(
@@ -96,7 +98,9 @@ def exists(
     statement = existence_sql(table=table, column=column, value=value, dialect="postgres")
     try:
         with connection.cursor() as cursor:
-            cursor.execute(statement)
+            # Our own statement, built from validated identifiers, through the same chokepoint
+            # every other dynamic statement uses: the guard sees it immediately before it runs.
+            execute_one(cursor, prepare(statement, dialect="postgres"))
             return cursor.fetchone() is not None
     except psycopg.Error:
         return None
@@ -163,5 +167,5 @@ def _read_rows(
     relation = require_ident(table).sql(dialect="postgres")
     statement = f"SELECT {selected} FROM {relation} LIMIT {int(limit)}"  # noqa: S608
     with connection.cursor(row_factory=psycopg.rows.dict_row) as cursor:
-        cursor.execute(statement)
+        execute_one(cursor, prepare(statement, dialect="postgres"))
         return _dict_rows(cursor.fetchall())
