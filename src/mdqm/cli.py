@@ -21,6 +21,7 @@ from mdqm.probe.cli import probe as probe_command
 from mdqm.review.queue import ReviewError, ReviewQueue
 from mdqm.server.app import AuthConfigError
 from mdqm.server.app import serve as serve_mcp
+from mdqm.sizes.cli import sizes_app
 from mdqm.store.audit import DEFAULT_RETENTION_DAYS, AuditLog
 from mdqm.store.db import Store
 
@@ -40,6 +41,7 @@ app.add_typer(review_app, name="review")
 # `mdqm bootstrap run` (task S01): the idempotent, resumable stage runner. The body lives in
 # mdqm.pipeline.cli so the pipeline package owns its own surface.
 app.add_typer(bootstrap_app, name="bootstrap")
+app.add_typer(sizes_app, name="sizes")
 
 
 def _settings() -> Settings:

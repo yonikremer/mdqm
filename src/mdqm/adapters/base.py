@@ -28,6 +28,7 @@ from mdqm.models import (
     Partitioning,
     PlanSummary,
     RawQuery,
+    TableSize,
     TableStats,
 )
 
@@ -55,6 +56,7 @@ OPTIONAL_METHODS: dict[str, str] = {
     "explain": "explain_plan",
     "mine_queries": "query_store",
     "mutability_stats": "mutability_counters",
+    "sizes": "size_stats",
 }
 
 
@@ -127,6 +129,11 @@ class OptionalSourceMethods(Protocol):
     # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def mutability_stats(self) -> list[TableStats]:
         """Change counters per table, or raise :class:`NotSupported`."""
+        ...
+
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
+    def sizes(self) -> list[TableSize]:
+        """Rows and bytes per table and partition, or raise :class:`NotSupported`."""
         ...
 
 

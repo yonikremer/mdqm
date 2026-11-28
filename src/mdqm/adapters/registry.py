@@ -35,6 +35,7 @@ ADAPTER_ENTRY_POINT_GROUP = "mdqm.adapters"
 
 _log = logging.getLogger(__name__)
 
+
 class AdapterEntryPoint(Protocol):
     """The slice of ``importlib.metadata.EntryPoint`` the registry uses (test doubles are easy)."""
 

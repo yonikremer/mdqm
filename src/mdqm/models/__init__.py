@@ -31,6 +31,7 @@ from mdqm.models.partitioning import (
 from mdqm.models.plan import PlanSummary, PruningProof
 from mdqm.models.query import RawQuery
 from mdqm.models.schema import PUBLIC_MODELS, export_json_schemas, schema_file_name
+from mdqm.models.sizes import PartitionSize, TableSize
 from mdqm.models.stats import TableStats
 
 __all__ = [
@@ -50,6 +51,7 @@ __all__ = [
     "NormalizedType",
     "PartitionBound",
     "PartitionGranularity",
+    "PartitionSize",
     "PartitionStrategy",
     "Partitioning",
     "PlanSummary",
@@ -57,6 +59,7 @@ __all__ = [
     "RawQuery",
     "Table",
     "TableKind",
+    "TableSize",
     "TableStats",
     "UtcDatetime",
     "export_json_schemas",

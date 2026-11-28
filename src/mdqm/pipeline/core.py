@@ -92,7 +92,9 @@ ERROR_LIMIT: Final[int] = 400
 #: repeated here so a bad name fails *before* a commit has written anything.
 _SECTION_NAME: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_.-]+$")
 #: One directory level is allowed (``profiles/crm``): evidence the loader must not read as facts.
-_SECTION_PATH: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
+_SECTION_PATH: Final[re.Pattern[str]] = re.compile(
+    r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$"
+)
 
 _INSERT_RUN: Final[str] = _statement(
     "INSERT INTO ",

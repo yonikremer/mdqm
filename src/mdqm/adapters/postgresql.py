@@ -62,8 +62,10 @@ from psycopg import conninfo
 from mdqm.adapters.base import OPTIONAL_METHODS, ArrowStream, NotSupported
 from mdqm.adapters.postgresql_plan import (
     PARTITIONS_SQL,
+    SIZES_SQL,
     parse_partitions,
     parse_plan,
+    parse_sizes,
     row_estimate,
     split_names,
 )
@@ -91,6 +93,7 @@ from mdqm.models import (
     RawQuery,
     Table,
     TableKind,
+    TableSize,
     TableStats,
 )
 from mdqm.sql.execution import execute_one, prepare, wrapped
@@ -1006,6 +1009,19 @@ class PostgresAdapter:
             execute_one(cur, prepare(PARTITIONS_SQL, dialect=self.dialect()))
             rows = cur.fetchall()
         return list(parse_partitions(rows))
+
+    def sizes(self) -> list[TableSize]:
+        """Rows and bytes per table and per partition, read from the server's own catalog.
+
+        ``reltuples`` is the planner's estimate: it is what a scan *thinks* it will read before it
+        runs, which is exactly what an estimate needs and exactly why it must be measured nightly
+        rather than trusted forever. The store keeps the readings so their shape (the median
+        partition, the fat one) survives the catalog's staleness.
+        """
+        with self._connection() as connection, connection.cursor() as cur:
+            execute_one(cur, prepare(SIZES_SQL, dialect=self.dialect()))
+            rows = cur.fetchall()
+        return list(parse_sizes(rows, source=self.source, captured_at=datetime.now(UTC)))
 
 
 # --- helpers --------------------------------------------------------------------------------
