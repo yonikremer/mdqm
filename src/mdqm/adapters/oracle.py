@@ -68,6 +68,7 @@ import oracledb
 import pyarrow as pa
 
 from mdqm.adapters.base import OPTIONAL_METHODS, ArrowStream, NotSupported
+from mdqm.adapters.sizes import parse_sizes
 from mdqm.config.secrets import SecretProvider
 from mdqm.config.settings import SourceConfig
 from mdqm.models import (
@@ -485,10 +486,51 @@ SELECT sql_fulltext, executions, elapsed_time, rows_processed, last_active_time
  ORDER BY elapsed_time DESC
 """
 
-_SIZES_UNSUPPORTED: Final = (
-    "Oracle relation sizes are not collected by this adapter; the plan uses the catalog row "
-    "estimate and reports estimate_source catalog"
-)
+#: Oracle's own note and the two halves of the measurement, in the seven-column shape
+#: :func:`~mdqm.adapters.sizes.parse_sizes` reads.
+#:
+#: ``NUM_ROWS`` is ``DBMS_STATS``' own row count and is NULL until the table has been analyzed;
+#: ``ALL_SEGMENTS.BYTES`` is the table's own segment, which is what a scan reads. Index segments are
+#: deliberately **not** summed: Oracle has no per-table total (a scan of the table does not read the
+#: index), and adding every index would inflate the estimate. A read-only account usually has no
+#: segment grant at all, so ``bytes`` legitimately arrives NULL there -- reported as "not reported",
+#: never as zero.
+_SIZES_SQL: Final = """
+SELECT t.owner        AS schema_name,
+       t.table_name   AS table_name,
+       t.table_name   AS relation_name,
+       0              AS is_partition,
+       CASE WHEN t.partitioned = 'YES' THEN 1 ELSE 0 END AS is_partitioned_parent,
+       t.num_rows     AS row_count,
+       seg.bytes      AS size_bytes
+  FROM all_tables t
+  LEFT JOIN all_segments seg
+    ON seg.owner = t.owner
+   AND seg.segment_name = t.table_name
+   AND seg.segment_type = 'TABLE'
+   AND seg.partition_name IS NULL
+ WHERE t.owner NOT IN (SELECT username FROM all_users WHERE oracle_maintained = 'Y')
+   AND t.temporary = 'N'
+UNION ALL
+SELECT p.table_owner    AS schema_name,
+       p.table_name     AS table_name,
+       p.partition_name AS relation_name,
+       1                AS is_partition,
+       CASE WHEN t.partitioned = 'YES' THEN 1 ELSE 0 END AS is_partitioned_parent,
+       p.num_rows       AS row_count,
+       pseg.bytes       AS size_bytes
+  FROM all_tab_partitions p
+  JOIN all_tables t
+    ON t.owner = p.table_owner
+   AND t.table_name = p.table_name
+  LEFT JOIN all_segments pseg
+    ON pseg.owner = p.table_owner
+   AND pseg.segment_name = p.table_name
+   AND pseg.partition_name = p.partition_name
+   AND pseg.segment_type = 'TABLE PARTITION'
+ WHERE p.table_owner NOT IN (SELECT username FROM all_users WHERE oracle_maintained = 'Y')
+ ORDER BY 1, 2, 3
+"""
 
 _MUTABILITY_UNSUPPORTED: Final = (
     "ALL_TAB_MODIFICATIONS is only refreshed by DBMS_STATS (FLUSH_DATABASE_MONITORING_INFO or a "
@@ -798,6 +840,7 @@ class OracleAdapter:
             query_store, query_store_detail = _query_store_state(cur)
         partitions_supported, partitions_detail = self._probe_partitions()
         explain_supported, explain_detail = self._probe_explain()
+        sizes_supported, sizes_detail = self._probe_sizes()
         capabilities = {
             OPTIONAL_METHODS["extract_partitions"]: Capability(
                 supported=partitions_supported, detail=partitions_detail
@@ -811,7 +854,7 @@ class OracleAdapter:
             OPTIONAL_METHODS["mutability_stats"]: Capability(
                 supported=False, detail=_MUTABILITY_UNSUPPORTED
             ),
-            OPTIONAL_METHODS["sizes"]: Capability(supported=False, detail=_SIZES_UNSUPPORTED),
+            OPTIONAL_METHODS["sizes"]: Capability(supported=sizes_supported, detail=sizes_detail),
         }
         thin = oracledb.is_thin_mode()
         return Capabilities(
@@ -864,6 +907,33 @@ class OracleAdapter:
             "EXPLAIN PLAN into the session plan table (SYS.PLAN_TABLE$ on 12c+, a PUBLIC-granted "
             "GTT); PSTART/PSTOP numeric means proven pruning, KEY means unproven"
         )
+
+    def _probe_sizes(self) -> tuple[bool, str]:
+        """Claim ``size_stats`` only when the size query actually returns.
+
+        Oracle can also answer with rows but no bytes (a read-only account without a segment
+        grant). That is still a supported measurement -- ``num_rows`` per table and per partition
+        is what the planner needs -- so it is reported as supported, with the missing half named.
+        """
+        try:
+            found = self.sizes()
+        except NotSupported as exc:
+            return False, exc.detail or exc.capability
+        except oracledb.DatabaseError as exc:
+            return False, f"size statistics could not be read: {_message(exc)}"
+        if not found:
+            return False, "ALL_TABLES reported no table to size"
+        without_bytes = sum(1 for size in found if size.bytes is None)
+        detail = (
+            "ALL_TABLES.NUM_ROWS + ALL_TAB_PARTITIONS.NUM_ROWS + ALL_SEGMENTS.BYTES: "
+            f"{len(found)} table(s) read"
+        )
+        if without_bytes:
+            detail += (
+                f"; {without_bytes} reported no bytes (no segment grant), so their byte size is "
+                "unknown rather than zero"
+            )
+        return True, detail
 
     # --- SourceAdapter: catalog ----------------------------------------------------------
 
@@ -1283,8 +1353,18 @@ class OracleAdapter:
         raise NotSupported(OPTIONAL_METHODS["mutability_stats"], _MUTABILITY_UNSUPPORTED)
 
     def sizes(self) -> list[TableSize]:
-        """Not collected: a missing measurement must say so, not look like a zero-byte table."""
-        raise NotSupported(OPTIONAL_METHODS["sizes"], _SIZES_UNSUPPORTED)
+        """Rows per table and per partition from ``ALL_TABLES``/``ALL_TAB_PARTITIONS``, bytes from
+        ``ALL_SEGMENTS``.
+
+        Both numbers are the server's own: ``NUM_ROWS`` is ``DBMS_STATS``' row count (NULL until the
+        table is analyzed) and ``BYTES`` is the table segment. A read-only account is usually denied
+        the segment views, so ``bytes`` comes back ``None`` there, which reads as "not reported" --
+        never as a zero-byte table, which would make a scan look free.
+        """
+        with self._connection() as connection, connection.cursor() as cur:
+            execute_one(cur, prepare(_SIZES_SQL, dialect=self.dialect()))
+            rows = cur.fetchall()
+        return list(parse_sizes(rows, source=self.source, captured_at=datetime.now(UTC)))
 
 
 # --- pure helpers ---------------------------------------------------------------------------

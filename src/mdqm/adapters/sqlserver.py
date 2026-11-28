@@ -72,7 +72,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import UTC, date, datetime
 from datetime import time as dt_time
 from decimal import Decimal
@@ -82,6 +82,7 @@ from xml.etree import ElementTree
 import pyarrow as pa
 
 from mdqm.adapters.base import OPTIONAL_METHODS, ArrowStream, NotSupported
+from mdqm.adapters.sizes import sql_size
 from mdqm.config.secrets import SecretProvider
 from mdqm.config.settings import SourceConfig
 from mdqm.models import (
@@ -97,6 +98,7 @@ from mdqm.models import (
     PartitionBound,
     PartitionGranularity,
     Partitioning,
+    PartitionSize,
     PartitionStrategy,
     PlanSummary,
     PruningProof,
@@ -120,6 +122,8 @@ __all__ = [
     "arrow_type",
     "normalized_type",
     "parse_partition_bounds",
+    "parse_size_rows",
+    "partition_name",
     "plan_summary",
 ]
 
@@ -148,13 +152,6 @@ _TIMEOUT_MARKER: Final = "Query timeout expired"
 _SHOWPLAN_FIX: Final = (
     "GRANT SHOWPLAN TO [<read-only login>]: SET SHOWPLAN_XML ON itself is allowed, but compiling a "
     "statement into XML needs the SHOWPLAN permission"
-)
-
-#: Why ``sizes`` is a capability with a fallback rather than a silent omission. The plan then says
-#: ``estimate_source: catalog`` instead of pretending a measurement exists.
-_SIZES_UNSUPPORTED: Final = (
-    "SQL Server relation sizes are not collected by this adapter; the plan uses the catalog row "
-    "estimate and reports estimate_source catalog"
 )
 
 _KNOWN_OPTIONS: Final = frozenset(
@@ -340,6 +337,43 @@ JOIN sys.indexes AS i ON i.object_id = p.object_id AND i.index_id = p.index_id
 WHERE i.index_id IN (0, 1)
 GROUP BY p.object_id, p.partition_number
 ORDER BY p.object_id, p.partition_number
+"""
+
+#: One row per table partition: its number, the scheme it belongs to, its filegroup, its rows and
+#: its bytes.
+#:
+#: ``used_page_count`` covers every index of the table, which is what PostgreSQL's
+#: ``pg_total_relation_size`` reports as well (heap + indexes + TOAST); ``row_count`` is taken from the
+#: heap or clustered index only, because summing it over every index would count the same rows once
+#: per index. Pages are 8 KiB, so ``bytes = used_page_count * 8192``.
+#:
+#: A table with no partition scheme still has one ``sys.partitions`` row per index, so it comes back
+#: as a single unpartitioned relation; a partitioned table comes back as one row per partition, and
+#: :func:`mdqm.adapters.sqlserver.parse_size_rows` names them by the same rule
+#: :func:`~mdqm.adapters.sqlserver.parse_partition_bounds` uses.
+_SIZES_SQL: Final = """
+SELECT s.name AS schema_name,
+       t.name AS table_name,
+       st.partition_number,
+       scheme.name AS scheme_name,
+       ds.name AS filegroup_name,
+       CAST(SUM(CASE WHEN st.index_id IN (0, 1) THEN st.row_count ELSE 0 END) AS bigint) AS row_count,
+       CAST(SUM(st.used_page_count) * 8192 AS bigint) AS size_bytes
+FROM sys.tables AS t
+JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+JOIN sys.dm_db_partition_stats AS st ON st.object_id = t.object_id
+OUTER APPLY (
+    SELECT TOP 1 ps.data_space_id AS data_space_id, ps.name AS name
+    FROM sys.indexes AS i
+    JOIN sys.partition_schemes AS ps ON ps.data_space_id = i.data_space_id
+    WHERE i.object_id = t.object_id AND i.index_id IN (0, 1)
+) AS scheme
+LEFT JOIN sys.destination_data_spaces AS dds
+       ON dds.partition_scheme_id = scheme.data_space_id
+      AND dds.destination_id = st.partition_number
+LEFT JOIN sys.data_spaces AS ds ON ds.data_space_id = dds.data_space_id
+GROUP BY s.name, t.name, st.partition_number, scheme.name, ds.name
+ORDER BY s.name, t.name, st.partition_number
 """
 
 _CATALOG_TABLES_SQL: Final = """
@@ -832,7 +866,7 @@ class SqlServerAdapter:
                 (OPTIONAL_METHODS["explain"], self._probe_explain()),
                 (OPTIONAL_METHODS["mine_queries"], self._probe_query_store()),
                 (OPTIONAL_METHODS["mutability_stats"], self._probe_mutability()),
-                (OPTIONAL_METHODS["sizes"], (False, _SIZES_UNSUPPORTED)),
+                (OPTIONAL_METHODS["sizes"], self._probe_sizes()),
             )
         }
         return Capabilities(
@@ -1300,8 +1334,43 @@ class SqlServerAdapter:
         return out
 
     def sizes(self) -> list[TableSize]:
-        """Not collected: a missing measurement must say so, not look like a zero-byte table."""
-        raise NotSupported(OPTIONAL_METHODS["sizes"], _SIZES_UNSUPPORTED)
+        """Rows and bytes per table and per partition, from ``sys.dm_db_partition_stats``.
+
+        SQL Server has no relation per partition: a partition is a number inside one object, so the
+        row carries the scheme, the number and the filegroup and
+        :func:`parse_size_rows` builds the same ``scheme.number`` name the probe's partition bounds
+        carry. ``used_page_count`` is an 8 KiB page count, which is the byte figure a scan pays for.
+
+        A driver error propagates: a login without ``VIEW DATABASE STATE`` cannot read this view,
+        and :meth:`_probe_sizes` reports that as an unsupported capability rather than as a
+        zero-byte database.
+        """
+        with self._connection() as connection:
+            cursor = connection.cursor()
+            try:
+                rows = self._fetch_all(cursor, _SIZES_SQL)
+            finally:
+                cursor.close()
+        return list(parse_size_rows(rows, source=self._source, captured_at=self._clock()))
+
+    def _probe_sizes(self) -> tuple[bool, str]:
+        """Claim ``size_stats`` only when the statistics view actually answers for this login."""
+        try:
+            found = self.sizes()
+        except NotSupported as exc:
+            return False, exc.detail or exc.capability
+        except Exception as exc:  # a driver error names the missing grant in its own text
+            return False, (
+                f"sys.dm_db_partition_stats could not be read: {exc}; the login needs "
+                "VIEW DATABASE STATE"
+            )
+        if not found:
+            return False, "sys.tables reported no table to size"
+        partitions = sum(len(size.partitions) for size in found)
+        return True, (
+            "sys.dm_db_partition_stats.used_page_count (8 KiB pages, every index) and row_count "
+            f"per heap/clustered index: {len(found)} table(s), {partitions} partition(s)"
+        )
 
     def _mutability_rows(self) -> list[tuple[str, str, int]]:
         """``schema.table`` row counts from the partition statistics view."""
@@ -1423,6 +1492,69 @@ def _partitioning(
     )
 
 
+def partition_name(scheme: str, number: int, filegroup: str | None = None) -> str:
+    """``scheme.3`` or ``scheme.3 (PRIMARY)``: the one name a SQL Server partition has here.
+
+    A partition has no name of its own -- it is a number inside one object -- so the scheme name and
+    the filegroup are what make it referable. One function builds it for the bounds the probe
+    reports and for the sizes this module reads, because two spellings would mean a size that can
+    never be matched to its bound.
+    """
+    return f"{scheme}.{number}" if filegroup is None else f"{scheme}.{number} ({filegroup})"
+
+
+def parse_size_rows(
+    rows: Iterable[Sequence[Any]], *, source: str, captured_at: datetime
+) -> tuple[TableSize, ...]:
+    """One :class:`~mdqm.models.TableSize` per table, from :data:`_SIZES_SQL` rows.
+
+    A row is ``(schema, table, partition_number, scheme, filegroup, rows, bytes)``. A table with no
+    partition scheme is one unpartitioned relation with its own rows and bytes; a partitioned table
+    has no storage of its own (its partitions do), so its ``rows``/``bytes`` are ``None`` and the
+    partition list carries the numbers -- the same reading PostgreSQL gets.
+
+    A ``None`` from the server means **not reported**, never zero: a login that cannot see a
+    statistic must not make the table look empty.
+    """
+    grouped: dict[tuple[str, str], list[Sequence[Any]]] = {}
+    for row in rows:
+        grouped.setdefault((str(row[0]), str(row[1])), []).append(row)
+    sizes: list[TableSize] = []
+    for (_schema, table), group in sorted(grouped.items()):
+        scheme = None if group[0][3] is None else str(group[0][3])
+        if scheme is None:
+            sizes.append(
+                TableSize(
+                    source=source,
+                    table=table,
+                    captured_at=captured_at,
+                    rows=sql_size(group[0][5]),
+                    bytes=sql_size(group[0][6]),
+                )
+            )
+            continue
+        sizes.append(
+            TableSize(
+                source=source,
+                table=table,
+                captured_at=captured_at,
+                partitions=tuple(
+                    PartitionSize(
+                        name=partition_name(
+                            scheme,
+                            _as_int(row[2]) or 1,
+                            None if row[4] is None else str(row[4]),
+                        ),
+                        rows=sql_size(row[5]),
+                        bytes=sql_size(row[6]),
+                    )
+                    for row in group
+                ),
+            )
+        )
+    return tuple(sizes)
+
+
 def parse_partition_bounds(
     *,
     scheme: str,
@@ -1453,7 +1585,7 @@ def parse_partition_bounds(
         name = filegroups.get(number)
         out.append(
             PartitionBound(
-                name=f"{scheme}.{number}" if name is None else f"{scheme}.{number} ({name})",
+                name=partition_name(scheme, number, name),
                 lower=previous,
                 upper=upper,
                 row_estimate=counts.get((table.split(".")[0], table.split(".")[-1], number))

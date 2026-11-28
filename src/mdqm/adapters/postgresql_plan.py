@@ -39,6 +39,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from mdqm.adapters.base import OPTIONAL_METHODS, NotSupported
+from mdqm.adapters.sizes import parse_sizes
 from mdqm.models import (
     PartitionBound,
     PartitionGranularity,
@@ -46,7 +47,6 @@ from mdqm.models import (
     PartitionStrategy,
     PlanSummary,
     PruningProof,
-    TableSize,
 )
 from mdqm.planner.partitions import Range
 
@@ -576,70 +576,3 @@ def pruning_verdict(
         other_relations=other,
         reason="; ".join(parts) or "the plan and the declared bounds disagree",
     )
-
-
-def parse_sizes(
-    rows: Iterable[CatalogRow], *, source: str, captured_at: datetime
-) -> tuple[TableSize, ...]:
-    """One :class:`~mdqm.models.TableSize` per table, from :data:`SIZES_SQL` rows.
-
-    A row is either a table or one of its partitions (``is_partition``), and the query already
-    ordered them by name so the partition list is stable. Rows are grouped by ``(schema, table)``:
-    the same bare name in two schemas is two tables, and the schema stays in the key so they cannot
-    be merged by accident.
-    """
-    grouped: dict[tuple[str, str], list[CatalogRow]] = {}
-    for row in rows:
-        grouped.setdefault((str(row[0]), str(row[1])), []).append(row)
-
-    sizes: list[TableSize] = []
-    for (schema, table), group in sorted(grouped.items()):  # noqa: B007 - schema keys the group
-        own = next((row for row in group if not _flag(row[3])), None)
-        partitions = [
-            {
-                "name": str(row[2]),
-                "rows": _size(row[5]),
-                "bytes": _size(row[6]),
-            }
-            for row in group
-            if _flag(row[3])
-        ]
-        parent = own is not None and _flag(own[4])
-        sizes.append(
-            TableSize.model_validate(
-                {
-                    "source": source,
-                    "table": table,
-                    # A partitioned parent has no rows and no storage of its own: the partitions do.
-                    "rows": None if own is None or parent else _size(own[5]),
-                    "bytes": None if own is None or parent else _size(own[6]),
-                    "captured_at": captured_at,
-                    "partitions": partitions,
-                }
-            )
-        )
-    return tuple(sizes)
-
-
-def _flag(value: object) -> bool:
-    """A SQL boolean from any driver: ``True``/``'t'``/``1`` all mean true, everything else false."""
-    return value is True or value == "t" or value == 1
-
-
-def _size(value: object) -> int | None:
-    """A non-negative size, or ``None`` when the server did not report one.
-
-    ``reltuples`` is a float (``-1`` means "never analyzed") and a size can arrive as a string from a
-    driver; both are normalised here so a caller never has to guard. A negative estimate reads as
-    unknown, because it is: it is not a count. A boolean is not a size, and reading it as 1 would
-    turn a driver's ``True`` into "one byte".
-    """
-    if value is None or isinstance(value, bool):
-        return None
-    if not isinstance(value, (int, float, str)):
-        return None
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return None
-    return number if number >= 0 else None

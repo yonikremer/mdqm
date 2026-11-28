@@ -51,7 +51,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar, Final
@@ -83,6 +83,7 @@ from mdqm.models import (
     PartitionBound,
     PartitionGranularity,
     Partitioning,
+    PartitionSize,
     PartitionStrategy,
     PlanSummary,
     PruningProof,
@@ -102,14 +103,11 @@ __all__ = [
     "ElasticUnavailable",
     "EsFeatures",
     "SearchOnlyTransport",
+    "parse_index_sizes",
+    "table_sizes",
 ]
 
 _log = logging.getLogger(__name__)
-
-_SIZES_UNSUPPORTED: Final = (
-    "Elasticsearch index sizes are not collected by this adapter; the plan uses the catalog "
-    "estimate and reports estimate_source catalog"
-)
 
 DEFAULT_HOST: Final = "127.0.0.1"
 DEFAULT_PORT: Final = 9200
@@ -645,6 +643,7 @@ class ElasticAdapter:
         features = self.features()
         tables = self._catalog_tables()
         partitioned = any(table.granularity is not None for table in tables)
+        sizes_supported, sizes_detail = self._probe_sizes()
         capabilities = {
             OPTIONAL_METHODS["extract_partitions"]: Capability(
                 supported=partitioned,
@@ -664,7 +663,7 @@ class ElasticAdapter:
             OPTIONAL_METHODS["mutability_stats"]: Capability(
                 supported=False, detail="Elasticsearch keeps no per-index change counters"
             ),
-            OPTIONAL_METHODS["sizes"]: Capability(supported=False, detail=_SIZES_UNSUPPORTED),
+            OPTIONAL_METHODS["sizes"]: Capability(supported=sizes_supported, detail=sizes_detail),
         }
         return Capabilities(
             source=self._name,
@@ -857,8 +856,44 @@ class ElasticAdapter:
         )
 
     def sizes(self) -> list[TableSize]:
-        """Not collected: a missing measurement must say so, not look like an empty index."""
-        raise NotSupported(OPTIONAL_METHODS["sizes"], _SIZES_UNSUPPORTED)
+        """Document counts and store sizes per table, from one ``_cat/indices`` request.
+
+        The table is the alias (the name that survives monthly rotation) and its partitions are the
+        member indices, which is exactly how the catalog and the partition probe name them -- so a
+        measured size can be matched to the bound it measures. A lone index is one unpartitioned
+        table.
+
+        ``store.size`` is the byte figure Elasticsearch itself reports; ``None`` means the cluster
+        did not report one (a closed index, or a version that omits the field), never zero.
+        """
+        rows = self._json_list(
+            "GET",
+            "/_cat/indices",
+            params={"format": "json", "bytes": "b", "h": "index,docs.count,store.size,status"},
+        )
+        return table_sizes(
+            self._catalog_tables(),
+            parse_index_sizes(rows),
+            source=self._name,
+            captured_at=self._clock(),
+        )
+
+    def _probe_sizes(self) -> tuple[bool, str]:
+        """Claim ``size_stats`` only when ``_cat/indices`` really answers with numbers."""
+        if not self._catalog_tables():
+            return False, "no open index or alias is visible to this adapter"
+        try:
+            found = self.sizes()
+        except (ElasticUnavailable, ElasticError, NotSupported) as exc:
+            return False, f"index sizes could not be read: {exc}"
+        if not found:
+            return False, "no open index was reported, so there is nothing to size"
+        measured = sum(1 for size in found if size.bytes is not None)
+        return True, (
+            "_cat/indices store.size (bytes) and docs.count per index: "
+            f"{len(found)} table(s), {measured} with a byte figure, "
+            f"{sum(len(size.partitions) for size in found)} partition(s)"
+        )
 
     # --- SourceAdapter: execute ----------------------------------------------------------
 
@@ -1339,6 +1374,81 @@ def _next_month(moment: datetime) -> datetime:
         if moment.month == 12
         else moment.replace(month=moment.month + 1)
     )
+
+
+def parse_index_sizes(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, tuple[int | None, int | None]]:
+    """``{index: (docs, bytes)}`` from ``_cat/indices`` rows asked for with ``bytes=b``.
+
+    ``_cat`` renders every number as text, so both cells are parsed here and a value the cluster did
+    not report (``"-"``, an empty cell, a missing key) becomes ``None`` -- "not reported", never zero.
+    A system index (``.``-prefixed) and a closed one are skipped for the same reason the catalog
+    skips them: they are not data an agent may query.
+    """
+    sizes: dict[str, tuple[int | None, int | None]] = {}
+    for row in rows:
+        name = _optional_str(row.get("index"))
+        if name is None or name.startswith("."):
+            continue
+        if row.get("status", "open") != "open":
+            continue
+        sizes[name] = (_cat_number(row.get("docs.count")), _cat_number(row.get("store.size")))
+    return sizes
+
+
+def table_sizes(
+    tables: Sequence[EsTable],
+    sizes: Mapping[str, tuple[int | None, int | None]],
+    *,
+    source: str,
+    captured_at: datetime,
+) -> list[TableSize]:
+    """One :class:`~mdqm.models.TableSize` per visible table, its member indices as partitions.
+
+    An alias has no storage of its own -- its member indices do -- so the alias reports ``None`` for
+    its own rows and bytes and the partitions carry the numbers, exactly the reading a partitioned
+    PostgreSQL parent gets. A lone index is one unpartitioned table with its own figures.
+    """
+    out: list[TableSize] = []
+    for table in tables:
+        members = tuple(
+            PartitionSize(name=member, rows=sizes[member][0], bytes=sizes[member][1])
+            for member in table.members
+            if member in sizes
+        )
+        own = sizes.get(table.members[0]) if not table.aliased and table.members else None
+        out.append(
+            TableSize(
+                source=source,
+                table=table.name,
+                captured_at=captured_at,
+                rows=None if own is None else own[0],
+                bytes=None if own is None else own[1],
+                partitions=members if table.aliased else (),
+            )
+        )
+    return out
+
+
+def _cat_number(value: Any) -> int | None:
+    """One ``_cat`` cell as a non-negative integer, or ``None`` when it holds no number.
+
+    ``_cat`` answers ``"-"`` or an empty string for "this cluster has no such figure", and reading
+    that as ``0`` would make an unknown size indistinguishable from an empty index.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    text = str(value).strip()
+    if not text or text == "-":
+        return None
+    try:
+        number = int(text)
+    except ValueError:
+        return None
+    return number if number >= 0 else None
 
 
 def _build_tables(
