@@ -1,6 +1,6 @@
 status: partial
 task: ASYNC-QUERY
-agent: pi (async-query worktree)   branch: task/async-query   commit: see `git log task/async-query`
+agent: pi (async-query worktree)   branch: task/async-query   commit: 5c1f860, 098d2bb, 8536e54 (head)
 tests run:
   `.venv/Scripts/python.exe -m pytest tests/unit -q` -> 4637 passed, 1 warning
   `.venv/Scripts/python.exe -m pytest tests/unit/test_jobs_async.py -q` -> 26 passed
