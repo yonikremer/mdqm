@@ -79,8 +79,8 @@ security off, so it has no read-only account; the search adapter still issues se
 
 **Not proven on a live service in that run:**
 
-- A server image built with the `mssql` extra actually logging into SQL Server. The image that
-  was built installs `libltdl7` (the library the driver needs on Debian) and loads it, and the
+- A server image built with the `mssql` extra actually logging into SQL Server (`A10`). The image
+  that was built installs `libltdl7` (the library the driver needs on Debian) and loads it, and the
   host venv connected to SQL Server after the same library was installed. The extra itself was
   not selected for that image.
 - The on-prem model endpoint. It has only been spoken to through a mock transport.

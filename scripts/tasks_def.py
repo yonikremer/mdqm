@@ -1019,6 +1019,23 @@ task(
     INTEG.format("tests/integration/test_es_adapter.py"),
 )
 
+task(
+    "A10",
+    "SQL Server extra inside the server image",
+    LATER,
+    "P2",
+    ["A08", "M08"],
+    ["Dockerfile", "docs/mssql-driver.md"],
+    "The host driver needs libltdl.so.7 on Debian/Ubuntu, and the runtime image now installs that library at build time. What is not proven is a build with `--build-arg MDQM_EXTRAS=pg,mssql` actually logging into SQL Server from inside the container. Build that image, run it against the `mssql` profile, and record that `mssql_python.connect` as `mdqm_ro` returns a row. Do not apt-get at container start.",
+    [
+        "an image built with MDQM_EXTRAS=pg,mssql imports mssql_python and connects to the compose SQL Server as mdqm_ro",
+        "the runtime stage still has no pip install",
+        "the finding is written in docs/mssql-driver.md and progress/A10.md",
+    ],
+    "python scripts/check_offline_install.py",
+    "The default image stays extras=pg. This task is only the image that also carries the SQL Server driver.",
+)
+
 # ------------------------------------------------------------------------------------- S
 task(
     "S01",

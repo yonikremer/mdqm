@@ -109,10 +109,10 @@ none from the request to prove the live services and keep the assertions.
 none
 
 ## Not verified
-- An image built with `--build-arg MDQM_EXTRAS=pg,mssql` logging into SQL Server. The rebuilt
-  default image (extras `pg`) loads `libltdl.so.7` as uid 1000990000 and still answers
-  `GET /healthz`. The `mssql` extra itself was not selected, so the driver was not imported
-  inside the image.
+- An image built with `--build-arg MDQM_EXTRAS=pg,mssql` logging into SQL Server. That is task
+  `A10`. The rebuilt default image (extras `pg`) loads `libltdl.so.7` as uid 1000990000 and still
+  answers `GET /healthz`. The `mssql` extra itself was not selected, so the driver was not
+  imported inside the image.
 - The on-prem model endpoint.
 - Oracle, SQL Server and Elasticsearch still do not collect relation sizes. The probe says so.
   Implementing those collectors was not required to make the live suite pass.

@@ -1201,6 +1201,30 @@
    "wave": 5
   },
   {
+   "id": "A10",
+   "title": "SQL Server extra inside the server image",
+   "lane": "A",
+   "phase": "later",
+   "priority": "P2",
+   "depends_on": [
+    "A08",
+    "M08"
+   ],
+   "owns": [
+    "Dockerfile",
+    "docs/mssql-driver.md"
+   ],
+   "description": "The host driver needs libltdl.so.7 on Debian/Ubuntu, and the runtime image now installs that library at build time. What is not proven is a build with `--build-arg MDQM_EXTRAS=pg,mssql` actually logging into SQL Server from inside the container. Build that image, run it against the `mssql` profile, and record that `mssql_python.connect` as `mdqm_ro` returns a row. Do not apt-get at container start.",
+   "acceptance": [
+    "an image built with MDQM_EXTRAS=pg,mssql imports mssql_python and connects to the compose SQL Server as mdqm_ro",
+    "the runtime stage still has no pip install",
+    "the finding is written in docs/mssql-driver.md and progress/A10.md"
+   ],
+   "test": "python scripts/check_offline_install.py",
+   "notes": "The default image stays extras=pg. This task is only the image that also carries the SQL Server driver.",
+   "wave": 6
+  },
+  {
    "id": "S01",
    "title": "Bootstrap pipeline framework (idempotent stages, quiet windows)",
    "lane": "S",
