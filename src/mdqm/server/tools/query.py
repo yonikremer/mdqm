@@ -797,9 +797,7 @@ def _sizes_for(
     measured = services.sizes.latest(source, bare)
     if measured is None:
         return {}
-    return {
-        partition.name: (partition.rows, partition.bytes) for partition in measured.partitions
-    }
+    return {partition.name: (partition.rows, partition.bytes) for partition in measured.partitions}
 
 
 def _fixes(*groups: Sequence[str]) -> tuple[str, ...]:
