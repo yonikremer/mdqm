@@ -1532,7 +1532,11 @@ def _stream_error(
             f"the Oracle statement exceeded the {timeout_s}s timeout and the connection was lost "
             f"while recovering: {message}"
         )
-    return exc
+    # ``oracledb`` is an optional extra. Without the package mypy treats the driver error as Any,
+    # and ``return exc`` would not satisfy ``Exception``. The runtime type is always an exception.
+    if isinstance(exc, Exception):
+        return exc
+    return OracleTimeout(f"the Oracle driver raised {type(exc).__name__}: {message}")
 
 
 def _code(exc: BaseException) -> int:
