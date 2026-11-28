@@ -2730,6 +2730,20 @@
             "additionalProperties": false,
             "description": "What the plan says the query reads: the static estimate, plus the source's own plan.\n\n``pruning_proof`` is A03's verdict, not a promise: ``proven`` means the source's plan showed the\npruning, ``unproven`` means it did not, and ``unknown`` means no plan was obtained (no\n``EXPLAIN`` capability, a raw statement, or a cache hit).",
             "properties": {
+              "est_bytes": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Bytes the window would read, when a measured size profile answered.",
+                "title": "Est Bytes"
+              },
               "est_rows": {
                 "anyOf": [
                   {
@@ -2742,6 +2756,25 @@
                 ],
                 "default": null,
                 "title": "Est Rows"
+              },
+              "estimate_incomplete": {
+                "default": false,
+                "description": "A partition in the window reported no size, so est_rows is a lower bound.",
+                "title": "Estimate Incomplete",
+                "type": "boolean"
+              },
+              "estimate_source": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "'profile' when the measured sizes answered (mdqm sizes measure), 'catalog' when the source's own per-partition estimates did. It describes est_bytes and the static partition estimate, NOT est_rows: when the source returned its own plan, est_rows is that plan's figure and this field is about the other numbers.",
+                "title": "Estimate Source"
               },
               "notes": {
                 "default": [],
