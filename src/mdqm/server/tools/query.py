@@ -224,8 +224,12 @@ class PlanInfo(MDQMModel):
     )
     estimate_source: str | None = Field(
         default=None,
-        description="'profile' when measured sizes answered (mdqm sizes measure), 'catalog' when "
-        "the source's own estimates did. Never silently one or the other.",
+        description=(
+            "'profile' when the measured sizes answered (mdqm sizes measure), 'catalog' when the "
+            "source's own per-partition estimates did. It describes est_bytes and the static "
+            "partition estimate, NOT est_rows: when the source returned its own plan, est_rows is "
+            "that plan's figure and this field is about the other numbers."
+        ),
     )
     estimate_incomplete: bool = Field(
         default=False,
