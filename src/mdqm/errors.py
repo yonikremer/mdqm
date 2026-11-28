@@ -65,6 +65,7 @@ __all__ = [
     "ErrorCode",
     "GuardOutcome",
     "ambiguous_value",
+    "cancelled",
     "cost_too_high",
     "from_exception",
     "from_guard",
@@ -169,6 +170,9 @@ class ErrorCode(StrEnum):
     QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
     TIMEOUT = "TIMEOUT"
     RESULT_TOO_LARGE = "RESULT_TOO_LARGE"
+    # Asynchronous jobs: the caller stopped it, so it is not the source's failure and it is not a
+    # timeout -- the fix is different, which is why the code is.
+    CANCELLED = "CANCELLED"
     # Lookups by id: a handle, a run id, a query id (M05).
     NOT_FOUND = "NOT_FOUND"
     # Sources (F04, adapters).
@@ -546,6 +550,21 @@ def timeout(*, seconds: float | None = None, target: str | None = None) -> Error
     )
 
 
+def cancelled(*, query_id: str | None = None) -> ErrorResponse:
+    """The caller stopped a running job (code ``CANCELLED``).
+
+    ``query_id`` names the caller's own job, so echoing it reveals nothing they did not send; it is
+    still only a token (``_ident``) and never free text.
+    """
+    which = f' "{_ident(query_id)}"' if query_id else ""
+    return _build(
+        ErrorCode.CANCELLED,
+        f"The query{which} was cancelled before it finished, so it has no result.",
+        "Call `query` again for that question, or drop the unnecessary rows: a cancelled job is "
+        "not retried by the server and its partial rows are discarded.",
+    )
+
+
 def result_too_large(*, max_rows: int, rows: int | None = None) -> ErrorResponse:
     """The result exceeds the response cap (code ``RESULT_TOO_LARGE``)."""
     size = f"{rows} rows" if rows is not None else "larger than the cap"
@@ -656,6 +675,7 @@ BUILDERS: Mapping[ErrorCode, Callable[..., ErrorResponse]] = MappingProxyType(
         ErrorCode.QUOTA_EXCEEDED: quota_exceeded,
         ErrorCode.TIMEOUT: timeout,
         ErrorCode.RESULT_TOO_LARGE: result_too_large,
+        ErrorCode.CANCELLED: cancelled,
         ErrorCode.NOT_FOUND: not_found,
         ErrorCode.SOURCE_UNAVAILABLE: source_unavailable,
         ErrorCode.NOT_SUPPORTED: not_supported,

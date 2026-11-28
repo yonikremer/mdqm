@@ -36,9 +36,11 @@ from pydantic import Field
 
 from mdqm.errors import invalid_spec, not_found
 from mdqm.governor.handles import HandleNotFound, Page, ResultStore
-from mdqm.models import ErrorResponse, UtcDatetime
+from mdqm.models import ErrorResponse, JsonObject, UtcDatetime
 from mdqm.models.base import MDQMModel
+from mdqm.results.summary import ResultSummary
 from mdqm.server.context import current_context
+from mdqm.server.jobs import JobProgress, JobRegistry
 from mdqm.spec.models import QuerySpec
 from mdqm.store.audit import AuditLog
 from mdqm.store.feedback import FeedbackEntry, FeedbackRecord, FeedbackStore
@@ -85,12 +87,15 @@ class ToolServices:
         history: the caller's stored runs, for ``history``.
         feedback: the rating queue, for ``feedback``.
         audit: where a refusal is appended, so a cross-user attempt leaves a row behind.
+        jobs: the registry that runs ``mode="async"`` queries, so ``get_more`` can report on one.
+            It must be the *same* object the query tool was given; ``None`` is a build without it.
     """
 
     handles: ResultStore
     history: HistoryStore
     feedback: FeedbackStore
     audit: AuditLog
+    jobs: JobRegistry | None = None
 
 
 class ServicesUnavailable(RuntimeError):
@@ -150,9 +155,21 @@ class Answer(MDQMModel):
 
     ``status`` is ``ok`` with the payload, ``error`` with the structured ``ErrorResponse`` the agent
     must read, or ``not_implemented`` with ``problem``/``fix`` when the server has no stores.
+    ``get_more`` adds the states of an asynchronous job -- ``queued``, ``running``, ``done``,
+    ``failed``, ``cancelled`` -- so a poll reports the job's state in this same field rather than
+    making the caller read a second one.
     """
 
-    status: Literal["ok", "error", "not_implemented"] = "ok"
+    status: Literal[
+        "ok",
+        "error",
+        "not_implemented",
+        "queued",
+        "running",
+        "done",
+        "failed",
+        "cancelled",
+    ] = "ok"
     surface: str = Field(description="Which tool answered.")
     user_id: str = Field(description="The authenticated caller the server saw.")
     error: ErrorResponse | None = Field(default=None, description="Set when status is 'error'.")
@@ -161,9 +178,32 @@ class Answer(MDQMModel):
 
 
 class GetMoreAnswer(Answer):
-    """A page of a stored result, or the refusal."""
+    """A page of a stored result, or the state of a job and (once it is ``done``) its answer.
+
+    The two references are separate fields on purpose: ``result_handle`` pages rows that already
+    exist, ``query_id`` watches work that is still running. Send exactly one of them. When a job
+    finishes, this answer carries the same ``summary``, ``sample`` and ``result_handle`` a blocking
+    ``query`` would have returned, so the next step is the same page-the-handle call as always.
+    """
 
     page: Page | None = Field(default=None, description="The rows, and where the next page starts.")
+    progress: JobProgress | None = Field(
+        default=None,
+        description=(
+            "The job's state, measured progress and (for a finished job) its `result_handle`. "
+            "`partitions_done` is null until the source's own plan said how many it will scan."
+        ),
+    )
+    summary: ResultSummary | None = Field(
+        default=None, description="A finished job's bounded answer, like `query` returns."
+    )
+    sample: tuple[JsonObject, ...] = Field(
+        default=(), description="The first rows of a finished job's result."
+    )
+    result_handle: str | None = Field(
+        default=None, description="A finished job's handle: page it with this same tool."
+    )
+    rows_total: int = Field(default=0, ge=0)
 
 
 class HistoryItem(MDQMModel):
@@ -250,19 +290,47 @@ def _run_id_of(query_id: str) -> int | None:
 
 def get_more(
     result_handle: Annotated[
-        str, Field(min_length=1, description="A `handle` from a previous answer.")
-    ],
+        str | None,
+        Field(
+            min_length=1,
+            description=(
+                "A `result_handle` (or a summary's `handle`) from a previous answer: pages those "
+                "rows. Send this OR `query_id`, never both."
+            ),
+        ),
+    ] = None,
     offset: Annotated[
         int, Field(ge=0, description="Rows to skip; 0 for the next page in order.")
     ] = 0,
     limit: Annotated[int, Field(ge=1, le=1000, description="Rows to return.")] = 100,
+    query_id: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            description=(
+                "The `query_id` from a `query` answer with `mode: \"async\"`: reports that job's "
+                "progress, and its summary/sample/`result_handle` once it is done."
+            ),
+        ),
+    ] = None,
+    cancel: Annotated[
+        bool,
+        Field(
+            description=(
+                "With `query_id`: ask the server to stop the job. The source is told to stop "
+                "between batches, so poll once more with `cancel: false` to confirm."
+            )
+        ),
+    ] = False,
 ) -> GetMoreAnswer:
-    """Page the rest of a result that `query` returned with a handle.
+    """Page the rest of a result, or watch a job you started asynchronously.
 
-    Call this only with a `handle` from a previous answer, never to re-run a query: the rows come
-    from the cached result, so a repeated call is cheap. Your own handles only; someone else's is
-    reported exactly like one that expired.
-    Example: get_more({"result_handle": "h_8f21", "offset": 100, "limit": 100})
+    With a `result_handle` from a previous answer it pages those cached rows; it never re-runs a
+    query. Your own handles only; someone else's reads like one that expired.
+    With a `query_id` (from `query` with `mode: "async"`) it reports progress: `status` stays
+    `running` until the job finishes, then `done` with the `summary`, `sample` and `result_handle`
+    a blocking call returns. `cancel: true` asks the job to stop.
+    Example: get_more({"result_handle": "h_8f21"}) or get_more({"query_id": "j_7"})
     """
     context = current_context()
     services = _services
@@ -273,6 +341,41 @@ def get_more(
             user_id=context.user_id,
             problem="no result store is configured on this server, so no handle can be paged",
             fix="re-run `query` once the server is configured; nothing is cached in this build",
+        )
+    if query_id is not None:
+        if result_handle is not None:
+            return GetMoreAnswer(
+                status="error",
+                surface="get_more",
+                user_id=context.user_id,
+                error=_refusal(
+                    surface="get_more",
+                    user_id=context.user_id,
+                    error=invalid_spec(
+                        field="query_id",
+                        reason=(
+                            "send either `result_handle` (rows that exist) or `query_id` (a job "
+                            "to watch), not both: they are two different references"
+                        ),
+                        expected=("query_id", "result_handle"),
+                    ),
+                ),
+            )
+        return _job(services, context.user_id, query_id, cancel=cancel)
+    if result_handle is None:
+        return GetMoreAnswer(
+            status="error",
+            surface="get_more",
+            user_id=context.user_id,
+            error=_refusal(
+                surface="get_more",
+                user_id=context.user_id,
+                error=invalid_spec(
+                    field="result_handle",
+                    reason="send `result_handle` to page rows, or `query_id` to watch a job",
+                    expected=("result_handle", "query_id"),
+                ),
+            ),
         )
     try:
         page = services.handles.get_more(
@@ -292,6 +395,63 @@ def get_more(
             status="error", surface="get_more", user_id=context.user_id, error=error
         )
     return GetMoreAnswer(surface="get_more", user_id=context.user_id, page=page)
+
+
+def _job(services: ToolServices, user_id: str, query_id: str, *, cancel: bool) -> GetMoreAnswer:
+    """Report one asynchronous job, or stop it, from the registry and its stored row.
+
+    A finished job answers with the same three things a blocking run would have returned. When this
+    process no longer holds the run's summary (it restarted), the answer still carries the
+    `result_handle` the row recorded, which is enough to page the rows: losing a summary is a
+    smaller loss than pretending the job never finished.
+    """
+    registry = services.jobs
+    if registry is None:
+        return GetMoreAnswer(
+            status="not_implemented",
+            surface="get_more",
+            user_id=user_id,
+            problem=(
+                "this server runs no query jobs, so a `query_id` cannot be watched here; only "
+                "`result_handle` can be paged"
+            ),
+            fix="call `query` without `mode` and wait for its answer, then page its `result_handle`",
+        )
+    progress = (
+        registry.cancel(query_id, owner=user_id)
+        if cancel
+        else registry.status(query_id, owner=user_id)
+    )
+    if progress is None:
+        error = _refusal(
+            surface="get_more",
+            user_id=user_id,
+            error=not_found(
+                what="query id",
+                fix="Use the `query_id` a `query` answer returned with `status: \"started\"`. "
+                "Job ids are short-lived and one issued to someone else is not readable.",
+            ),
+        )
+        return GetMoreAnswer(status="error", surface="get_more", user_id=user_id, error=error)
+    if not progress.finished:
+        return GetMoreAnswer(
+            status=progress.state.value,
+            surface="get_more",
+            user_id=user_id,
+            progress=progress,
+        )
+    outcome = registry.outcome(query_id, owner=user_id)
+    return GetMoreAnswer(
+        status=progress.state.value,
+        surface="get_more",
+        user_id=user_id,
+        progress=progress,
+        error=progress.error,
+        summary=None if outcome is None else outcome.summary,
+        sample=() if outcome is None else outcome.sample,
+        result_handle=progress.result_handle,
+        rows_total=progress.rows_total or 0,
+    )
 
 
 def history(

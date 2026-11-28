@@ -243,7 +243,12 @@
             "enum": [
               "ok",
               "error",
-              "not_implemented"
+              "not_implemented",
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
             ],
             "title": "Status",
             "type": "string"
@@ -978,7 +983,12 @@
             "enum": [
               "ok",
               "error",
-              "not_implemented"
+              "not_implemented",
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
             ],
             "title": "Status",
             "type": "string"
@@ -1010,9 +1020,15 @@
       }
     },
     {
-      "description": "Page the rest of a result that `query` returned with a handle.\n\nCall this only with a `handle` from a previous answer, never to re-run a query: the rows come\nfrom the cached result, so a repeated call is cheap. Your own handles only; someone else's is\nreported exactly like one that expired.\nExample: get_more({\"result_handle\": \"h_8f21\", \"offset\": 100, \"limit\": 100})",
+      "description": "Page the rest of a result, or watch a job you started asynchronously.\n\nWith a `result_handle` from a previous answer it pages those cached rows; it never re-runs a\nquery. Your own handles only; someone else's reads like one that expired.\nWith a `query_id` (from `query` with `mode: \"async\"`) it reports progress: `status` stays\n`running` until the job finishes, then `done` with the `summary`, `sample` and `result_handle`\na blocking call returns. `cancel: true` asks the job to stop.\nExample: get_more({\"result_handle\": \"h_8f21\"}) or get_more({\"query_id\": \"j_7\"})",
       "inputSchema": {
         "properties": {
+          "cancel": {
+            "default": false,
+            "description": "With `query_id`: ask the server to stop the job. The source is told to stop between batches, so poll once more with `cancel: false` to confirm.",
+            "title": "Cancel",
+            "type": "boolean"
+          },
           "limit": {
             "default": 100,
             "description": "Rows to return.",
@@ -1028,22 +1044,128 @@
             "title": "Offset",
             "type": "integer"
           },
+          "query_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The `query_id` from a `query` answer with `mode: \"async\"`: reports that job's progress, and its summary/sample/`result_handle` once it is done.",
+            "title": "Query Id"
+          },
           "result_handle": {
-            "description": "A `handle` from a previous answer.",
-            "minLength": 1,
-            "title": "Result Handle",
-            "type": "string"
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A `result_handle` (or a summary's `handle`) from a previous answer: pages those rows. Send this OR `query_id`, never both.",
+            "title": "Result Handle"
           }
         },
-        "required": [
-          "result_handle"
-        ],
         "title": "get_moreArguments",
         "type": "object"
       },
       "name": "get_more",
       "outputSchema": {
         "$defs": {
+          "ColumnStats": {
+            "additionalProperties": false,
+            "description": "Statistics for one column, with every approximation named.",
+            "properties": {
+              "distinct": {
+                "minimum": 0,
+                "title": "Distinct",
+                "type": "integer"
+              },
+              "distinct_kind": {
+                "description": "'exact', 'lower_bound' (row sample) or 'unavailable' (type has no kernel).",
+                "enum": [
+                  "exact",
+                  "lower_bound",
+                  "unavailable"
+                ],
+                "title": "Distinct Kind",
+                "type": "string"
+              },
+              "max_value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Max Value"
+              },
+              "min_value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "JSON scalar, or null when the type has no ordering.",
+                "title": "Min Value"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "nulls": {
+                "minimum": 0,
+                "title": "Nulls",
+                "type": "integer"
+              },
+              "type": {
+                "description": "Arrow type, e.g. 'int64' or 'timestamp[us]'.",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "type",
+              "nulls",
+              "distinct",
+              "distinct_kind"
+            ],
+            "title": "ColumnStats",
+            "type": "object"
+          },
           "ErrorResponse": {
             "additionalProperties": false,
             "description": "A blockable/repairable failure, addressed to a weak agent.",
@@ -1121,6 +1243,181 @@
             "title": "ErrorResponse",
             "type": "object"
           },
+          "JobProgress": {
+            "additionalProperties": false,
+            "description": "One job's live status, as ``get_more(query_id=...)`` reports it.",
+            "properties": {
+              "bytes_read": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Bytes Read",
+                "type": "integer"
+              },
+              "created_at": {
+                "format": "date-time",
+                "title": "Created At",
+                "type": "string"
+              },
+              "elapsed_s": {
+                "default": 0.0,
+                "description": "Wall clock since the job was created.",
+                "minimum": 0,
+                "title": "Elapsed S",
+                "type": "number"
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ErrorResponse"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Set when the job failed or was cancelled."
+              },
+              "est_rows": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The plan's static estimate.",
+                "title": "Est Rows"
+              },
+              "finished_at": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Finished At"
+              },
+              "note": {
+                "default": "",
+                "description": "One line on anything unusual about this run.",
+                "title": "Note",
+                "type": "string"
+              },
+              "partitions_done": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Partitions the source's plan said it will scan; null when it said nothing.",
+                "title": "Partitions Done"
+              },
+              "partitions_total": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Partitions the window touches, when the plan knows.",
+                "title": "Partitions Total"
+              },
+              "phase": {
+                "default": "",
+                "description": "planning, executing or finished.",
+                "title": "Phase",
+                "type": "string"
+              },
+              "query_id": {
+                "title": "Query Id",
+                "type": "string"
+              },
+              "result_handle": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Set once the job answered: page it with `get_more(result_handle=...)`.",
+                "title": "Result Handle"
+              },
+              "rows_read": {
+                "default": 0,
+                "description": "Rows the source has produced so far.",
+                "minimum": 0,
+                "title": "Rows Read",
+                "type": "integer"
+              },
+              "rows_total": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Rows Total"
+              },
+              "started_at": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Started At"
+              },
+              "state": {
+                "$ref": "#/$defs/JobState"
+              }
+            },
+            "required": [
+              "query_id",
+              "state",
+              "created_at"
+            ],
+            "title": "JobProgress",
+            "type": "object"
+          },
+          "JobState": {
+            "description": "The state machine the ``query_job.state`` CHECK allows. Nothing else can be stored.",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "title": "JobState",
+            "type": "string"
+          },
           "Page": {
             "additionalProperties": false,
             "description": "One page of a stored result, for the owner only.",
@@ -1182,10 +1479,121 @@
             ],
             "title": "Page",
             "type": "object"
+          },
+          "ResultSummary": {
+            "additionalProperties": false,
+            "description": "What the agent gets instead of the result set: summary, sample, handle.",
+            "properties": {
+              "budget_clamped": {
+                "description": "True when the requested budget was not used as is.",
+                "title": "Budget Clamped",
+                "type": "boolean"
+              },
+              "budget_tokens": {
+                "description": "Budget actually applied after clamping.",
+                "exclusiveMinimum": 0,
+                "title": "Budget Tokens",
+                "type": "integer"
+              },
+              "columns": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/ColumnStats"
+                },
+                "title": "Columns",
+                "type": "array"
+              },
+              "columns_total": {
+                "minimum": 0,
+                "title": "Columns Total",
+                "type": "integer"
+              },
+              "columns_without_stats": {
+                "description": "Columns with no statistics here (not covered, or dropped for budget).",
+                "minimum": 0,
+                "title": "Columns Without Stats",
+                "type": "integer"
+              },
+              "handle": {
+                "description": "Opaque id for the stored result.",
+                "minLength": 1,
+                "title": "Handle",
+                "type": "string"
+              },
+              "next_call": {
+                "description": "Exact call that pages the remaining rows.",
+                "title": "Next Call",
+                "type": "string"
+              },
+              "rows_not_shown": {
+                "description": "Rows the agent has not seen; 0 means complete.",
+                "minimum": 0,
+                "title": "Rows Not Shown",
+                "type": "integer"
+              },
+              "rows_total": {
+                "minimum": 0,
+                "title": "Rows Total",
+                "type": "integer"
+              },
+              "sample": {
+                "description": "The first rows, in source order.",
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Sample",
+                "type": "array"
+              },
+              "sample_label": {
+                "description": "Human label: a sample, and of what.",
+                "title": "Sample Label",
+                "type": "string"
+              },
+              "sample_rows_wanted": {
+                "minimum": 0,
+                "title": "Sample Rows Wanted",
+                "type": "integer"
+              },
+              "status": {
+                "const": "ok",
+                "default": "ok",
+                "title": "Status",
+                "type": "string"
+              },
+              "tokens_estimated": {
+                "description": "Conservative token estimate of this answer.",
+                "minimum": 0,
+                "title": "Tokens Estimated",
+                "type": "integer"
+              },
+              "truncated": {
+                "description": "True when rows were left out of this answer.",
+                "title": "Truncated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "rows_total",
+              "handle",
+              "sample",
+              "sample_rows_wanted",
+              "sample_label",
+              "rows_not_shown",
+              "truncated",
+              "columns_total",
+              "columns_without_stats",
+              "tokens_estimated",
+              "budget_tokens",
+              "budget_clamped",
+              "next_call"
+            ],
+            "title": "ResultSummary",
+            "type": "object"
           }
         },
         "additionalProperties": false,
-        "description": "A page of a stored result, or the refusal.",
+        "description": "A page of a stored result, or the state of a job and (once it is ``done``) its answer.\n\nThe two references are separate fields on purpose: ``result_handle`` pages rows that already\nexist, ``query_id`` watches work that is still running. Send exactly one of them. When a job\nfinishes, this answer carries the same ``summary``, ``sample`` and ``result_handle`` a blocking\n``query`` would have returned, so the next step is the same page-the-handle call as always.",
         "properties": {
           "error": {
             "anyOf": [
@@ -1237,15 +1645,73 @@
             "description": "What is missing (not_implemented).",
             "title": "Problem"
           },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JobProgress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The job's state, measured progress and (for a finished job) its `result_handle`. `partitions_done` is null until the source's own plan said how many it will scan."
+          },
+          "result_handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A finished job's handle: page it with this same tool.",
+            "title": "Result Handle"
+          },
+          "rows_total": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Rows Total",
+            "type": "integer"
+          },
+          "sample": {
+            "default": [],
+            "description": "The first rows of a finished job's result.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Sample",
+            "type": "array"
+          },
           "status": {
             "default": "ok",
             "enum": [
               "ok",
               "error",
-              "not_implemented"
+              "not_implemented",
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
             ],
             "title": "Status",
             "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ResultSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A finished job's bounded answer, like `query` returns."
           },
           "surface": {
             "description": "Which tool answered.",
@@ -2061,7 +2527,12 @@
             "enum": [
               "ok",
               "error",
-              "not_implemented"
+              "not_implemented",
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
             ],
             "title": "Status",
             "type": "string"
@@ -2086,7 +2557,7 @@
       }
     },
     {
-      "description": "Run one query spec and get a summary, a small sample and a handle. This is the main tool.\n\nSend `spec`, never SQL. The server lints it, prunes the partitions and the time window, picks\nthe source, and answers with `summary`, `sample` and `result_handle` (page it with `get_more`).\nA `dry_run` in the spec stops after the plan; `fresh` skips the cache. Errors carry `code`,\n`problem` and an exact `fix`.\nExample: query({\"spec\": {\"from\": \"billing.accounts\", \"select\": [\"customer_status\"],\n\"limit\": 5}})",
+      "description": "Run one query spec: a summary, a small sample and a handle. This is the main tool.\n\nSend `spec`, never SQL; the server lints, plans, prunes and runs it. `dry_run` stops after the\nplan, `fresh` skips the cache. With `mode: \"async\"` the answer is `status: \"started\"` and a\n`query_id`: poll `get_more({\"query_id\": ...})`, then page its `result_handle`. Errors carry\n`code`, `problem` and an exact `fix`.\nExample: query({\"spec\": {\"from\": \"billing.accounts\", \"select\": [\"customer_status\"]}})",
       "inputSchema": {
         "$defs": {
           "Agg": {
@@ -2406,6 +2877,16 @@
           }
         },
         "properties": {
+          "mode": {
+            "default": "blocking",
+            "description": "'blocking' (default) waits for the answer. 'async' answers at once with a `query_id` and the plan; poll it with `get_more(query_id=...)` and get summary, sample and `result_handle` when it finishes.",
+            "enum": [
+              "blocking",
+              "async"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
           "source": {
             "anyOf": [
               {
@@ -3245,7 +3726,7 @@
           }
         },
         "additionalProperties": false,
-        "description": "One answer from ``query``: a summary, a small sample and a handle, or the refusal.\n\n``status`` is ``ok`` with an answer, ``dry_run`` with the plan only, ``error`` with the\nstructured :class:`~mdqm.models.ErrorResponse` the agent must act on, or ``not_implemented``\nwhen the server was built without a pipeline.",
+        "description": "One answer from ``query``: a summary, a small sample and a handle, or the refusal.\n\n``status`` is ``ok`` with an answer, ``dry_run`` with the plan only, ``started`` with a job id\n(``mode=\"async\"``, poll it with ``get_more``), ``error`` with the structured\n:class:`~mdqm.models.ErrorResponse` the agent must act on, or ``not_implemented`` when the\nserver was built without a pipeline.",
         "properties": {
           "applied_fixes": {
             "default": [],
@@ -3331,6 +3812,19 @@
             "default": null,
             "description": "A cross-source answer's receipt: rows per source with their own `fetched_at`, and what each join matched, dropped and multiplied. `complete: false` means no answer."
           },
+          "query_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Set when status is 'started': pass it to `get_more` as `query_id` to see progress. It is a job id, not a `result_handle` and not a history run id.",
+            "title": "Query Id"
+          },
           "result_handle": {
             "anyOf": [
               {
@@ -3365,6 +3859,7 @@
             "enum": [
               "ok",
               "dry_run",
+              "started",
               "error",
               "not_implemented"
             ],

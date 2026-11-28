@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from mdqm.models import ErrorResponse
 
-__all__ = ["GovernorRefusal"]
+__all__ = ["GovernorCancelled", "GovernorRefusal"]
 
 
 class GovernorRefusal(Exception):
@@ -32,3 +32,11 @@ class GovernorRefusal(Exception):
     def code(self) -> str:
         """The error code, for a caller that branches without unpacking the response."""
         return self.response.code
+
+
+class GovernorCancelled(GovernorRefusal):
+    """The *caller* stopped the run (code ``CANCELLED``), so it is not the source's failure.
+
+    Separate from its parent for one reason: a cancelled run must not count against the source's
+    circuit breaker. A slow source opens the breaker; a caller changing their mind must not.
+    """

@@ -31,20 +31,21 @@ the cancelled stream finishes unwinding, so one slow source cannot starve the ot
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import NamedTuple
 
 import pyarrow as pa
 from pydantic import Field
 
 from mdqm.adapters.base import ArrowStream, SourceAdapter
+from mdqm.errors import cancelled as cancelled_error
 from mdqm.errors import from_exception, from_guard
 from mdqm.errors import timeout as timeout_error
 from mdqm.governor.admission import Admission, Peak, Quota, Scope
 from mdqm.governor.breaker import BreakerReport, CircuitBreaker
 from mdqm.governor.clock import Clock, SystemClock
 from mdqm.governor.handles import Page, ResultHandle, ResultStore
-from mdqm.governor.refusal import GovernorRefusal
+from mdqm.governor.refusal import GovernorCancelled, GovernorRefusal
 from mdqm.models import Fragment, Limits
 from mdqm.models.base import MDQMModel
 from mdqm.results.summary import (
@@ -61,7 +62,12 @@ __all__ = [
     "Governance",
     "Governor",
     "GovernorReport",
+    "ProgressCallback",
 ]
+
+#: Receives ``(rows_so_far, bytes_so_far)`` after every batch the governor has drained. It is how a
+#: long run reports honest, measured progress: rows the adapter actually produced, never a guess.
+ProgressCallback = Callable[[int, int], None]
 
 
 class GovernorReport(MDQMModel):
@@ -155,8 +161,18 @@ class Governor:
         sample_rows: int = DEFAULT_SAMPLE_ROWS,
         page_rows: int = DEFAULT_PAGE_ROWS,
         budget_tokens: int = DEFAULT_TOKEN_BUDGET,
+        progress: ProgressCallback | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> ExecutionOutcome:
         """Run ``fragment`` against ``source`` as ``user`` and hand back a bounded answer.
+
+        Args:
+            progress: called ``(rows, bytes)`` after each drained batch, so a caller that waits
+                (an asynchronous job) can report progress it measured. ``None`` reports nothing.
+            cancelled: asked before every batch; when it returns True the adapter's own
+                ``cancel`` is called on the live stream and the run stops with
+                :class:`~mdqm.governor.refusal.GovernorCancelled`. It cannot interrupt an
+                ``execute`` that has not returned a stream yet -- see the module docstring.
 
         Returns:
             The summary, the handle and the receipt.
@@ -171,7 +187,13 @@ class Governor:
         self._refuse_unreadable(fragment)
         self._breaker.ensure_closed(source)
         drained, waited_s = self._run_slot(
-            adapter=adapter, source=source, user=user, fragment=fragment, limits=limits
+            adapter=adapter,
+            source=source,
+            user=user,
+            fragment=fragment,
+            limits=limits,
+            progress=progress,
+            cancelled=cancelled,
         )
         # Slots are released by now: storing and summarising is our CPU work, not the source's.
         handle = self._store.put(owner=user, source=source, table=drained.table)
@@ -233,6 +255,8 @@ class Governor:
         user: str,
         fragment: Fragment,
         limits: Limits,
+        progress: ProgressCallback | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> tuple[_Drained, float]:
         """Hold the slots, spend the quota, drain under the deadline, and classify the outcome."""
         with self._admission.hold(source=source, user=user) as lease:
@@ -240,8 +264,16 @@ class Governor:
                 self._quota.consume(user)
             try:
                 drained = self._drain(
-                    adapter=adapter, source=source, fragment=fragment, limits=limits
+                    adapter=adapter,
+                    source=source,
+                    fragment=fragment,
+                    limits=limits,
+                    progress=progress,
+                    cancelled=cancelled,
                 )
+            except GovernorCancelled:
+                # The caller stopped it: the source is fine, so the breaker hears nothing.
+                raise
             except GovernorRefusal:
                 # A timeout is the source's failure: count it, so a chronically slow source opens.
                 self._breaker.record_failure(source)
@@ -261,10 +293,13 @@ class Governor:
         source: str,
         fragment: Fragment,
         limits: Limits,
+        progress: ProgressCallback | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> _Drained:
-        """Consume the stream batch by batch, cancelling on the deadline.
+        """Consume the stream batch by batch, cancelling on the deadline or the caller's stop.
 
         Raises:
+            GovernorCancelled: the caller asked to stop; the adapter's ``cancel`` was called first.
             GovernorRefusal: the deadline passed; the adapter's ``cancel`` was called first.
         """
         deadline = self._clock.monotonic() + limits.timeout_s
@@ -280,6 +315,9 @@ class Governor:
         iterator = iter(stream)
         try:
             while True:
+                if cancelled is not None and cancelled():
+                    adapter.cancel(stream)
+                    raise GovernorCancelled(cancelled_error())
                 if self._clock.monotonic() > deadline:
                     # The driver's own stop path, not an abandoned thread.
                     adapter.cancel(stream)
@@ -291,6 +329,8 @@ class Governor:
                 batches.append(batch)
                 rows += batch.num_rows
                 nbytes += batch.nbytes
+                if progress is not None:
+                    progress(rows, nbytes)
         finally:
             stream.close()
         return _Drained(

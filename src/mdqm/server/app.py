@@ -45,7 +45,7 @@ from mdqm.server.tools import (
     configure_services,
     register_tools,
 )
-from mdqm.server.wiring import WiringError, query_services, tool_services
+from mdqm.server.wiring import WiringError, job_registry, query_services, tool_services
 
 __all__ = [
     "DEFAULT_PUBLIC_URL",
@@ -219,9 +219,12 @@ def serve(*, host: str, port: int, public_url: str | None = None) -> None:
         try:
             # One result store for the whole server: `query` fills it, `get_more` pages it.
             handles = ResultStore()
-            configure_services(tool_services(settings, handles=handles))
+            # One job registry too: `query` with `mode="async"` starts a job in it, and `get_more`
+            # has to ask that same object how the job is doing.
+            jobs = job_registry(settings)
+            configure_services(tool_services(settings, handles=handles, jobs=jobs))
             configure_query_services(
-                query_services(settings, context_source.layer, handles=handles)
+                query_services(settings, context_source.layer, handles=handles, jobs=jobs)
             )
         except WiringError:
             logger.exception("query pipeline not wired")

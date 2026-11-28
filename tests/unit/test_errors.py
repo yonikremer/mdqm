@@ -56,6 +56,7 @@ EXPECTED_CODES = frozenset(
         "QUOTA_EXCEEDED",
         "TIMEOUT",
         "RESULT_TOO_LARGE",
+        "CANCELLED",
         "NOT_FOUND",
         "SOURCE_UNAVAILABLE",
         "NOT_SUPPORTED",
@@ -237,6 +238,18 @@ CASES: tuple[Case, ...] = (
         {"max_rows": 10000},
         fix_must=('"limit": 10000',),
         problem_must=("cap is 10000 rows",),
+    ),
+    Case(
+        ErrorCode.CANCELLED,
+        {"query_id": "j_7"},
+        fix_must=("`query` again", "not retried"),
+        problem_must=("j_7", "cancelled"),
+    ),
+    Case(
+        ErrorCode.CANCELLED,
+        {},
+        fix_must=("`query` again",),
+        problem_must=("cancelled", "no result"),
     ),
     # Sources.
     Case(

@@ -29,12 +29,14 @@ from mdqm.governor.core import Governor
 from mdqm.governor.handles import ResultStore
 from mdqm.models import Limits
 from mdqm.semantic.models import SemanticLayer
+from mdqm.server.jobs import DEFAULT_MAX_JOBS, JobRegistry
 from mdqm.server.tools.misc import ToolServices
 from mdqm.server.tools.query import QueryServices
 from mdqm.store.audit import AuditLog
 from mdqm.store.db import Store
 from mdqm.store.feedback import FeedbackStore
 from mdqm.store.history import HistoryStore
+from mdqm.store.jobs import QueryJobStore
 from mdqm.store.sizes import SizeStore
 
 _log = logging.getLogger(__name__)
@@ -119,12 +121,16 @@ def tool_services(
     *,
     clock: Clock | None = None,
     handles: ResultStore | None = None,
+    jobs: JobRegistry | None = None,
 ) -> ToolServices:
     """The stores `history`, `feedback` and `get_more` read.
 
     They share one metadata database with the query path: a run recorded by `query` must be visible to
     `history`, and a handle it returns must be pageable by `get_more`. Wiring them here keeps that true
     in one place instead of relying on two constructors agreeing.
+
+    ``jobs`` must be the same registry the query tool was given, or a ``query_id`` it issued would
+    be unreadable here: pass the object :func:`job_registry` built.
     """
     store = Store(settings.paths.metadata_db)
     store.initialize()
@@ -136,7 +142,20 @@ def tool_services(
         history=HistoryStore(store, clock=now),
         feedback=FeedbackStore(store, clock=now),
         audit=AuditLog(store, clock=now),
+        jobs=jobs,
     )
+
+
+def job_registry(settings: Settings, *, clock: Clock | None = None) -> JobRegistry:
+    """The asynchronous job registry over the metadata database, migrated and ready to start work.
+
+    One registry per server process, shared by the `query` tool (which starts jobs) and `get_more`
+    (which reports on them): a second one would keep a second set of running threads and neither
+    could see the other's in-memory progress.
+    """
+    store = Store(settings.paths.metadata_db)
+    store.initialize()
+    return JobRegistry(QueryJobStore(store), clock=clock, max_jobs=DEFAULT_MAX_JOBS)
 
 
 def query_services(
@@ -146,6 +165,7 @@ def query_services(
     clock: Clock | None = None,
     tables: Sequence[str] | None = None,
     handles: ResultStore | None = None,
+    jobs: JobRegistry | None = None,
 ) -> QueryServices:
     """Assemble everything the ``query`` tool needs from one `Settings` object."""
     adapters = build_adapters(settings)
@@ -186,4 +206,7 @@ def query_services(
         # The measured sizes (`mdqm sizes measure`), so a plan counts what was measured instead of
         # the catalog's own reltuples. An install that never measured plans exactly as before.
         sizes=SizeStore(store, clock=None if clock is None else clock.now),
+        # The asynchronous registry: `mode="async"` starts a job here and `get_more` polls the same
+        # object. `None` keeps the tool blocking-only and says so when asked for a job.
+        jobs=jobs,
     )

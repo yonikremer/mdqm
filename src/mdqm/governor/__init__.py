@@ -24,7 +24,13 @@ from mdqm.governor.admission import (
 )
 from mdqm.governor.breaker import BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker
 from mdqm.governor.clock import Clock, SystemClock
-from mdqm.governor.core import ExecutionOutcome, Governance, Governor, GovernorReport
+from mdqm.governor.core import (
+    ExecutionOutcome,
+    Governance,
+    Governor,
+    GovernorReport,
+    ProgressCallback,
+)
 from mdqm.governor.handles import (
     DEFAULT_MAX_HANDLES,
     DEFAULT_TTL_S,
@@ -34,7 +40,7 @@ from mdqm.governor.handles import (
     ResultStore,
     StoreStats,
 )
-from mdqm.governor.refusal import GovernorRefusal
+from mdqm.governor.refusal import GovernorCancelled, GovernorRefusal
 
 __all__ = [
     "DEFAULT_MAX_HANDLES",
@@ -49,12 +55,14 @@ __all__ = [
     "ExecutionOutcome",
     "Governance",
     "Governor",
+    "GovernorCancelled",
     "GovernorRefusal",
     "GovernorReport",
     "HandleNotFound",
     "Lease",
     "Page",
     "Peak",
+    "ProgressCallback",
     "Quota",
     "QuotaPolicy",
     "QuotaState",

@@ -49,7 +49,7 @@ from mdqm.adapters.base import NotSupported, SourceAdapter
 from mdqm.cache.freshness import Mutability
 from mdqm.compiler import CompileContext, compile_spec
 from mdqm.compiler.resolve import TableRef, known_tables, resolve_table
-from mdqm.errors import from_exception, invalid_spec
+from mdqm.errors import from_exception, invalid_spec, not_supported, quota_exceeded
 from mdqm.executor.cache import FragmentCache, fragment_key
 from mdqm.executor.federate import FederatedExecutor
 from mdqm.executor.models import QualityReport
@@ -61,6 +61,7 @@ from mdqm.planner.partitions import PartitionPlan, gate_plan
 from mdqm.results.summary import ResultSummary, summarise
 from mdqm.semantic.models import SemanticLayer
 from mdqm.server.context import current_context
+from mdqm.server.jobs import JobHooks, JobOutcome, JobQueueFull, JobRegistry
 from mdqm.spec.errors import SpecError
 from mdqm.spec.models import QuerySpec
 from mdqm.spec.validate import parse_spec
@@ -74,6 +75,7 @@ from mdqm.store.sizes import SizeStore
 __all__ = [
     "PlanInfo",
     "QueryAnswer",
+    "QueryMode",
     "QueryServices",
     "QueryServicesUnavailable",
     "SegmentFreshness",
@@ -83,6 +85,10 @@ __all__ = [
     "reset_query_services",
     "use_query_services",
 ]
+
+#: ``blocking`` waits for the rows (the default, and what every existing caller gets); ``async``
+#: answers with a job id as soon as the plan is known and the caller polls with ``get_more``.
+QueryMode = Literal["blocking", "async"]
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +149,11 @@ class QueryServices:
     table_rows: Mapping[str, int] = field(default_factory=dict)
     value_probe: ValueProbe | None = None
     """Bounded existence lookup used when category stats may be stale. ``None`` does not reject."""
+    jobs: JobRegistry | None = None
+    """The in-process registry that runs ``mode="async"`` queries, or ``None``.
+
+    ``None`` is the honest default for a build without it: ``mode="async"`` then refuses with
+    ``NOT_SUPPORTED`` and names the fallback, instead of accepting a job nobody will run."""
 
     def now(self) -> datetime:
         """The one instant of this execution (C02), normalised to UTC."""
@@ -252,14 +263,22 @@ class PlanInfo(MDQMModel):
 class QueryAnswer(MDQMModel):
     """One answer from ``query``: a summary, a small sample and a handle, or the refusal.
 
-    ``status`` is ``ok`` with an answer, ``dry_run`` with the plan only, ``error`` with the
-    structured :class:`~mdqm.models.ErrorResponse` the agent must act on, or ``not_implemented``
-    when the server was built without a pipeline.
+    ``status`` is ``ok`` with an answer, ``dry_run`` with the plan only, ``started`` with a job id
+    (``mode="async"``, poll it with ``get_more``), ``error`` with the structured
+    :class:`~mdqm.models.ErrorResponse` the agent must act on, or ``not_implemented`` when the
+    server was built without a pipeline.
     """
 
-    status: Literal["ok", "dry_run", "error", "not_implemented"] = "ok"
+    status: Literal["ok", "dry_run", "started", "error", "not_implemented"] = "ok"
     surface: str = "query"
     user_id: str = ""
+    query_id: str | None = Field(
+        default=None,
+        description=(
+            "Set when status is 'started': pass it to `get_more` as `query_id` to see progress. "
+            "It is a job id, not a `result_handle` and not a history run id."
+        ),
+    )
     error: ErrorResponse | None = Field(default=None, description="Set when status is 'error'.")
     summary: ResultSummary | None = Field(default=None, description="The bounded answer.")
     sample: tuple[JsonObject, ...] = Field(
@@ -303,15 +322,24 @@ def query(
         str | None,
         Field(description="The source `sql` runs on. Required with `sql`, ignored with `spec`."),
     ] = None,
+    mode: Annotated[
+        QueryMode,
+        Field(
+            description=(
+                "'blocking' (default) waits for the answer. 'async' answers at once with a "
+                "`query_id` and the plan; poll it with `get_more(query_id=...)` and get summary, "
+                "sample and `result_handle` when it finishes."
+            )
+        ),
+    ] = "blocking",
 ) -> QueryAnswer:
-    """Run one query spec and get a summary, a small sample and a handle. This is the main tool.
+    """Run one query spec: a summary, a small sample and a handle. This is the main tool.
 
-    Send `spec`, never SQL. The server lints it, prunes the partitions and the time window, picks
-    the source, and answers with `summary`, `sample` and `result_handle` (page it with `get_more`).
-    A `dry_run` in the spec stops after the plan; `fresh` skips the cache. Errors carry `code`,
-    `problem` and an exact `fix`.
-    Example: query({"spec": {"from": "billing.accounts", "select": ["customer_status"],
-    "limit": 5}})
+    Send `spec`, never SQL; the server lints, plans, prunes and runs it. `dry_run` stops after the
+    plan, `fresh` skips the cache. With `mode: "async"` the answer is `status: "started"` and a
+    `query_id`: poll `get_more({"query_id": ...})`, then page its `result_handle`. Errors carry
+    `code`, `problem` and an exact `fix`.
+    Example: query({"spec": {"from": "billing.accounts", "select": ["customer_status"]}})
     """
     context = current_context()
     user = context.user_id
@@ -335,15 +363,36 @@ def query(
             ),
         )
     if spec is not None:
-        return _run_spec(services, user, spec)
-    return _run_sql(services, user, sql or "", source)
+        return _run_spec(services, user, spec, mode=mode)
+    return _run_sql(services, user, sql or "", source, mode=mode)
 
 
 # --- the two paths -----------------------------------------------------------------------
 
 
-def _run_spec(services: QueryServices, user: str, spec: QuerySpec) -> QueryAnswer:
-    """The normal path: spec in, linted and compiled, planned, cached, executed, recorded."""
+def _run_spec(
+    services: QueryServices, user: str, spec: QuerySpec, *, mode: QueryMode = "blocking"
+) -> QueryAnswer:
+    """The normal path: spec in, answered now (``blocking``) or started as a job (``async``).
+
+    Everything that can refuse without touching a source -- parse, lint, the value gate, compile and
+    the static partition plan -- happens *before* the mode matters, so an ``async`` caller still
+    gets its refusal inline, with the same code and ``fix`` a blocking caller would. A ``dry_run``
+    spec is answered inline too: it asks for the plan, which is exactly what the started answer
+    already carries, and running it as a job would report a plan for work nobody asked for.
+    """
+    prepared = _prepare_spec(services, user, spec)
+    if isinstance(prepared, QueryAnswer):
+        return prepared
+    if mode == "async" and not spec.dry_run:
+        return _start_job(services, user, prepared)
+    return prepared.run(None)
+
+
+def _prepare_spec(
+    services: QueryServices, user: str, spec: QuerySpec
+) -> _Prepared | QueryAnswer:
+    """Everything up to (not including) the source call, or the answer if there is nothing to run."""
     exec_ts = services.now()
     # The wire model checks the shape; parse_spec also runs the cross-field rules, so a spec that
     # arrived as JSON gets the same INVALID_SPEC answer as one that arrived as an object.
@@ -395,13 +444,23 @@ def _run_spec(services: QueryServices, user: str, spec: QuerySpec) -> QueryAnswe
             applied_fixes=reported,
         )
     if federated is not None:
-        return run_federated(
-            services,
-            user,
-            federated=federated,
-            spec=repaired,
-            exec_ts=exec_ts,
-            applied_fixes=reported,
+        return _Prepared(
+            source=target.source,
+            plan=PlanInfo(
+                notes=(
+                    f"{len(federated.plan.steps)} fragments over the sources it names; the join "
+                    "runs locally, so this is one job with no per-partition progress",
+                )
+            ),
+            fixes=reported,
+            run=lambda hooks: run_federated(
+                services,
+                user,
+                federated=federated,
+                spec=repaired,
+                exec_ts=exec_ts,
+                applied_fixes=reported,
+            ),
         )
     compiled = compile_spec(
         repaired,
@@ -431,23 +490,50 @@ def _run_spec(services: QueryServices, user: str, spec: QuerySpec) -> QueryAnswe
             applied_fixes=fixes,
             plan=plan,
         )
-    return _run(
-        services,
-        user,
+    # Bound once, outside the closure: mypy does not carry a narrowing into a lambda body.
+    fragment: Fragment = compiled.fragment
+    return _Prepared(
         source=target.source,
-        dialect=target.dialect,
-        fragment=compiled.fragment,
-        exec_ts=exec_ts,
-        spec=repaired,
-        original_sql=None,
+        plan=plan,
         fixes=fixes,
-        partition_plan=compiled.partition_plan,
-        anchor=target.anchor,
+        run=lambda hooks: _run(
+            services,
+            user,
+            source=target.source,
+            dialect=target.dialect,
+            fragment=fragment,
+            exec_ts=exec_ts,
+            spec=repaired,
+            original_sql=None,
+            fixes=fixes,
+            partition_plan=compiled.partition_plan,
+            anchor=target.anchor,
+            hooks=hooks,
+        ),
     )
 
 
-def _run_sql(services: QueryServices, user: str, sql: str, source: str | None) -> QueryAnswer:
+def _run_sql(
+    services: QueryServices,
+    user: str,
+    sql: str,
+    source: str | None,
+    *,
+    mode: QueryMode = "blocking",
+) -> QueryAnswer:
     """The emergency exit: one read-only statement, through the same linter and the governor."""
+    prepared = _prepare_sql(services, user, sql, source)
+    if isinstance(prepared, QueryAnswer):
+        return prepared
+    if mode == "async":
+        return _start_job(services, user, prepared)
+    return prepared.run(None)
+
+
+def _prepare_sql(
+    services: QueryServices, user: str, sql: str, source: str | None
+) -> _Prepared | QueryAnswer:
+    """Lint, guard and freeze one raw statement, or the refusal that says why not."""
     exec_ts = services.now()
     adapter = services.adapters.get(source) if source is not None else None
     if source is None or adapter is None:
@@ -484,18 +570,24 @@ def _run_sql(services: QueryServices, user: str, sql: str, source: str | None) -
         sql=rewrite_sql(repaired, dialect=dialect, exec_ts=exec_ts).sql,
         exec_ts=exec_ts,
     )
-    return _run(
-        services,
-        user,
+    return _Prepared(
         source=source,
-        dialect=dialect,
-        fragment=fragment,
-        exec_ts=exec_ts,
-        spec=None,
-        original_sql=(repaired, dialect),
+        plan=None,
         fixes=lint.applied_fixes,
-        partition_plan=None,
-        anchor=None,
+        run=lambda hooks: _run(
+            services,
+            user,
+            source=source,
+            dialect=dialect,
+            fragment=fragment,
+            exec_ts=exec_ts,
+            spec=None,
+            original_sql=(repaired, dialect),
+            fixes=lint.applied_fixes,
+            partition_plan=None,
+            anchor=None,
+            hooks=hooks,
+        ),
     )
 
 
@@ -515,11 +607,14 @@ def _run(
     fixes: tuple[str, ...],
     partition_plan: PartitionPlan | None,
     anchor: TableRef | None,
+    hooks: JobHooks | None = None,
 ) -> QueryAnswer:
     """Plan, cache, execute, summarise and record one compiled fragment.
 
     ``original_sql`` is ``(the statement before exec_ts substitution, its dialect)`` on the raw-SQL
     path, and ``None`` on the spec path, where the compiler built the statement already frozen.
+    ``hooks`` is set only when the run is a background job: it is how the measured progress and the
+    caller's stop request reach the governor. A blocking run passes ``None`` and nothing changes.
     """
     fresh = spec is not None and spec.fresh
     dry_run = spec is not None and spec.dry_run
@@ -592,9 +687,18 @@ def _run(
             plan=_plan(explained, partition_plan),
         )
     plan = _plan(explained, partition_plan)
+    if hooks is not None:
+        # What the source's own plan says it will scan: the one honest per-partition number a
+        # background poll can show before the first row arrives.
+        hooks.plan(plan.partitions_scanned, plan.partitions_total)
     try:
         outcome = services.governor.execute(
-            source=source, user=user, fragment=fragment, limits=services.limits
+            source=source,
+            user=user,
+            fragment=fragment,
+            limits=services.limits,
+            progress=None if hooks is None else hooks.progress,
+            cancelled=None if hooks is None else hooks.cancelled,
         )
     except GovernorRefusal as governor_refusal:
         return _refused(
@@ -670,6 +774,22 @@ def _run(
 
 
 # --- the stages --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """A request that passed every check, with the work still to do.
+
+    ``run`` is the blocking call the tool has always made, so ``mode`` decides *when* it happens and
+    nothing else: one code path answers a spec, whether the caller waits for it or polls for it.
+    ``None`` hooks means nobody is watching; a job passes them so progress and a stop can reach the
+    governor.
+    """
+
+    source: str
+    plan: PlanInfo | None
+    fixes: tuple[str, ...]
+    run: Callable[[JobHooks | None], QueryAnswer]
 
 
 @dataclass(frozen=True)
@@ -842,6 +962,71 @@ def _fixes(*groups: Sequence[str]) -> tuple[str, ...]:
         for fix in group:
             seen.setdefault(fix, None)
     return tuple(seen)
+
+
+# --- the asynchronous mode ----------------------------------------------------------------
+
+
+def _start_job(services: QueryServices, user: str, prepared: _Prepared) -> QueryAnswer:
+    """Hand the prepared work to the job registry and answer at once with its id and the plan.
+
+    This is the whole of ``mode="async"``: the plan is already known (it cost no source call), so
+    the caller learns which partitions and how many rows the window touches *now*, and the same
+    blocking call runs on the registry's thread. Every refusal that needs no source happened before
+    this point, so a typo still comes back inline instead of as a failed job.
+    """
+    registry = services.jobs
+    if registry is None:
+        return _refused(
+            services,
+            user,
+            error=not_supported(
+                source="this server",
+                capability="asynchronous query jobs",
+                fallback="send the same spec without `mode` and wait for the answer",
+            ),
+            applied_fixes=prepared.fixes,
+            plan=prepared.plan,
+        )
+    plan = prepared.plan
+    try:
+        job = registry.start(
+            user_id=user,
+            source=prepared.source,
+            work=lambda hooks: _outcome_of(prepared.run(hooks)),
+            est_rows=None if plan is None else plan.est_rows,
+            partitions_total=None if plan is None else plan.partitions_total,
+        )
+    except JobQueueFull as full:
+        return _refused(
+            services,
+            user,
+            error=quota_exceeded(
+                quota="concurrent asynchronous",
+                limit=f"{full.max_jobs} queries",
+                resets_at="one of the running jobs finishes",
+            ),
+            applied_fixes=prepared.fixes,
+            plan=plan,
+        )
+    return QueryAnswer(
+        user_id=user,
+        status="started",
+        query_id=job.query_id,
+        plan=plan,
+        applied_fixes=prepared.fixes,
+    )
+
+
+def _outcome_of(answer: QueryAnswer) -> JobOutcome:
+    """Reduce a finished run to what a poll reports: the summary, the sample and the handle."""
+    return JobOutcome(
+        summary=answer.summary,
+        sample=answer.sample,
+        result_handle=answer.result_handle,
+        rows_total=answer.rows_total,
+        error=answer.error,
+    )
 
 
 # --- recording ---------------------------------------------------------------------------
