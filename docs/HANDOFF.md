@@ -17,8 +17,8 @@ fast, before it completes. Everything else is secondary. Position of the three:
 
 | ask | state |
 |---|---|
-| size profile → query optimization | **done and measured** (§4a) |
-| fast feedback before completion | **unit-tested, not yet run against live services** — async job + poll, `progress/ASYNC-QUERY.md` (§4b) |
+| size profile → query optimization | **done and measured** (§4a); all four engines' size readers proven live (`progress/SIZE-READERS-LIVE.md`), the Oracle *bytes* branch excepted |
+| fast feedback before completion | **done and proven live** — async job + poll, `progress/ASYNC-QUERY.md` and `progress/ASYNC-LIVE.md` (§4b) |
 | model endpoint (so A1+A2 can propose names, incl. Hebrew labels) | **wired, labels proposed; the real endpoint unverified** — `progress/LLM-WIRING.md` (§4c) |
 
 ---
@@ -121,18 +121,34 @@ names on `PartitionPlan.fat_partitions`); a `sizes` bootstrap stage schedules th
 day per source (heavy: quiet window + per-source gate); Oracle, SQL Server and Elasticsearch have size
 readers behind the same `parse_sizes`. See `progress/SIZES-FOLLOWUP.md`.
 
-Open items, in the order they matter: the three new size readers have **never run against a live
-engine** (the privileges are the open question: Oracle segment grant for bytes, SQL Server
-`VIEW DATABASE STATE`, Elasticsearch alias visibility); `bootstrap run` with the new `sizes` stage is
-unit-tested only; `PartitionNote.SIZE_PROFILE_APPLIED` is still never emitted; the fat partitions' names
-reach `PartitionPlan.fat_partitions` but not yet `plan.notes` in `server/tools/query.py`; and **no
-benchmark** compares plan cost with and without the profile.
+Those three readers have now run against live engines
+(`pytest tests/integration/test_size_readers_live.py --require-services`), which is how the Oracle one
+turned out to be broken: 23ai has no `ALL_SEGMENTS`, so the query now probes `ALL_SEGMENTS` →
+`DBA_SEGMENTS` → none and reports bytes as "not reported" when the account may read neither
+(`progress/SIZE-READERS-LIVE.md`).
 
-## 4b. Fast feedback before the query completes — implemented (_ASYNC-QUERY_)
+Open items, in the order they matter: the Oracle **bytes** branch (an install that grants
+`DBA_SEGMENTS`) is the only size path nobody has executed end to end; `bootstrap run` with the new
+`sizes` stage is unit-tested only; `PartitionNote.SIZE_PROFILE_APPLIED` is still never emitted; the fat
+partitions' names reach `PartitionPlan.fat_partitions` but not yet `plan.notes` in
+`server/tools/query.py`; and **no benchmark** compares plan cost with and without the profile.
+
+## 4b. Fast feedback before the query completes — done and proven live (_ASYNC-QUERY_)
 
 The paragraphs below are the agreement; the code now does it. `query` takes `mode: "blocking"`
 (the default, unchanged) or `"async"`; the state lives in the `query_job` table (migration 0011) and
-`progress/ASYNC-QUERY.md` records what is verified and what is not.
+`progress/ASYNC-QUERY.md` + `progress/ASYNC-LIVE.md` record what is verified.
+
+Measured against the rebuilt server image and real PostgreSQL:
+`query(mode="async")` answers `{status: "started", query_id: "j_2", plan: {partitions_scanned: 3,
+partitions_total: 14, est_rows: 18946}}` immediately, and `get_more(query_id="j_2")` later answers
+`done` with the summary, the sample, `partitions_done: 3` and a `result_handle` that pages through
+`get_more(result_handle=…)`. `tests/integration --require-services` is one green run over all five
+services, acceptance suite included.
+
+One honest nuance worth knowing: a job answered from the segment cache reports
+`partitions_done: null`, because no source plan was asked for and no partition was scanned. `null`
+means "not reported"; inventing `0` or `3` there would be a lie.
 
 Today `query` blocks until the whole result is in; the only early exit is a `dry_run` spec (plan +
 estimate, no rows). The agreed design (owner's choice):
@@ -294,26 +310,34 @@ Not done: nothing **proposes** labels (§4c), and A1+A2 has no target/validator 
 
 ## 11. Suggested order for the next session
 
-1. **Run the async path against live services** (§4b) — rebuild the image and run
-   `tests/integration/test_async_query_e2e.py` with `--require-services`; nothing about the job/poll
-   shape has met a real Postgres yet.
-2. **The real model endpoint** (§4c) — wiring and label proposals are in, but only `FakeLLM` verified
+1. **The real model endpoint** (§4c) — wiring and label proposals are in, but only `FakeLLM` verified
    them; run `mdqm bootstrap run` against the on-prem server and read what the validator rejected.
-3. **Live proof for the three new size readers** (§4a) — Oracle/SQL Server/Elasticsearch readers are
-   written and parse-tested; the privilege questions are open.
-4. **A `names` section** (§4c Deviations) — until the layer can hold a display name and a one-sentence
+   This is the only ask whose proof is missing.
+2. **A `names` section** (§4c Deviations) — until the layer can hold a display name and a one-sentence
    description, A1's first two fields pay for model calls whose answer cannot be approved.
+3. **Oracle bytes on a granting install** (§4a) — the one size path nobody has executed: a
+   `DBA_SEGMENTS` grant would take it.
+4. **`bootstrap run` with the `sizes` stage against live sources** (§4a) — the stage is unit-tested
+   only; nothing has scheduled a real measurement yet.
 5. **`plan.notes` carries the fat partitions** (§4a) — the names exist on
    `PartitionPlan.fat_partitions`; one line in `server/tools/query.py::_plan` exposes them.
 6. **A proposal nobody answers** — 30 join candidates and 2 measure conversions sit pending with no
    ageing or escalation.
-7. **`A10`** (P2) — a server image built with the `mssql` extra actually logging into SQL Server.
+
+Done since the last session: the async job + poll path is proven live (`progress/ASYNC-LIVE.md`), the
+three extra size readers are proven live and the Oracle one was fixed on the way
+(`progress/SIZE-READERS-LIVE.md`), `A10` is closed (`progress/A10.md`, which also removed the base
+image's `pip`), and the merged worktrees from earlier sessions were pruned (67 of them; the 10 whose
+branches were not ancestors of `main` are still there on purpose).
 
 ## 12. Where the history lives
 
-`progress/<TASK-ID>.md` is the ledger: the backlog tasks are `status: done` except `A10`, plus the
-notes written outside the board — `BOOTSTRAP-PIPELINE.md`, `SQLI-CHECKER.md`, `PYRIGHT-TESTS2.md`,
-`HEBREW-LABELS.md`, `SIZES.md`, `ASYNC-QUERY.md`, `LLM-WIRING.md`, `SIZES-FOLLOWUP.md` (the last three
-say `partial` only where a live service was needed to prove something). `docs/DESIGN.md` is the design.
-The task board being closed does **not** mean every feature is proven end to end: `A10`, the live async
-run, the real model endpoint and the three unproven size readers are the honest gaps.
+`progress/<TASK-ID>.md` is the ledger: **every backlog task is `status: done`**, plus the notes
+written outside the board — `BOOTSTRAP-PIPELINE.md`, `SQLI-CHECKER.md`, `PYRIGHT-TESTS2.md`,
+`HEBREW-LABELS.md`, `SIZES.md`, `ASYNC-QUERY.md`, `LLM-WIRING.md`, `SIZES-FOLLOWUP.md`, `A10.md`,
+`ASYNC-LIVE.md`, `SIZE-READERS-LIVE.md` (the ones marked `partial` say so only where the proof needed a
+service that does not exist here, and each names it). `docs/DESIGN.md` is the design.
+
+The task board being closed is not the same as every path being executed: the honest gaps are the real
+on-prem model endpoint (no endpoint here), the Oracle bytes branch (no segment grant here), `bootstrap
+run` with the `sizes` stage against live sources, and the two design decisions listed in §11.
