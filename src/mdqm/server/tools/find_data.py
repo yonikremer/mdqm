@@ -36,9 +36,9 @@ Decisions that are not obvious from the code:
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Final
 
 from pydantic import Field
@@ -61,6 +61,7 @@ from mdqm.semantic.models import FrozenMapping, Measure, SemanticLayer
 from mdqm.server.context import current_context
 from mdqm.server.tools.misc import Answer
 from mdqm.spec.models import MeasureSelect, QuerySpec, SelectItem
+from mdqm.stats.surface import attach_briefs
 from mdqm.store.audit import AuditLog
 
 __all__ = [
@@ -116,6 +117,7 @@ class FindDataServices:
     examples: tuple[ApprovedExample, ...] = ()
     audit: AuditLog | None = None
     budget_tokens: int = DEFAULT_PACK_BUDGET
+    column_briefs: Mapping[str, str] = field(default_factory=dict)
 
 
 _find_data_services: FindDataServices | None = None
@@ -254,6 +256,7 @@ def find_data(
         pack, skeleton, hint = _fit_to_budget(
             question, services, layer, pack, skeleton, scope=scope
         )
+    pack = attach_briefs(pack, services.column_briefs)
 
     return FindDataAnswer(
         surface="find_data",
@@ -436,6 +439,7 @@ _KIND_ORDER: Final[dict[PackKind, int]] = {
     PackKind.JOIN: 2,
     PackKind.TABLE: 3,
     PackKind.EXAMPLE: 4,
+    PackKind.STATS: 5,
 }
 
 

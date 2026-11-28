@@ -84,13 +84,13 @@ def context_for(layer: SemanticLayer) -> Any:
     """Build the lint context a case asks for: the shared layer, or its own inline one."""
 
     def build(case: RuleCase) -> LintContext:
-        if case.layer is None:
-            return LintContext(layer=layer, columns=COLUMNS, exec_ts=EXEC_TS)
-        return LintContext(
-            layer=SemanticLayer.model_validate(case.layer),
-            columns=case.columns or {},
-            exec_ts=EXEC_TS,
-        )
+        kwargs: dict[str, Any] = {"layer": layer, "columns": COLUMNS, "exec_ts": EXEC_TS}
+        if case.layer is not None:
+            kwargs["layer"] = SemanticLayer.model_validate(case.layer)
+            kwargs["columns"] = case.columns or {}
+        if case.context:
+            kwargs.update(case.context)
+        return LintContext(**kwargs)
 
     return build
 

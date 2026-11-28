@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, ClassVar, Final
@@ -43,6 +43,11 @@ from mdqm.semantic.models import SemanticLayer
 from mdqm.spec.durations import Duration, DurationField
 from mdqm.spec.models import QuerySpec
 from mdqm.sql.exec_ts import SUPPORTED_DIALECTS
+from mdqm.stats.models import (
+    CategoryColumnStats,
+    ColumnQuality,
+    PartitionExtent,
+)
 
 __all__ = [
     "LintContext",
@@ -139,6 +144,19 @@ class LintContext:
     lag_unverified: frozenset[str] = frozenset()
     #: Relations a dialect provides that no catalog lists (Oracle's ``dual``, a session table).
     extra_relations: frozenset[str] = frozenset()
+    #: Observed categorical distributions, keyed ``source.table.column``. Empty means "not measured".
+    category_stats: Mapping[str, CategoryColumnStats] = field(default_factory=dict)
+    #: Column quality (NULL share and the rest), keyed ``source.table.column``.
+    column_quality: Mapping[str, ColumnQuality] = field(default_factory=dict)
+    #: Dictionary sentinels, keyed ``source.table.column``, values that mean missing.
+    sentinels: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    #: Measured partition sizes, keyed ``source.table``.
+    partition_extents: Mapping[str, tuple[PartitionExtent, ...]] = field(default_factory=dict)
+    #: Row estimates keyed ``source.table``, from the newest quality or size reading.
+    table_rows: Mapping[str, int] = field(default_factory=dict)
+    result_warn_rows: int = 10_000
+    result_block_rows: int = 100_000
+    null_warn_share: float = 0.2
 
     def __post_init__(self) -> None:
         if self.exec_ts.tzinfo is None:
@@ -277,6 +295,8 @@ class RuleCase:
     layer: Mapping[str, Any] | None = None
     #: The catalog for an inline layer (ignored when ``layer`` is unset).
     columns: Mapping[str, tuple[str, ...]] | None = None
+    #: Extra :class:`LintContext` fields (statistics, sentinels, row estimates) for this case.
+    context: Mapping[str, Any] | None = None
 
 
 class Rule(ABC):

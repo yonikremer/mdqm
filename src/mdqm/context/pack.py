@@ -234,6 +234,7 @@ class PackKind(StrEnum):
     JOIN = "join"
     TABLE = "table"
     EXAMPLE = "example"
+    STATS = "stats"
 
 
 #: Fixed section order, so the rendered block is structured the same way every time.
@@ -243,6 +244,7 @@ _KIND_ORDER: Final[dict[PackKind, int]] = {
     PackKind.JOIN: 2,
     PackKind.TABLE: 3,
     PackKind.EXAMPLE: 4,
+    PackKind.STATS: 5,
 }
 
 

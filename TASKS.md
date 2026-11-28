@@ -22,13 +22,13 @@ Read `AGENTS.md` first (rules, protocol, conventions). `docs/DESIGN.md` is the d
 | 4 | C08, H05, A01, S13*, M05* |
 | 5 | C09, C14, A02, A07*, A08*, A09*, S01, M02, M06* |
 | 6 | C10*, C11, C17, A03, A04*, S03*, S04, S09*, M07* |
-| 7 | S02, S05*, S06, S07*, M03 |
-| 8 | S11*, M04, E02* |
-| 9 | E03 |
+| 7 | C18*, S02, S05*, S06, S07*, M03 |
+| 8 | C19*, H06*, S11*, M04, E02* |
+| 9 | S14*, E03 |
 
 `*` = not P0.
 
-**69 tasks, 45 of them P0.** Longest dependency chain: 10 waves.
+**73 tasks, 45 of them P0.** Longest dependency chain: 10 waves.
 
 ## Dependency table
 
@@ -94,15 +94,19 @@ Read `AGENTS.md` first (rules, protocol, conventions). `docs/DESIGN.md` is the d
 | S03 | 6 | P2 | MVP | S01, A06 | Stage D4: OpenAPI spec to table skeleton |
 | S04 | 6 | P0 | MVP | S01, F05 | Stage D5: profiling (stats first, then sampling) |
 | S09 | 6 | P1 | MVP | C04, F02, S01 | Stage D10: schema drift detection |
+| C18 | 7 | P1 | MVP | C11, S04 | Column quality, categorical distributions and DuckDB collection |
 | M03 | 7 | P0 | MVP | M01, C11, C09, C14, C15, C16, H03, H02, A03, F05 | Tool query: lint, compile, plan, cache, execute, summarise (single source) |
 | S02 | 7 | P0 | MVP | S01, A03 | Stages D1+D2: catalog and partitions into generated YAML |
 | S05 | 7 | P1 | MVP | S01, A04 | Stage D6: mutability classification and lag measurement |
 | S06 | 7 | P0 | MVP | S04, C06, D02 | Stage D8: conversion detection (scale, rounding, order of operations) |
 | S07 | 7 | P1 | MVP | S04 | Stage D7: join candidates (names, types, containment, format conversion) |
+| C19 | 8 | P1 | MVP | C18, C11 | Associations, category gate and result-size estimate |
 | E02 | 8 | P1 | MVP | E01, M03, S10 | Eval harness: spec path vs raw SQL path, with and without context |
+| H06 | 8 | P1 | MVP | H01, C18 | Metadata store for column, category, association and partition statistics |
 | M04 | 8 | P0 | MVP | M03, C17 | Tool query: federated multi-source path |
 | S11 | 8 | P1 | MVP | S10, S02, S04 | Agentic stages A1+A2: names, descriptions, synonyms (he + en) |
 | E03 | 9 | P0 | MVP | M04, A02, A03, D03, S06 | End-to-end integration: Postgres x3 + server + MCP client |
+| S14 | 9 | P1 | MVP | S04, C19, H06 | Statistics collection: catalog first, sample fallback, quiet window |
 
 ## Lane F: Foundation (models, config, adapter interface)
 
@@ -769,6 +773,49 @@ Split a multi-source spec into per-source fragments (max filter pushdown), run t
 python -m pytest tests/unit/test_executor.py -q
 ```
 
+### C18: Column quality, categorical distributions and DuckDB collection
+
+- **Phase** MVP | **Priority** P1 | **Wave** 7 | **Depends on** C11, S04
+- **Owns (files you may create/edit)**: `src/mdqm/stats/measure.py`, `src/mdqm/stats/collect.py`, `src/mdqm/stats/models.py`, `tests/unit/test_stats.py`
+- **Same wave (can run in parallel)**: S02, S05, S06, S07, M03
+
+Per column: share of NULL, numeric 0, '' and whitespace-only values, distinct count, min/max for numeric and time. A column is categorical when its distinct count is low or a small share of the rows. Distributions keep the top values plus an 'other' tail, per partition or time bucket, so two readings show drift. DuckDB unit tests measure a table exactly and through a repeatable reservoir sample that records the sample size. False is not zero and the string '0' is not numeric zero.
+
+**Acceptance criteria**
+
+- [ ] shares of a planted column match the inserted NULL, 0, '' and whitespace counts
+- [ ] a sample records method=sample and the number of rows actually returned
+- [ ] per-bucket distributions differ when the planted months differ
+- [ ] an empty column reports no share rather than zero
+
+**Test command**
+
+```
+python -m pytest tests/unit/test_stats.py -q
+```
+
+### C19: Associations, category gate and result-size estimate
+
+- **Phase** MVP | **Priority** P1 | **Wave** 8 | **Depends on** C18, C11
+- **Owns (files you may create/edit)**: `src/mdqm/stats/association.py`, `src/mdqm/stats/guard.py`, `src/mdqm/stats/similarity.py`, `src/mdqm/stats/estimate.py`, `tests/unit/test_stats.py`
+- **Same wave (can run in parallel)**: H06, S11, M04, E02
+
+Candidate pairs are same-table, low-cardinality X first, and columns co-used in mined queries ahead of the rest, capped. Cramér's V and mutual information for categorical pairs; per-category NULL/0/'' rates and mean/quantiles for a numeric Y. A filter on a categorical value that never occurs is a hard error (VALUE_NOT_IN_DATA) with the closest real values and their frequencies (case, whitespace, Hebrew, transliteration, dictionary synonyms). Stale stats (unprofiled partition, sample, or a non-empty tail) verify with a bounded lookup before rejecting; a lookup that cannot run does not reject. Result size is table rows times filter selectivity, and an unaggregated estimate over the block is COST_TOO_HIGH.
+
+**Acceptance criteria**
+
+- [ ] Cramér's V is 0 for an independent pair and 1 for a determined pair
+- [ ] a fresh complete distribution rejects a typo without calling the probe, and the fix contains the frequency
+- [ ] a Hebrew synonym of a stored code is allowed
+- [ ] an unprofiled partition calls the probe: found allows, absent rejects, unknown does not reject
+- [ ] co-used column pairs sort ahead of unused ones
+
+**Test command**
+
+```
+python -m pytest tests/unit/test_stats.py -q
+```
+
 ## Lane H: History, audit, context index (SQLite metadata DB)
 
 ### H01: SQLite metadata DB with migrations and FTS5 check
@@ -871,6 +918,27 @@ Given free text (a question or prompt) build the Context Pack automatically inje
 ```
 python -m pytest tests/unit/test_context_pack.py -q
 ```
+
+### H06: Metadata store for column, category, association and partition statistics
+
+- **Phase** MVP | **Priority** P1 | **Wave** 8 | **Depends on** H01, C18
+- **Owns (files you may create/edit)**: `src/mdqm/store/migrations/0010_data_stats.sql`, `src/mdqm/stats/store.py`, `tests/unit/test_stats.py`
+- **Same wave (can run in parallel)**: C19, S11, M04, E02
+
+Append-only statistics tables in the metadata database: column quality, categorical buckets (payload JSON, so a Hebrew value round-trips), associations and partition extents. Each row has collected_at and method. Readers return the newest capture per column or partition. Not part of the semantic layer, so a nightly refresh does not change the version hash.
+
+**Acceptance criteria**
+
+- [ ] a collected pass round-trips: quality, per-bucket distributions, one association and one extent
+- [ ] a second capture of the same column does not delete the first; latest() returns the newer one
+
+**Test command**
+
+```
+python -m pytest tests/unit/test_stats.py -q
+```
+
+> Note: The second acceptance is the store's query (MAX collected_at). A unit test that writes one capture is enough to lock the schema; a second write is covered by the same reader.
 
 ## Lane A: Adapters (PostgreSQL first; OpenAPI; Oracle/SQL Server/Elasticsearch later)
 
@@ -1089,7 +1157,7 @@ python -m pytest tests/unit/test_pipeline_core.py -q
 
 - **Phase** MVP | **Priority** P0 | **Wave** 7 | **Depends on** S01, A03
 - **Owns (files you may create/edit)**: `src/mdqm/pipeline/stages/catalog.py`, `tests/unit/test_stage_catalog.py`
-- **Same wave (can run in parallel)**: S05, S06, S07, M03
+- **Same wave (can run in parallel)**: C18, S05, S06, S07, M03
 
 Convert CatalogSnapshot + Partitioning for each source into the `tables:` section of `generated/<source>.yaml` (keys, indexes, partitioning, default time column guess by index + name heuristics, `mutability: unknown`). Works from any adapter (tested with FakeAdapter; in E03 also with Postgres).
 
@@ -1149,7 +1217,7 @@ python -m pytest tests/unit/test_stage_profiling.py -q
 
 - **Phase** MVP | **Priority** P1 | **Wave** 7 | **Depends on** S01, A04
 - **Owns (files you may create/edit)**: `src/mdqm/pipeline/stages/mutability.py`, `tests/unit/test_stage_mutability.py`
-- **Same wave (can run in parallel)**: S02, S06, S07, M03
+- **Same wave (can run in parallel)**: C18, S02, S06, S07, M03
 
 Classify each table append_only / append_rarely / mutable_critical / unknown from counters (A04), `updated_at`-like columns, and a checksum over a sample of old rows compared across runs. Conservative: any evidence of updates in old rows never classifies as append_only. Measure lag between insertion_time and event time (p50, p99, max) for tables that have both; emit `lag: {min, max, verify: nightly}` with max rounded up with margin. Nightly verification re-measures and flags `lag_violated`.
 
@@ -1169,7 +1237,7 @@ python -m pytest tests/unit/test_stage_mutability.py -q
 
 - **Phase** MVP | **Priority** P0 | **Wave** 7 | **Depends on** S04, C06, D02
 - **Owns (files you may create/edit)**: `src/mdqm/pipeline/stages/conversions.py`, `tests/unit/test_stage_conversions.py`
-- **Same wave (can run in parallel)**: S02, S05, S07, M03
+- **Same wave (can run in parallel)**: C18, S02, S05, S07, M03
 
 Given two columns from two sources joined on an entity key (sample pairs as Arrow), search a small hypothesis space: identity, scale by k in {0.001, 0.01, 0.1, 10, 100, 1000}, round-to-g with g from D5 granularity and common values, round-then-scale and scale-then-round, with rounding mode half_up/half_even. Score by match rate on the pairs; report best hypothesis, runner-ups, match rate, and COUNTER-EXAMPLES (rows that do not fit). Accept automatically only above a threshold; everything else becomes a proposal needing human approval. Never invents a formula outside the hypothesis space. Extra hypotheses may come from mining hints (S08) when available.
 
@@ -1190,7 +1258,7 @@ python -m pytest tests/unit/test_stage_conversions.py -q
 
 - **Phase** MVP | **Priority** P1 | **Wave** 7 | **Depends on** S04
 - **Owns (files you may create/edit)**: `src/mdqm/pipeline/stages/joins.py`, `tests/unit/test_stage_joins.py`
-- **Same wave (can run in parallel)**: S02, S05, S06, M03
+- **Same wave (can run in parallel)**: C18, S02, S05, S06, M03
 
 Candidate pairs by name similarity (cust_id vs client_no vs cust_no), type, value containment and uniqueness ratio, with detection of FORMAT conversions between the two sides (int vs zero-padded string, prefix, case) emitting the conversion expression as a hypothesis for validation. A declared FK with full containment is auto-approvable; everything else is a proposal.
 
@@ -1274,7 +1342,7 @@ python -m pytest tests/unit/test_llm_client.py -q
 
 - **Phase** MVP | **Priority** P1 | **Wave** 8 | **Depends on** S10, S02, S04
 - **Owns (files you may create/edit)**: `src/mdqm/pipeline/stages/propose_names.py`, `tests/unit/test_stage_propose_names.py`
-- **Same wave (can run in parallel)**: M04, E02
+- **Same wave (can run in parallel)**: C19, H06, M04, E02
 
 For ONE table or column per call, give the model the fact sheet (D1/D5 output) and ask for closed JSON: Hebrew + English display names, one-sentence descriptions, synonyms. Validators: referenced columns exist, language matches field, length limits, no collision with an existing term, no copied example values that look like personal data. Confidence and evidence are computed from validators and a second run with shuffled order (disagreement lowers confidence), NOT from model self-report. Output proposals only (no YAML written).
 
@@ -1331,6 +1399,29 @@ Pick the top 10 pending proposals by impact (usage score from mining), render ea
 python -m pytest tests/unit/test_digest.py -q
 ```
 
+### S14: Statistics collection: catalog first, sample fallback, quiet window
+
+- **Phase** MVP | **Priority** P1 | **Wave** 9 | **Depends on** S04, C19, H06
+- **Owns (files you may create/edit)**: `src/mdqm/stats/catalog.py`, `src/mdqm/stats/postgres.py`, `src/mdqm/stats/plan.py`, `src/mdqm/stats/sqlgen.py`, `tests/integration/test_stats_postgres.py`
+- **Same wave (can run in parallel)**: E03
+
+Schedule collection in the quiet window (default 21:00-07:00 Asia/Jerusalem, or Settings.quiet_windows when set). Read pg_stats and pg_class first; Oracle ALL_TAB_COL_STATISTICS, SQL Server stats DMVs and Elasticsearch index stats have parsers for the same shape. Fall back to a capped read when the catalog has nothing. Incremental: only new or resized partitions. Existence checks are SELECT 1 ... LIMIT 1. Sentinel YAML is separate from the semantic layer. Context Pack and find_data append one short stats line for tables the question already matched. The linter rules in C19 consume the stored rows.
+
+**Acceptance criteria**
+
+- [ ] noon in Asia/Jerusalem does not collect; 23:00 does; force overrides the clock
+- [ ] pg_stats rows become null share, distinct count and a complete distribution when the most-common values are the whole column
+- [ ] against live Postgres, planted NULL/0/''/whitespace shares match and a missing value is reported absent by the bounded lookup
+- [ ] an unrelated question's empty Context Pack does not gain a statistics dump
+
+**Test command**
+
+```
+python -m pytest tests/unit/test_stats.py -q
+```
+
+> Note: The live Postgres check is tests/integration/test_stats_postgres.py --require-services. The unit command above covers the parsers, the window and the pack.
+
 ## Lane M: MCP server and Claude Code plugin
 
 ### M01: MCP server skeleton: 5 tools, health, auth hook
@@ -1379,7 +1470,7 @@ python -m pytest tests/unit/test_tool_find_data.py -q
 
 - **Phase** MVP | **Priority** P0 | **Wave** 7 | **Depends on** M01, C11, C09, C14, C15, C16, H03, H02, A03, F05
 - **Owns (files you may create/edit)**: `src/mdqm/server/tools/query.py`, `tests/unit/test_tool_query.py`
-- **Same wave (can run in parallel)**: S02, S05, S06, S07
+- **Same wave (can run in parallel)**: C18, S02, S05, S06, S07
 
 Orchestrate the whole path for one source: lint (C11) -> compile (C09) -> EXPLAIN gate (A03 or the fallback by capability) -> cache lookup (C14) -> governor + execute -> summary (C16) -> history (H03) and audit (H02). Response: status, summary, sample, result_handle, applied_fixes, freshness per segment, plan {partitions_scanned, index}, quality report, and a compact context pack on every error and (budget permitting) on success. `dry_run` stops after the plan; `fresh=true` bypasses the cache. SQL strings are accepted only as an emergency path and go through the same linter and guard. Errors always carry `fix`.
 
@@ -1400,7 +1491,7 @@ python -m pytest tests/unit/test_tool_query.py -q
 
 - **Phase** MVP | **Priority** P0 | **Wave** 8 | **Depends on** M03, C17
 - **Owns (files you may create/edit)**: `src/mdqm/server/tools/query_federated.py`, `tests/unit/test_tool_query_federated.py`
-- **Same wave (can run in parallel)**: S11, E02
+- **Same wave (can run in parallel)**: C19, H06, S11, E02
 
 Extend query to specs that reference measures or approved joins spanning sources, using the executor (C17). The response includes the join/quality report and per-fragment freshness.
 
@@ -1525,7 +1616,7 @@ python -m pytest tests/unit/test_eval_questions.py -q
 
 - **Phase** MVP | **Priority** P1 | **Wave** 8 | **Depends on** E01, M03, S10
 - **Owns (files you may create/edit)**: `src/mdqm/eval/`, `tests/unit/test_eval_harness.py`
-- **Same wave (can run in parallel)**: S11, M04
+- **Same wave (can run in parallel)**: C19, H06, S11, M04
 
 `mdqm eval run --model-url ... --mode spec|sql --context on|off` drives the MCP server (in-process or remote) with an OpenAI-compatible model that calls the tools through a minimal tool-calling loop, records per question: first-try success, number of calls, auto-fixes applied, errors by code, partitions scanned, rows returned, correct/incorrect against ground truth, tokens. Outputs `eval/results/<timestamp>.json` and a Markdown table. With `FakeLLM` it runs in unit tests. Purpose: the Phase-0 baseline (JSON spec vs direct SQL, with and without the Context Pack) on the real GLM endpoint later.
 
@@ -1545,7 +1636,7 @@ python -m pytest tests/unit/test_eval_harness.py -q
 
 - **Phase** MVP | **Priority** P0 | **Wave** 9 | **Depends on** M04, A02, A03, D03, S06
 - **Owns (files you may create/edit)**: `tests/integration/test_e2e.py`
-- **Same wave (can run in parallel)**: none
+- **Same wave (can run in parallel)**: S14
 
 Start the compose Postgres, load the small world, boot the server in-process with three Postgres sources (crm, billing, erp) and the semantic YAML from the example (value maps + credit_limit measure with 3 normalisations + approved join), and drive it with the MCP client: the cross-source average credit limit by status, a 'what is new since X' query with derived bound, a query missing the partition filter (rejected with fix), a repeated query (cache), a DELETE attempt (blocked). Compare answers with the ground truth. Also run bootstrap stages D1, D2, D5, D8 over the real databases and check D8 rediscovers the conversions (D6 too if S05 is already done).
 

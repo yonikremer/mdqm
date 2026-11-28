@@ -68,6 +68,7 @@ from mdqm.spec.durations import Duration as SpecDuration
 from mdqm.spec.models import Agg, Filter, FilterOp, MeasureSelect, QuerySpec, SelectItem
 from mdqm.sql.exec_ts import SUPPORTED_DIALECTS, rewrite_sql
 from mdqm.sql.guard import guard
+from mdqm.stats.sqlgen import nullif_expression, sentinel_sentence
 
 __all__ = [
     "DEFAULT_MAX_ROWS",
@@ -130,6 +131,8 @@ class CompileContext:
     Filled from ``mdqm sizes measure`` when the deployment ran it; empty means the estimate falls
     back to the catalog's own ``reltuples``, exactly as before.
     """
+    sentinels: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    """Dictionary sentinels keyed ``source.table.column``. Empty leaves every column unchanged."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -457,7 +460,14 @@ class _Compilation:
         time.
         """
         table = reference.table.physical if self.joins else None
-        return exp.column(reference.column, table=table)
+        column = exp.column(reference.column, table=table)
+        sentinels = self.context.sentinels.get(f"{reference.table.key}.{reference.column}", ())
+        if not sentinels:
+            return column
+        sentence = sentinel_sentence(reference.column, sentinels)
+        if sentence not in self.fixes:
+            self.fixes.append(sentence)
+        return nullif_expression(column, sentinels)
 
     def _canonical(self, reference: ColumnRef) -> exp.Expression:
         """The column itself, or a CASE that turns each source code into its canonical value.
