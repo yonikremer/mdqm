@@ -29,7 +29,7 @@ what was found is right.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from typing import Any
 
 import pyarrow as pa
@@ -58,7 +58,7 @@ from mdqm.testing.world import WorldConfig, build_world
 NOON = datetime(2026, 5, 1, 10, 0, tzinfo=UTC)
 
 #: 21:00-07:00 local: the window that makes a 13:00 pass a refusal.
-NIGHT = QuietWindow(tz="Asia/Jerusalem", start="21:00", end="07:00")
+NIGHT = QuietWindow(tz="Asia/Jerusalem", start=time(21, 0), end=time(7, 0))
 
 #: The measure every pair below is about.
 MEASURE = "credit_limit"

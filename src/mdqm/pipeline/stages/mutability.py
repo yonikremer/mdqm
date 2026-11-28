@@ -43,7 +43,7 @@ import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import pyarrow as pa
 from pydantic import Field
@@ -56,6 +56,7 @@ from mdqm.models.catalog import CatalogSnapshot, Table, TableKind
 from mdqm.models.fragment import Fragment
 from mdqm.models.limits import Limits
 from mdqm.models.partitioning import Partitioning
+from mdqm.models.stats import TableStats
 from mdqm.pipeline.core import (
     PipelineContext,
     StageReport,
@@ -815,8 +816,13 @@ class MutabilityStage:
                 "(never guessed from row counts)"
             )
             return {}
+        read_stats = getattr(adapter, "mutability_stats", None)
+        if not callable(read_stats):
+            skipped.append(f"{source}: no change counters are exposed; tables stay unknown")
+            return {}
+        collect = cast(Callable[[], Sequence[TableStats]], read_stats)
         try:
-            stats = adapter.mutability_stats()
+            stats = collect()
         except NotSupported as exc:
             skipped.append(f"{source}: change counters are unreadable ({exc}); tables stay unknown")
             return {}

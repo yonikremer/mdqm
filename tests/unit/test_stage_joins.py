@@ -22,7 +22,7 @@ over the D02 world, and the synthetic sources are Arrow tables built in the test
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +57,7 @@ from mdqm.testing.world import WorldConfig, build_world
 NOON = datetime(2026, 5, 1, 10, 0, tzinfo=UTC)
 
 #: 21:00-07:00 local: the window that makes a 13:00 pass a refusal.
-NIGHT = QuietWindow(tz="Asia/Jerusalem", start="21:00", end="07:00")
+NIGHT = QuietWindow(tz="Asia/Jerusalem", start=time(21, 0), end=time(7, 0))
 
 CRM_CUST_ID = "crm.customers_crm.cust_id"
 BILLING_CLIENT_NO = "billing.accounts.client_no"

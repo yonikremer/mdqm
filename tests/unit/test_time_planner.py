@@ -34,6 +34,18 @@ from mdqm.spec.models import TimeSpec
 from mdqm.testing.world import World, WorldConfig, build_world
 
 # The canonical usage_events shape from DESIGN section 6 and examples/semantic_example.yaml.
+
+
+def wire(**fields: object) -> TimeSpec:
+    """A time spec in the **wire form** an agent sends: pydantic parses it, as it does in the server.
+
+    These tests deliberately pass the raw strings a caller sends ("new_since", "7d"), so they go
+    through `model_validate` -- the documented entry point for unparsed input -- instead of
+    constructing a typed model with values that are not yet their declared types.
+    """
+    return TimeSpec.model_validate(fields)
+
+
 USAGE_EVENTS = TableSemantics.model_validate(
     {
         "partitioning": {"key": "start_time", "granularity": "month"},
@@ -92,7 +104,7 @@ SIX_HOURS = timedelta(hours=6)
 def test_new_since_reproduces_design_sql(since: datetime, expected_bound: datetime) -> None:
     """DESIGN section 6: ``insertion_time >= X`` plus ``start_time >= X - max_lag``."""
     plan = plan_time(
-        TimeSpec(mode="new_since", since=since),
+        wire(mode="new_since", since=since),
         USAGE_EVENTS,
         exec_ts=NOW,
         table_name="billing.usage_events",
@@ -109,7 +121,7 @@ def test_new_since_reproduces_design_sql(since: datetime, expected_bound: dateti
 def test_new_since_exact_design_example() -> None:
     """The literal example in DESIGN section 6, compared as SQL, not as substrings."""
     plan = plan_time(
-        TimeSpec(mode="new_since", since=datetime(2026, 11, 25, 14, 0, tzinfo=UTC)),
+        wire(mode="new_since", since=datetime(2026, 11, 25, 14, 0, tzinfo=UTC)),
         USAGE_EVENTS,
         exec_ts=NOW,
         table_name="billing.usage_events",
@@ -123,7 +135,7 @@ def test_new_since_exact_design_example() -> None:
 def test_events_in_range_filters_the_default_event_column() -> None:
     """A period question reads event time only: no ingestion predicate is invented."""
     plan = plan_time(
-        TimeSpec(mode="events_in_range", **{"from": "2026-11-01", "to": "2026-12-01"}),
+        wire(mode="events_in_range", **{"from": "2026-11-01", "to": "2026-12-01"}),
         USAGE_EVENTS,
         exec_ts=NOW,
         table_name="billing.usage_events",
@@ -143,7 +155,7 @@ def test_events_in_range_filters_the_default_event_column() -> None:
 def test_last_window_is_relative_to_exec_ts() -> None:
     """``last`` is relative to the injected exec_ts, never to a clock read."""
     plan = plan_time(
-        TimeSpec(mode="events_in_range", last="7d"),
+        wire(mode="events_in_range", last="7d"),
         USAGE_EVENTS,
         exec_ts=NOW,
         table_name="billing.usage_events",
@@ -162,14 +174,14 @@ def test_no_time_intent_plans_nothing() -> None:
 def test_partial_data_note_on_a_window_touching_the_lag_tail() -> None:
     """A window ending inside the last ``max_lag`` is flagged: rows may still be arriving."""
     recent = plan_time(
-        TimeSpec(mode="events_in_range", **{"from": "2026-11-20", "to": "2026-11-25T15:00:00"}),
+        wire(mode="events_in_range", **{"from": "2026-11-20", "to": "2026-11-25T15:00:00"}),
         USAGE_EVENTS,
         exec_ts=NOW,
         table_name="billing.usage_events",
     )
     assert TimeNote.PARTIAL_DATA_POSSIBLE in recent.notes
     old = plan_time(
-        TimeSpec(mode="events_in_range", **{"from": "2026-10-01", "to": "2026-10-02"}),
+        wire(mode="events_in_range", **{"from": "2026-10-01", "to": "2026-10-02"}),
         USAGE_EVENTS,
         exec_ts=NOW,
         table_name="billing.usage_events",
@@ -183,7 +195,7 @@ def test_partial_data_note_on_a_window_touching_the_lag_tail() -> None:
 def test_unknown_lag_yields_insertion_time_no_bound_naming_the_time_field() -> None:
     """No lag means no bound: refuse with a fix that names ``"time"`` and the column."""
     plan = plan_time(
-        TimeSpec(mode="new_since", since=datetime(2026, 11, 25, 14, 0, tzinfo=UTC)),
+        wire(mode="new_since", since=datetime(2026, 11, 25, 14, 0, tzinfo=UTC)),
         NO_LAG,
         exec_ts=NOW,
         table_name="billing.usage_events",
@@ -201,7 +213,7 @@ def test_unknown_lag_yields_insertion_time_no_bound_naming_the_time_field() -> N
 def test_failed_lag_verification_disables_the_derivation() -> None:
     """A nightly violation makes the lag untrusted: derive nothing rather than drop late rows."""
     plan = plan_time(
-        TimeSpec(mode="new_since", since=datetime(2026, 11, 25, 14, 0, tzinfo=UTC)),
+        wire(mode="new_since", since=datetime(2026, 11, 25, 14, 0, tzinfo=UTC)),
         USAGE_EVENTS,
         exec_ts=NOW,
         table_name="billing.usage_events",
@@ -213,7 +225,7 @@ def test_failed_lag_verification_disables_the_derivation() -> None:
 
 
 def test_new_since_requires_since() -> None:
-    plan = plan_time(TimeSpec(mode="new_since"), USAGE_EVENTS, exec_ts=NOW)
+    plan = plan_time(wire(mode="new_since"), USAGE_EVENTS, exec_ts=NOW)
     assert not plan.ok
     assert plan.error is not None
     assert plan.error.code == "INVALID_SPEC"
@@ -221,7 +233,7 @@ def test_new_since_requires_since() -> None:
 
 
 def test_ambiguous_window_is_an_invalid_spec() -> None:
-    plan = plan_time(TimeSpec(mode="events_in_range"), USAGE_EVENTS, exec_ts=NOW)
+    plan = plan_time(wire(mode="events_in_range"), USAGE_EVENTS, exec_ts=NOW)
     assert not plan.ok
     assert plan.error is not None
     assert plan.error.code == "INVALID_SPEC"
@@ -248,7 +260,7 @@ def test_column_selection_prefers_use_by_default_then_indexed() -> None:
 
 def test_table_without_event_column_cannot_answer_a_period_question() -> None:
     plan = plan_time(
-        TimeSpec(mode="events_in_range", last="7d"),
+        wire(mode="events_in_range", last="7d"),
         TableSemantics.model_validate(
             {"time_columns": {"insertion_time": {"role": "ingestion_time"}}}
         ),
@@ -267,7 +279,7 @@ def test_partition_key_is_ingestion_time_widens_the_range() -> None:
     start = datetime(2026, 11, 1, tzinfo=UTC)
     end = datetime(2026, 11, 2, tzinfo=UTC)
     plan = plan_time(
-        TimeSpec(mode="events_in_range", **{"from": start, "to": end}),
+        wire(mode="events_in_range", **{"from": start, "to": end}),
         USAGE_BY_LOAD,
         exec_ts=NOW,
         table_name="billing.usage_by_load",
@@ -298,7 +310,7 @@ def test_min_lag_shifts_the_ingestion_lower_bound() -> None:
         }
     )
     plan = plan_time(
-        TimeSpec(mode="events_in_range", **{"from": "2026-11-01", "to": "2026-11-02"}),
+        wire(mode="events_in_range", **{"from": "2026-11-01", "to": "2026-11-02"}),
         table,
         exec_ts=NOW,
     )
@@ -309,7 +321,7 @@ def test_min_lag_shifts_the_ingestion_lower_bound() -> None:
 def test_event_partition_key_adds_no_ingestion_predicate() -> None:
     """When the key is event time, the event filter already prunes: nothing extra is added."""
     plan = plan_time(
-        TimeSpec(mode="events_in_range", **{"from": "2026-11-01", "to": "2026-11-02"}),
+        wire(mode="events_in_range", **{"from": "2026-11-01", "to": "2026-11-02"}),
         USAGE_EVENTS,
         exec_ts=NOW,
     )
@@ -430,7 +442,7 @@ def test_derived_bound_never_loses_a_row(
     low, high = event_range
     since = (low + (high - low) * fraction).replace(microsecond=0)
     plan = plan_time(
-        TimeSpec(mode="new_since", since=since),
+        wire(mode="new_since", since=since),
         USAGE_EVENTS,
         exec_ts=NOW,
         table_name="billing.usage_events",
@@ -489,7 +501,7 @@ def test_partition_key_is_ingestion_time_loses_no_row_on_the_world(
     start = low + timedelta(days=10)
     end = start + timedelta(days=7)
     plan = plan_time(
-        TimeSpec(mode="events_in_range", **{"from": start, "to": end}),
+        wire(mode="events_in_range", **{"from": start, "to": end}),
         USAGE_BY_LOAD,
         exec_ts=NOW,
         table_name="billing.usage_by_load",
@@ -542,10 +554,10 @@ def test_widening_the_requested_range_never_narrows_the_derived_bound(
     """
     earlier, later = sorted((first, second))
     plan_earlier = plan_time(
-        TimeSpec(mode="new_since", since=earlier), USAGE_EVENTS, exec_ts=NOW, table_name="t"
+        wire(mode="new_since", since=earlier), USAGE_EVENTS, exec_ts=NOW, table_name="t"
     )
     plan_later = plan_time(
-        TimeSpec(mode="new_since", since=later), USAGE_EVENTS, exec_ts=NOW, table_name="t"
+        wire(mode="new_since", since=later), USAGE_EVENTS, exec_ts=NOW, table_name="t"
     )
     assert plan_earlier.derived_bound is not None
     assert plan_later.derived_bound is not None
@@ -566,7 +578,7 @@ def test_wider_event_window_widens_the_ingestion_range(start: datetime, width: t
     """An event window ``[X, Y)`` always yields a non-empty ingestion range that contains it."""
     end = start + width
     plan = plan_time(
-        TimeSpec(mode="events_in_range", **{"from": start, "to": end}),
+        wire(mode="events_in_range", **{"from": start, "to": end}),
         USAGE_BY_LOAD,
         exec_ts=NOW,
     )
@@ -579,7 +591,7 @@ def test_wider_event_window_widens_the_ingestion_range(start: datetime, width: t
 
 def test_plan_is_deterministic() -> None:
     """The same inputs render byte-identical SQL: no clock, no dict order, no randomness."""
-    spec = TimeSpec(mode="new_since", since=datetime(2026, 11, 25, 14, 0, tzinfo=UTC))
+    spec = wire(mode="new_since", since=datetime(2026, 11, 25, 14, 0, tzinfo=UTC))
     first = plan_time(spec, USAGE_EVENTS, exec_ts=NOW, table_name="billing.usage_events")
     second = plan_time(spec, USAGE_EVENTS, exec_ts=NOW, table_name="billing.usage_events")
     assert first.where_sql("duckdb") == second.where_sql("duckdb")

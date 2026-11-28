@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
-from typing import Any, Final, Protocol
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Final, Protocol, cast
 
 from mdqm.adapters.base import NotSupported
 from mdqm.models import CatalogSnapshot, Partitioning, Table
@@ -46,10 +46,8 @@ class CatalogReader(Protocol):
         """Tables, columns, keys and indexes as the source reports them."""
         ...
 
-    # pi-lens-ignore: no-ellipsis-body -- Protocol stub: pyright requires an ellipsis body
-    def extract_partitions(self) -> list[Partitioning]:
-        """Partition metadata, or raise :class:`NotSupported` when the source has none to give."""
-        ...
+    # `extract_partitions` is deliberately *not* part of this protocol: a reader may not implement
+    # it at all (`OptionalSourceMethods`), and the stage asks before reaching for it.
 
 
 def qualified_name(table: Table, source: str) -> str:
@@ -114,10 +112,14 @@ class CatalogStage:
             adapter = self._adapters[source]
             snapshot = adapter.extract_catalog()
             self._snapshots[source] = snapshot
-            try:
-                partitions = tuple(adapter.extract_partitions())
-            except NotSupported:
-                partitions = ()
+            read_partitions = getattr(adapter, "extract_partitions", None)
+            partitions: tuple[Partitioning, ...] = ()
+            if callable(read_partitions):
+                reader = cast(Callable[[], Sequence[Partitioning]], read_partitions)
+                try:
+                    partitions = tuple(reader())
+                except NotSupported:
+                    partitions = ()
             self._partitions[source] = partitions
             parts.append(
                 {

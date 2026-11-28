@@ -1075,9 +1075,13 @@ class _DeadlinePassingStream:
         self._clock = clock
         self._jump_to = jump_to
         self.cancelled = False
+        self.rows_returned = 0
+        self.bytes_returned = 0
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
         for index, batch in enumerate(self._inner):
+            self.rows_returned += batch.num_rows
+            self.bytes_returned += batch.nbytes
             yield batch
             if index == 0:
                 self._clock.jump(self._jump_to)

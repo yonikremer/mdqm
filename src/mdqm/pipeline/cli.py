@@ -20,10 +20,10 @@ when heavy work was **deferred** to the next quiet window (nothing is wrong, the
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import typer
 from ruamel.yaml import YAML
@@ -31,7 +31,7 @@ from ruamel.yaml import YAML
 from mdqm.adapters.base import SourceAdapter
 from mdqm.adapters.registry import AdapterRegistry
 from mdqm.config.settings import ConfigError, Settings, SourceConfig
-from mdqm.models import CatalogSnapshot
+from mdqm.models import CatalogSnapshot, Partitioning
 from mdqm.pipeline.core import PipelineContext, Stage, available_stages, run_pipeline
 from mdqm.pipeline.stages.catalog import CatalogStage, partitions_by_table
 from mdqm.pipeline.stages.conversions import ColumnPair, ColumnRef, ConversionStage
@@ -303,8 +303,12 @@ def _partition_reader(
         snapshot = catalogs.get(source)
         if snapshot is None:
             return {}
+        read_partitions = getattr(adapters[source], "extract_partitions", None)
+        if not callable(read_partitions):
+            return {}
+        reader = cast(Callable[[], Sequence[Partitioning]], read_partitions)
         try:
-            partitions = list(adapters[source].extract_partitions())
+            partitions = list(reader())
         except NotSupported:
             return {}
         return partitions_by_table(partitions, snapshot, source)

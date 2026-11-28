@@ -16,7 +16,7 @@ from typing import ClassVar
 import pyarrow as pa
 import pytest
 
-from mdqm.adapters.base import NotSupported, SourceAdapter, supports_method
+from mdqm.adapters.base import ArrowStream, NotSupported, SourceAdapter, supports_method
 from mdqm.adapters.registry import (
     ADAPTER_ENTRY_POINT_GROUP,
     AdapterNotRegistered,
@@ -66,11 +66,15 @@ class Stream:
         self._batches = table.to_batches()
         self.cancelled = False
         self.closed = False
+        self.rows_returned = 0
+        self.bytes_returned = 0
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
         for batch in self._batches:
             if self.cancelled:
                 return
+            self.rows_returned += batch.num_rows
+            self.bytes_returned += batch.nbytes
             yield batch
 
     def close(self) -> None:
@@ -132,9 +136,9 @@ class FakeAdapter:
             ),
         )
 
-    def execute(self, query: Fragment, limits: Limits) -> Stream:
+    def execute(self, fragment: Fragment, limits: Limits) -> Stream:
         self.executions += 1
-        if "-- slow" in (query.sql or ""):
+        if "-- slow" in (fragment.sql or ""):
             deadline = time.monotonic() + limits.timeout_s
             while time.monotonic() < deadline:
                 time.sleep(0.005)
@@ -142,7 +146,7 @@ class FakeAdapter:
         count = min(self.rows, limits.max_rows)
         return Stream(pa.table({"one": list(range(count))}))
 
-    def cancel(self, handle: Stream) -> None:
+    def cancel(self, handle: ArrowStream) -> None:
         handle.cancelled = True
         self.cancelled.append(handle)
 
@@ -155,7 +159,7 @@ class FakeAdapter:
 class RowCapIgnoringAdapter(FakeAdapter):
     """Returns every row, ignoring ``Limits.max_rows``."""
 
-    def execute(self, query: Fragment, limits: Limits) -> Stream:
+    def execute(self, fragment: Fragment, limits: Limits) -> Stream:
         return Stream(pa.table({"one": list(range(limits.max_rows + 3))}))
 
 
@@ -167,17 +171,17 @@ class GarbageOptionalAdapter(FakeAdapter):
 
 
 class CancelRaisingAdapter(FakeAdapter):
-    def cancel(self, handle: Stream) -> None:
+    def cancel(self, handle: ArrowStream) -> None:
         raise RuntimeError("driver cannot cancel")
 
 
 class TimeoutIgnoringAdapter(FakeAdapter):
     """Finishes a slow query instead of raising at the deadline."""
 
-    def execute(self, query: Fragment, limits: Limits) -> Stream:
-        if "-- slow" in (query.sql or ""):
+    def execute(self, fragment: Fragment, limits: Limits) -> Stream:
+        if "-- slow" in (fragment.sql or ""):
             return Stream(pa.table({"one": [1]}))
-        return super().execute(query, limits)
+        return super().execute(fragment, limits)
 
 
 class EmptyCatalogAdapter(FakeAdapter):

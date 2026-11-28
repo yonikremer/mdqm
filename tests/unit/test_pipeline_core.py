@@ -17,9 +17,9 @@ No test sleeps: the clock is scripted and ``exec_ts`` is injected. Every store i
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +54,7 @@ from mdqm.store.db import Store
 NOON = datetime(2026, 5, 1, 10, 0, tzinfo=UTC)
 
 #: 21:00-07:00 local in the first organisation's zone: a window that crosses midnight.
-NIGHT = QuietWindow(tz="Asia/Jerusalem", start="21:00", end="07:00")
+NIGHT = QuietWindow(tz="Asia/Jerusalem", start=time(21, 0), end=time(7, 0))
 
 
 class ScriptedClock:
@@ -123,7 +123,7 @@ def crashing(ctx: PipelineContext) -> StageReport:
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> Store:
+def store(tmp_path: Path) -> Iterator[Store]:
     """An initialized metadata store under ``tmp_path``."""
     opened = Store(tmp_path / "mdqm.sqlite")
     opened.initialize()
@@ -254,7 +254,7 @@ def test_force_reruns_even_when_the_hash_matches(ctx: PipelineContext) -> None:
 def test_quiet_allows_table() -> None:
     afternoon = datetime(2026, 5, 1, 13, 0, tzinfo=UTC)  # 16:00 local, outside the window
     evening = datetime(2026, 5, 1, 19, 0, tzinfo=UTC)  # 22:00 local, inside it
-    never = QuietWindow(tz="UTC", start="21:00", end="21:00")
+    never = QuietWindow(tz="UTC", start=time(21, 0), end=time(21, 0))
     assert quiet_allows((), afternoon) is True, "no window configured means unrestricted"
     assert quiet_allows((NIGHT,), afternoon) is False
     assert quiet_allows((NIGHT,), evening) is True
@@ -269,7 +269,10 @@ def test_next_quiet_start_crosses_midnight_and_ignores_zero_length_windows() -> 
     assert instant == datetime(2026, 5, 1, 18, 0, tzinfo=UTC)  # 21:00 Asia/Jerusalem
     assert window is NIGHT
     assert next_quiet_start((), afternoon) is None
-    assert next_quiet_start((QuietWindow(tz="UTC", start="21:00", end="21:00"),), afternoon) is None
+    assert (
+        next_quiet_start((QuietWindow(tz="UTC", start=time(21, 0), end=time(21, 0)),), afternoon)
+        is None
+    )
 
 
 def test_heavy_stage_outside_the_window_is_refused_with_the_next_start(

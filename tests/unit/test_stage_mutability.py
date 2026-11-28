@@ -16,14 +16,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pyarrow as pa
 import pytest
 
-from mdqm.adapters.base import NotSupported
+from mdqm.adapters.base import ArrowStream, NotSupported
 from mdqm.models.catalog import CatalogSnapshot, Column, NormalizedType, Table, TableKind
 from mdqm.models.fragment import Fragment
 from mdqm.models.limits import Limits
@@ -67,6 +67,10 @@ class ScriptedClock:
         self._index += 1
         return value
 
+    def monotonic(self) -> float:
+        """The ``Clock`` protocol's second half: these tests never measure elapsed time."""
+        return 0.0
+
 
 class StubStream:
     """A materialised Arrow stream: the rows a stub adapter's ``execute`` returns."""
@@ -76,9 +80,14 @@ class StubStream:
         self._table = pa.Table.from_pylist(values)
         self.schema = self._table.schema
         self.closed = False
+        self.rows_returned = 0
+        self.bytes_returned = 0
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
-        yield from self._table.to_batches()
+        for batch in self._table.to_batches():
+            self.rows_returned += batch.num_rows
+            self.bytes_returned += batch.nbytes
+            yield batch
 
     def close(self) -> None:
         self.closed = True
@@ -92,7 +101,7 @@ class StubAdapter:
     the lag distribution and the old-row checksum.
     """
 
-    kind = "stub"
+    kind: ClassVar[str] = "stub"
 
     def __init__(
         self,
@@ -130,6 +139,10 @@ class StubAdapter:
         index = min(self.reads, len(self._readings) - 1)
         self.reads += 1
         return list(self._readings[index]) if self._readings else []
+
+    def cancel(self, handle: ArrowStream) -> None:
+        """Nothing is in flight long enough to interrupt: the stub yields a materialised table."""
+        handle.close()
 
     def execute(self, fragment: Fragment, limits: Limits) -> StubStream:
         self.fragments.append(fragment.sql or "")
@@ -644,7 +657,7 @@ def test_stage_is_refused_outside_the_quiet_window(tmp_path: Path, store: Store)
         store=store,
         exec_ts=EXEC_TS,
         semantic_root=tmp_path / "semantic",
-        quiet_windows=(QuietWindow(tz="UTC", start="21:00", end="07:00"),),
+        quiet_windows=(QuietWindow(tz="UTC", start=time(21, 0), end=time(7, 0)),),
         clock=ScriptedClock([EXEC_TS]),
     )
     with pytest.raises(QuietWindowClosed):

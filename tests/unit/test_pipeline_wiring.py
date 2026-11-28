@@ -44,9 +44,11 @@ class _Stage:
     """A stage that names itself and does nothing: the order is the only thing under test."""
 
     heavy = False
+    measure: str | None = None
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, measure: str | None = None) -> None:
         self.name = name
+        self.measure = measure
 
     def inputs_hash(self, ctx: PipelineContext) -> str:
         return name_of(self)
@@ -81,14 +83,13 @@ def test_a_stage_the_order_does_not_list_runs_last_by_name() -> None:
 
 def test_two_instances_of_one_stage_keep_the_order_they_were_given() -> None:
     # D8 is built once per measure, and every instance carries the same stage name.
-    first, second = _Stage("D8"), _Stage("D8")
     first_measure, second_measure = "credit_limit_r5000", "usage_units"
-    first.measure = first_measure
-    second.measure = second_measure
+    first = _Stage("D8", measure=first_measure)
+    second = _Stage("D8", measure=second_measure)
 
     ordered = available_stages([first, second])
 
-    assert [stage.measure for stage in ordered] == [first_measure, second_measure]
+    assert [getattr(stage, "measure", None) for stage in ordered] == [first_measure, second_measure]
 
 
 # --- the derivation ---------------------------------------------------------------------------

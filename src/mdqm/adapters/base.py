@@ -40,6 +40,7 @@ __all__ = [
     "AdapterFactory",
     "ArrowStream",
     "NotSupported",
+    "OptionalSourceMethods",
     "SourceAdapter",
     "supports_method",
 ]
@@ -98,6 +99,37 @@ class ArrowStream(Protocol):
         ...
 
 
+class OptionalSourceMethods(Protocol):
+    """The four methods a source **may not implement at all**, documented rather than required.
+
+    They are optional in practice, not just in theory: :data:`REQUIRED_METHODS` excludes them,
+    :data:`OPTIONAL_METHODS` names them, the probe reports an absent one as an unsupported
+    capability, and every caller asks :func:`supports_method` before reaching for one. Declaring them
+    as required members of :class:`SourceAdapter` would make the type model contradict that contract
+    and force a test double to implement four methods it exists to prove can be missing.
+    """
+
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
+    def extract_partitions(self) -> list[Partitioning]:
+        """Partition metadata per table, or raise :class:`NotSupported`."""
+        ...
+
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
+    def explain(self, fragment: Fragment) -> PlanSummary:
+        """The source's own plan for ``fragment``, or raise :class:`NotSupported`."""
+        ...
+
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
+    def mine_queries(self, since: datetime) -> Iterator[RawQuery]:
+        """Past queries from the source's query store, or raise :class:`NotSupported`."""
+        ...
+
+    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
+    def mutability_stats(self) -> list[TableStats]:
+        """Change counters per table, or raise :class:`NotSupported`."""
+        ...
+
+
 class SourceAdapter(Protocol):
     """One source, in the vocabulary of ``docs/DESIGN.md`` "Adapter interface"."""
 
@@ -131,26 +163,6 @@ class SourceAdapter(Protocol):
     # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
     def cancel(self, handle: ArrowStream) -> None:
         """Abort the query behind ``handle`` (the stream ``execute`` returned). Idempotent."""
-        ...
-
-    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
-    def extract_partitions(self) -> list[Partitioning]:
-        """Partition metadata per table, or raise :class:`NotSupported`."""
-        ...
-
-    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
-    def explain(self, fragment: Fragment) -> PlanSummary:
-        """The source's own plan for ``fragment``, or raise :class:`NotSupported`."""
-        ...
-
-    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
-    def mine_queries(self, since: datetime) -> Iterator[RawQuery]:
-        """Past queries from the source's query store, or raise :class:`NotSupported`."""
-        ...
-
-    # pi-lens-ignore: no-ellipsis-body -- Protocol stub; "..." is the unimplemented body
-    def mutability_stats(self) -> list[TableStats]:
-        """Change counters per table, or raise :class:`NotSupported`."""
         ...
 
 

@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 import pyarrow as pa
 from pydantic import Field
@@ -697,8 +697,12 @@ def _explain(
     adapter = services.adapters.get(source)
     if adapter is None or anchor is None:
         return None, None
+    explain = getattr(adapter, "explain", None)
+    if not callable(explain):
+        return None, None
+    ask_plan = cast(Callable[[Fragment], PlanSummary], explain)
     try:
-        summary = adapter.explain(fragment)
+        summary = ask_plan(fragment)
     except NotSupported:
         return None, None
     except Exception as exc:
