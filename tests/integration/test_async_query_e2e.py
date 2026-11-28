@@ -123,14 +123,20 @@ def _poll(caller: Any, query_id: str) -> Answer:
     while time.monotonic() < deadline:
         answer = caller.call("get_more", {"query_id": query_id})
         if answer.status not in {"queued", "running"}:
-            return answer
+            return Answer(dict(answer.payload))
         time.sleep(1.0)
     raise AssertionError(f"{query_id} did not finish within {POLL_TIMEOUT_S:g}s")
 
 
 def test_an_async_query_reports_the_plan_then_the_answer(caller: Any) -> None:
-    """Claim: the caller learns the plan at once and the rows later, without asking twice."""
-    started = caller.call("query", {"spec": _spec(), "mode": "async"})
+    """Claim: the caller learns the plan at once and the rows later, without asking twice.
+
+    ``fresh`` is forced here on purpose. Without it the run can be answered from the segment cache,
+    and a cache hit never asks the source for an EXPLAIN -- so no per-partition number exists to
+    report and ``partitions_done`` stays ``None`` (honest, but it made this assertion depend on
+    whether an earlier test had warmed the segment). The cache-hit shape has its own test below.
+    """
+    started = caller.call("query", {"spec": {**_spec(), "fresh": True}, "mode": "async"})
     assert started.status == "started", started.payload.get("error")
     query_id = started.payload.get("query_id")
     assert isinstance(query_id, str) and query_id

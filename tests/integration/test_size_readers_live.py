@@ -120,7 +120,9 @@ def test_postgres_reports_the_partitioned_table_and_its_partitions(
     sizes = pg.sizes()
     table = _find(sizes, "usage_events")
 
-    assert table.rows is None and table.bytes is None, "a partitioned parent has no storage of its own"
+    assert table.rows is None and table.bytes is None, (
+        "a partitioned parent has no storage of its own"
+    )
     assert len(table.partitions) > 1
     assert all(item.name.startswith("usage_events_") for item in table.partitions)
     assert sum(_positive(item.bytes, item.name) for item in table.partitions) > 0
@@ -263,9 +265,9 @@ def test_sqlserver_names_partitions_the_same_way_the_partition_probe_does(
     found = mssql.extract_partitions()
 
     assert found, "the adapter reported no partitioning at all"
-    bounds = found[0].bounds if len(found) == 1 else [
-        bound for item in found for bound in item.bounds
-    ]
+    bounds = (
+        found[0].bounds if len(found) == 1 else [bound for item in found for bound in item.bounds]
+    )
     assert sizes.partitions, "the partitioned table reported no partitions"
     assert [item.name for item in sizes.partitions] == [bound.name for bound in bounds]
 
@@ -288,6 +290,12 @@ def elastic(request: pytest.FixtureRequest) -> Iterator[ElasticAdapter]:
     except httpx.HTTPError as exc:
         _unavailable(request, f"Elasticsearch at {target.base_url}: {exc}")
         raise AssertionError("unreachable") from exc
+    from mdqm.testing.loaders.elastic import load
+    from mdqm.testing.world import WorldConfig
+
+    # Seed the world here instead of trusting an earlier test module: the `es` container has no data
+    # volume, and a seed test that runs before this one leaves the cluster empty for the next reader.
+    load(target, WorldConfig.small())
     adapter = ElasticAdapter(
         SourceConfig(
             name="usage_events_es",
