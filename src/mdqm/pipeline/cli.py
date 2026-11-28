@@ -187,12 +187,25 @@ def _conversion_pairs(
             if adapter is None or snapshot is None:
                 continue
             entry = next((item for item in snapshot.tables if item.name == table), None)
-            if entry is None or not entry.primary_key:
+            if entry is None:
+                echo(f"measure {measure_key}: {column} is not comparable (no such table)")
+                continue
+            declared_table = layer.tables.get(f"{source}.{table}")
+            # The alignment key: the catalog's primary key, else the key the layer declares. A table
+            # with planted duplicate rows (the synthetic erp) has no primary key, and dropping it
+            # would quietly halve what D8 can check.
+            keys: tuple[str, ...] = tuple(entry.primary_key) or tuple(
+                () if declared_table is None else declared_table.key
+            )
+            if not keys:
+                echo(
+                    f"measure {measure_key}: {column} is not comparable (no key to align rows with)"
+                )
                 continue
             candidates.append(
                 (
                     column,
-                    ColumnRef(source=source, table=table, column=name, key=entry.primary_key[0]),
+                    ColumnRef(source=source, table=table, column=name, key=keys[0]),
                 )
             )
         if len(candidates) < 2:

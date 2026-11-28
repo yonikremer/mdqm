@@ -152,16 +152,27 @@ def _catalogs() -> dict[str, CatalogSnapshot]:
     }
 
 
-def _layer(tmp_path: Path, *, normalizations: dict[str, str]) -> Any:
-    """A layer holding one measure with one source column per normalisation."""
+def _layer(
+    tmp_path: Path, *, normalizations: dict[str, str], keys: dict[str, str] | None = None
+) -> Any:
+    """A layer holding one measure with one source column per normalisation.
+
+    ``keys`` adds ``tables: <table>: key: [<column>]``, which is how a table without a primary key
+    still gets an entity key to align rows by.
+    """
     root = tmp_path / "semantic"
     (root / "curated").mkdir(parents=True, exist_ok=True)
     sources = "\n".join(
         f"      {column}: {{ normalize: '{template}' }}"
         for column, template in normalizations.items()
     )
+    tables = ""
+    if keys:
+        tables = "tables:\n" + "".join(
+            f"  {table}:\n    key: [{column}]\n" for table, column in sorted(keys.items())
+        )
     (root / "curated" / "measures.yaml").write_text(
-        f"version: 1\nmeasures:\n  credit_limit_r5000:\n    sources:\n{sources}\n",
+        f"version: 1\n{tables}measures:\n  credit_limit_r5000:\n    sources:\n{sources}\n",
         encoding="utf-8",
     )
     return load(root)
@@ -314,3 +325,98 @@ def test_cli_bootstrap_run_says_why_it_can_do_nothing(
 
     assert result.exit_code == 0, result.output
     assert "no bootstrap stage can run here" in result.output
+
+
+def test_a_table_without_a_primary_key_uses_the_key_the_layer_declares(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The synthetic `erp.customers` has planted duplicates and so no primary key; the curated
+    layer declares `cust_no` as its key. Dropping it would silently halve what D8 can check."""
+    layer = _layer(
+        settings.paths.semantic_dir,
+        normalizations={
+            "crm.customers.credit_limit": "{col}",
+            "erp.customers.credit_limit": "{col} * 10",
+        },
+        keys={"erp.customers": "cust_no"},
+    )
+    catalogs = _catalogs()
+    # the same catalog, with erp's primary key removed
+    catalogs["erp"] = CatalogSnapshot(
+        source="erp",
+        captured_at=NOW,
+        tables=(
+            Table(
+                name="customers",
+                columns=(
+                    Column(
+                        name="credit_limit",
+                        native_type="numeric",
+                        normalized_type=NormalizedType.DECIMAL,
+                    ),
+                ),
+            ),
+        ),
+    )
+    _wire(
+        monkeypatch, adapters={name: object() for name in catalogs}, catalogs=catalogs, layer=layer
+    )
+
+    echoed: list[str] = []
+    monkeypatch.setattr(
+        pipeline_cli, "_adapters", lambda _s, *, echo: {name: object() for name in catalogs}
+    )
+    monkeypatch.setattr(pipeline_cli, "_catalogs", lambda _a, *, echo: catalogs)
+    monkeypatch.setattr(pipeline_cli, "_layer", lambda _s, *, echo: layer)
+    monkeypatch.setattr(pipeline_cli, "_specs", lambda _s, *, echo: {})
+    monkeypatch.setattr(pipeline_cli, "ReviewQueue", lambda *_a, **_k: None)
+    stages = pipeline_cli.build_stages(settings, store=store, echo=echoed.append)
+
+    conversions = [stage for stage in stages if isinstance(stage, ConversionStage)]
+    assert len(conversions) == 1
+    assert {pair.other.label for pair in conversions[0].pairs} == {
+        "erp.customers.credit_limit",
+    }
+    assert conversions[0].pairs[0].other.key == "cust_no", "the declared key aligns the rows"
+
+
+def test_a_measure_column_with_no_key_at_all_is_reported(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Silence would be a pair that quietly was not compared."""
+    layer = _layer(
+        settings.paths.semantic_dir,
+        normalizations={
+            "crm.customers.credit_limit": "{col}",
+            "erp.customers.credit_limit": "{col} * 10",
+        },
+    )
+    catalogs = _catalogs()
+    catalogs["erp"] = CatalogSnapshot(
+        source="erp",
+        captured_at=NOW,
+        tables=(
+            Table(
+                name="customers",
+                columns=(
+                    Column(
+                        name="credit_limit",
+                        native_type="numeric",
+                        normalized_type=NormalizedType.DECIMAL,
+                    ),
+                ),
+            ),
+        ),
+    )
+    echoed: list[str] = []
+    monkeypatch.setattr(
+        pipeline_cli, "_adapters", lambda _s, *, echo: {name: object() for name in catalogs}
+    )
+    monkeypatch.setattr(pipeline_cli, "_catalogs", lambda _a, *, echo: catalogs)
+    monkeypatch.setattr(pipeline_cli, "_layer", lambda _s, *, echo: layer)
+    monkeypatch.setattr(pipeline_cli, "_specs", lambda _s, *, echo: {})
+    monkeypatch.setattr(pipeline_cli, "ReviewQueue", lambda *_a, **_k: None)
+
+    pipeline_cli.build_stages(settings, store=store, echo=echoed.append)
+
+    assert any("no key to align rows with" in line for line in echoed)
