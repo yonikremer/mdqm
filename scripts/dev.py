@@ -26,6 +26,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 ENV_FILE = REPO_ROOT / ".env"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
+SERVER_DIR = REPO_ROOT / "docker" / "server"
+TOKENS_EXAMPLE = SERVER_DIR / "tokens.example.json"
+TOKENS_FILE = SERVER_DIR / "tokens.json"
+PG_RO_SECRET = SERVER_DIR / "pg_ro_password"
 PROFILES = ("pg", "oracle", "mssql", "es", "api", "oss", "server")
 """Compose profiles. `oss` is the open-source-only stack (Postgres + MariaDB + OpenSearch + api)."""
 HELP_PROFILES = ", ".join(PROFILES)
@@ -44,12 +48,55 @@ def find_docker() -> str | None:
     return shutil.which("docker")
 
 
+def _dotenv_values(path: Path) -> dict[str, str]:
+    """Parse ``KEY=value`` lines. A missing file is an empty mapping, not an error."""
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip().strip("'\"")
+    return values
+
+
 def ensure_env() -> None:
     """Create `.env` from `.env.example` once, so a fresh clone does not fail on missing values."""
     if ENV_FILE.exists() or not ENV_EXAMPLE.exists():
         return
     ENV_FILE.write_text(ENV_EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     print(f"created {ENV_FILE.name} from {ENV_EXAMPLE.name} (throwaway dev credentials)")
+
+
+def ensure_server_secrets() -> None:
+    """Create the gitignored files the ``server`` profile mounts, once each.
+
+    ``tokens.json`` is copied from the example (a throwaway dev token). ``pg_ro_password`` is the
+    read-only database password from ``.env``, which Compose never interpolates into the server
+    environment: the container reads it as a file. Existing files are left alone, so a rotated
+    token is not overwritten. The password is never printed.
+    """
+    SERVER_DIR.mkdir(parents=True, exist_ok=True)
+    if not TOKENS_FILE.exists() and TOKENS_EXAMPLE.is_file():
+        TOKENS_FILE.write_text(
+            TOKENS_EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8", newline="\n"
+        )
+        print(f"created {_display(TOKENS_FILE)} from {TOKENS_EXAMPLE.name}")
+    if not PG_RO_SECRET.exists():
+        password = _dotenv_values(ENV_FILE).get("MDQM_RO_PASSWORD", "")
+        if password:
+            PG_RO_SECRET.write_text(password + "\n", encoding="utf-8", newline="\n")
+            print(f"created {_display(PG_RO_SECRET)} from MDQM_RO_PASSWORD")
+
+
+def _display(path: Path) -> str:
+    """A path relative to the repo when it lives there, otherwise the path itself."""
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def compose(*args: str) -> list[str]:
@@ -87,8 +134,9 @@ def cmd_status(profiles: list[str]) -> int:
 def cmd_env() -> int:
     if ENV_FILE.exists():
         print(f"{ENV_FILE.name} already exists; not touching it")
-        return 0
-    ensure_env()
+    else:
+        ensure_env()
+    ensure_server_secrets()
     return 0
 
 
@@ -137,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     ensure_env()
+    ensure_server_secrets()
     if args.action == "up":
         return cmd_up(list(args.profiles))
     if args.action == "down":

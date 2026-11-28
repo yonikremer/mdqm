@@ -722,6 +722,7 @@ class PostgresAdapter:
             can_read_partitions = bool(partitioned and partitioned[0])
             queries = query_store_state(cur)
         partitions_supported, partitions_detail = self._probe_partitions(can_read_partitions)
+        size_supported, size_detail = self._probe_sizes()
         capabilities = {
             _CAPABILITY_PARTITIONS: Capability(
                 supported=partitions_supported, detail=partitions_detail
@@ -735,6 +736,7 @@ class PostgresAdapter:
             MUTABILITY_CAPABILITY: Capability(
                 supported=True, detail="pg_stat_user_tables (n_tup_ins/upd/del/hot_upd)"
             ),
+            OPTIONAL_METHODS["sizes"]: Capability(supported=size_supported, detail=size_detail),
         }
         return Capabilities(
             source=self._source,
@@ -761,6 +763,19 @@ class PostgresAdapter:
         except psycopg.Error as exc:
             return False, f"the partition catalog could not be read: {exc.diag.message_primary}"
         return True, f"pg_partitioned_table + pg_inherits: {len(found)} partitioned table(s) read"
+
+    def _probe_sizes(self) -> tuple[bool, str]:
+        """Claim ``size_stats`` only when the size query actually returns."""
+        try:
+            found = self.sizes()
+        except NotSupported as exc:
+            return False, exc.detail or exc.capability
+        except psycopg.Error as exc:
+            return False, f"size statistics could not be read: {exc.diag.message_primary}"
+        return True, (
+            "pg_total_relation_size and reltuples per relation and partition: "
+            f"{len(found)} relation(s)"
+        )
 
     # --- SourceAdapter: catalog ----------------------------------------------------------
 

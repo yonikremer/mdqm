@@ -21,14 +21,14 @@ Read `AGENTS.md` first (rules, protocol, conventions). `docs/DESIGN.md` is the d
 | 3 | F05, C05, C06, C07, C15, H02, H03, H04, A06*, S08, S12, M08*, E01* |
 | 4 | C08, H05, A01, S13*, M05* |
 | 5 | C09, C14, A02, A07*, A08*, A09*, S01, M02, M06* |
-| 6 | C10*, C11, C17, A03, A04*, S03*, S04, S09*, M07* |
+| 6 | C10*, C11, C17, A03, A04*, A10*, S03*, S04, S09*, M07* |
 | 7 | C18*, S02, S05*, S06, S07*, M03 |
 | 8 | C19*, H06*, S11*, M04, E02* |
 | 9 | S14*, E03 |
 
 `*` = not P0.
 
-**73 tasks, 45 of them P0.** Longest dependency chain: 10 waves.
+**74 tasks, 45 of them P0.** Longest dependency chain: 10 waves.
 
 ## Dependency table
 
@@ -87,6 +87,7 @@ Read `AGENTS.md` first (rules, protocol, conventions). `docs/DESIGN.md` is the d
 | S01 | 5 | P0 | MVP | H01, C04, A01 | Bootstrap pipeline framework (idempotent stages, quiet windows) |
 | A03 | 6 | P0 | MVP | A02, C08 | PostgreSQL: partitions extraction and EXPLAIN pruning proof |
 | A04 | 6 | P1 | MVP | A02 | PostgreSQL: query mining source and mutability stats |
+| A10 | 6 | P2 | later | A08, M08 | SQL Server extra inside the server image |
 | C10 | 6 | P1 | MVP | C09 | Compiler dialect golden tests: Oracle and T-SQL |
 | C11 | 6 | P0 | MVP | C09, F06 | Linter: auto-fixes and errors with an exact fix |
 | C17 | 6 | P0 | MVP | C09, C14, C15, F05 | Federated executor (fragments per source, DuckDB join, quality report) |
@@ -613,7 +614,7 @@ python -m pytest tests/unit/test_compiler.py -q
 
 - **Phase** MVP | **Priority** P1 | **Wave** 6 | **Depends on** C09
 - **Owns (files you may create/edit)**: `tests/unit/test_compiler_dialects.py`, `tests/data/golden/`
-- **Same wave (can run in parallel)**: C11, C17, A03, A04, S03, S04, S09, M07
+- **Same wave (can run in parallel)**: C11, C17, A03, A04, A10, S03, S04, S09, M07
 
 Extend golden coverage to dialect `oracle` (FETCH FIRST n ROWS ONLY, TO_TIMESTAMP literals, quoting) and `tsql` (TOP / OFFSET FETCH, brackets, datetime2 literals). Use `unsupported_level=RAISE` so unsupported constructs fail loudly. Fix compiler issues found; do not special-case the tests.
 
@@ -633,7 +634,7 @@ python -m pytest tests/unit/test_compiler_dialects.py -q
 
 - **Phase** MVP | **Priority** P0 | **Wave** 6 | **Depends on** C09, F06
 - **Owns (files you may create/edit)**: `src/mdqm/linter/`, `tests/unit/test_linter.py`
-- **Same wave (can run in parallel)**: C10, C17, A03, A04, S03, S04, S09, M07
+- **Same wave (can run in parallel)**: C10, C17, A03, A04, A10, S03, S04, S09, M07
 
 Rule registry over the spec (primary) and raw SQL (emergency path; goes through the AST). Auto-fix only meaning-preserving cases and report each in `applied_fixes`: missing LIMIT, categorical label -> canonical, raw column that has a measure -> measure, insertion_time filter -> derived bound, function on partition key -> raw range, now() -> exec_ts. Return an `ErrorResponse` with a concrete `fix` for everything else: unknown table/column (with did-you-mean), unapproved join (with the approved ON), ambiguous value (with valid values), no filter on partition key, DML/DDL. Each rule is a small class with an id, severity, autofix flag, and tests with before/after specs.
 
@@ -756,7 +757,7 @@ python -m pytest tests/unit/test_summary.py -q
 
 - **Phase** MVP | **Priority** P0 | **Wave** 6 | **Depends on** C09, C14, C15, F05
 - **Owns (files you may create/edit)**: `src/mdqm/executor/`, `tests/unit/test_executor.py`
-- **Same wave (can run in parallel)**: C10, C11, A03, A04, S03, S04, S09, M07
+- **Same wave (can run in parallel)**: C10, C11, A03, A04, A10, S03, S04, S09, M07
 
 Split a multi-source spec into per-source fragments (max filter pushdown), run them through the governor and cache, register the Arrow results in DuckDB and run the join, normalisation and aggregation locally. Produce a quality report: rows dropped by each join (left key with no match), unmapped categorical values, normalisation sanity violations, per-fragment `fetched_at`. Caps per fragment (rows, bytes); exceeding one returns COST_TOO_HIGH with a `fix` that narrows the filter.
 
@@ -989,7 +990,7 @@ python -m pytest tests/integration/test_pg_adapter.py --require-services -q
 
 - **Phase** MVP | **Priority** P0 | **Wave** 6 | **Depends on** A02, C08
 - **Owns (files you may create/edit)**: `src/mdqm/adapters/postgresql_plan.py`, `tests/unit/test_pg_plan_parse.py`, `tests/integration/test_pg_partitions.py`
-- **Same wave (can run in parallel)**: C10, C11, C17, A04, S03, S04, S09, M07
+- **Same wave (can run in parallel)**: C10, C11, C17, A04, A10, S03, S04, S09, M07
 
 extract_partitions via pg_partitioned_table/pg_get_partkeydef/pg_inherits (strategy, key, bounds). explain: `EXPLAIN (FORMAT JSON)` without ANALYZE, parse the plan tree, count scanned partition leaves vs total, report `proven` only for plan-time pruning and `unproven` when parameters would defer it, and report index use. Parsing is a pure function tested on canned JSON plans stored in tests/data/plans/.
 
@@ -1011,7 +1012,7 @@ python -m pytest tests/unit/test_pg_plan_parse.py -q
 
 - **Phase** MVP | **Priority** P1 | **Wave** 6 | **Depends on** A02
 - **Owns (files you may create/edit)**: `src/mdqm/adapters/postgresql_stats.py`, `tests/integration/test_pg_stats.py`
-- **Same wave (can run in parallel)**: C10, C11, C17, A03, S03, S04, S09, M07
+- **Same wave (can run in parallel)**: C10, C11, C17, A03, A10, S03, S04, S09, M07
 
 mine_queries from `pg_stat_statements` (query text, calls, mean time) with a watermark; returns RawQuery list. mutability_stats from pg_stat_user_tables (n_tup_ins/upd/del/hot_upd, n_mod_since_analyze, last_autovacuum) deltas between two readings. If the extension is not loaded or not readable the capability is `unsupported`, not an error.
 
@@ -1130,6 +1131,28 @@ Pure httpx REST client. Probe: version, which of ES|QL / SQL API / Query DSL wor
 python -m pytest tests/integration/test_es_adapter.py --require-services -q
 ```
 
+### A10: SQL Server extra inside the server image
+
+- **Phase** later | **Priority** P2 | **Wave** 6 | **Depends on** A08, M08
+- **Owns (files you may create/edit)**: `Dockerfile`, `docs/mssql-driver.md`
+- **Same wave (can run in parallel)**: C10, C11, C17, A03, A04, S03, S04, S09, M07
+
+The host driver needs libltdl.so.7 on Debian/Ubuntu, and the runtime image now installs that library at build time. What is not proven is a build with `--build-arg MDQM_EXTRAS=pg,mssql` actually logging into SQL Server from inside the container. Build that image, run it against the `mssql` profile, and record that `mssql_python.connect` as `mdqm_ro` returns a row. Do not apt-get at container start.
+
+**Acceptance criteria**
+
+- [ ] an image built with MDQM_EXTRAS=pg,mssql imports mssql_python and connects to the compose SQL Server as mdqm_ro
+- [ ] the runtime stage still has no pip install
+- [ ] the finding is written in docs/mssql-driver.md and progress/A10.md
+
+**Test command**
+
+```
+python scripts/check_offline_install.py
+```
+
+> Note: The default image stays extras=pg. This task is only the image that also carries the SQL Server driver.
+
 ## Lane S: Semantic-layer bootstrap pipeline (deterministic stages D*, agentic stages A*)
 
 ### S01: Bootstrap pipeline framework (idempotent stages, quiet windows)
@@ -1177,7 +1200,7 @@ python -m pytest tests/unit/test_stage_catalog.py -q
 
 - **Phase** MVP | **Priority** P2 | **Wave** 6 | **Depends on** S01, A06
 - **Owns (files you may create/edit)**: `src/mdqm/pipeline/stages/openapi.py`, `tests/unit/test_stage_openapi.py`
-- **Same wave (can run in parallel)**: C10, C11, C17, A03, A04, S04, S09, M07
+- **Same wave (can run in parallel)**: C10, C11, C17, A03, A04, A10, S04, S09, M07
 
 From the API adapter's virtual catalog write table skeletons: filterable params, pagination, auth header name, rate-limit headers seen.
 
@@ -1196,7 +1219,7 @@ python -m pytest tests/unit/test_stage_openapi.py -q
 
 - **Phase** MVP | **Priority** P0 | **Wave** 6 | **Depends on** S01, F05
 - **Owns (files you may create/edit)**: `src/mdqm/pipeline/stages/profiling.py`, `tests/unit/test_stage_profiling.py`
-- **Same wave (can run in parallel)**: C10, C11, C17, A03, A04, S03, S09, M07
+- **Same wave (can run in parallel)**: C10, C11, C17, A03, A04, A10, S03, S09, M07
 
 Per column: null rate, distinct count (estimated when large), min/max, top-N values with counts, string format patterns (regex classes, zero-padded digits), numeric granularity (largest g such that all non-null values are multiples of g; report 5000, 500, 1 ...) and the share that fits. Order: catalog statistics, then source-side sample (TABLESAMPLE or equivalent), with timeout and row cap; only in quiet windows. Output feeds D7/D8 and the A-stages as a fact sheet.
 
@@ -1299,7 +1322,7 @@ python -m pytest tests/unit/test_mining.py -q
 
 - **Phase** MVP | **Priority** P1 | **Wave** 6 | **Depends on** C04, F02, S01
 - **Owns (files you may create/edit)**: `src/mdqm/pipeline/stages/drift.py`, `tests/unit/test_stage_drift.py`
-- **Same wave (can run in parallel)**: C10, C11, C17, A03, A04, S03, S04, M07
+- **Same wave (can run in parallel)**: C10, C11, C17, A03, A04, A10, S03, S04, M07
 
 Diff two CatalogSnapshots and classify each change: breaking (dropped/renamed column, type change, partition key change, index dropped on a default time column) vs non-breaking (new column, new partition, new index). Map each breaking change to the semantic YAML entries that reference it. Breaking changes produce an immediate admin notification payload (not waiting for the weekly digest).
 
@@ -1551,7 +1574,7 @@ python -m pytest tests/unit/test_context_endpoint.py -q
 
 - **Phase** MVP | **Priority** P1 | **Wave** 6 | **Depends on** M06
 - **Owns (files you may create/edit)**: `plugin/`, `tests/unit/test_plugin_hook.py`
-- **Same wave (can run in parallel)**: C10, C11, C17, A03, A04, S03, S04, S09
+- **Same wave (can run in parallel)**: C10, C11, C17, A03, A04, A10, S03, S04, S09
 
 A directory `plugin/mdqm/` that is a Claude Code plugin: `.claude-plugin/plugin.json`, `.mcp.json` pointing at the central HTTP server (URL from an env var, token via `headersHelper` script or env var), `hooks/hooks.json` with a UserPromptSubmit hook running a cross-platform Python script (no bash; Windows has none) that calls /context with a short timeout and prints the JSON for `additionalContext` (fail open: on any error print nothing), and `skills/mdqm-query/SKILL.md` documenting the spec format with 3 examples. READ the current docs first (https://code.claude.com/docs/en/plugins, /hooks, /mcp); formats change. Set `alwaysLoad` for the tools if the docs say how. Also write `plugin/README.md` with the one-step install for an internal marketplace and for a local directory.
 

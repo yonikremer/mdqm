@@ -89,6 +89,7 @@ from mdqm.models import (
     RawQuery,
     Table,
     TableKind,
+    TableSize,
     TableStats,
 )
 from mdqm.sql.execution import execute_one, prepare, wrapped
@@ -484,6 +485,11 @@ SELECT sql_fulltext, executions, elapsed_time, rows_processed, last_active_time
  ORDER BY elapsed_time DESC
 """
 
+_SIZES_UNSUPPORTED: Final = (
+    "Oracle relation sizes are not collected by this adapter; the plan uses the catalog row "
+    "estimate and reports estimate_source catalog"
+)
+
 _MUTABILITY_UNSUPPORTED: Final = (
     "ALL_TAB_MODIFICATIONS is only refreshed by DBMS_STATS (FLUSH_DATABASE_MONITORING_INFO or a "
     "stats gather), so a hot table reads as unchanged between gathers; a stale counter would make "
@@ -805,6 +811,7 @@ class OracleAdapter:
             OPTIONAL_METHODS["mutability_stats"]: Capability(
                 supported=False, detail=_MUTABILITY_UNSUPPORTED
             ),
+            OPTIONAL_METHODS["sizes"]: Capability(supported=False, detail=_SIZES_UNSUPPORTED),
         }
         thin = oracledb.is_thin_mode()
         return Capabilities(
@@ -1274,6 +1281,10 @@ class OracleAdapter:
         changed all night reads as unchanged.
         """
         raise NotSupported(OPTIONAL_METHODS["mutability_stats"], _MUTABILITY_UNSUPPORTED)
+
+    def sizes(self) -> list[TableSize]:
+        """Not collected: a missing measurement must say so, not look like a zero-byte table."""
+        raise NotSupported(OPTIONAL_METHODS["sizes"], _SIZES_UNSUPPORTED)
 
 
 # --- pure helpers ---------------------------------------------------------------------------

@@ -512,6 +512,10 @@ def grant_read_only(target: MssqlTarget) -> None:
         cur.execute(f"ALTER ROLE [db_datareader] ADD MEMBER [{target.ro_user}]")
         # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
         cur.execute(f"GRANT VIEW DATABASE STATE TO [{target.ro_user}]")
+        # SHOWPLAN is what makes SET SHOWPLAN_XML return a plan. Without it the read-only login
+        # can turn the mode on and still be refused when the statement is compiled (error 229 is
+        # the DML denial; SHOWPLAN's refusal is "SHOWPLAN permission denied in database").
+        cur.execute(f"GRANT SHOWPLAN TO [{target.ro_user}]")
         conn.commit()
 
 

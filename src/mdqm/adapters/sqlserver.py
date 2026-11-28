@@ -103,6 +103,7 @@ from mdqm.models import (
     RawQuery,
     Table,
     TableKind,
+    TableSize,
     TableStats,
 )
 from mdqm.sql.execution import execute_one, prepare
@@ -147,6 +148,13 @@ _TIMEOUT_MARKER: Final = "Query timeout expired"
 _SHOWPLAN_FIX: Final = (
     "GRANT SHOWPLAN TO [<read-only login>]: SET SHOWPLAN_XML ON itself is allowed, but compiling a "
     "statement into XML needs the SHOWPLAN permission"
+)
+
+#: Why ``sizes`` is a capability with a fallback rather than a silent omission. The plan then says
+#: ``estimate_source: catalog`` instead of pretending a measurement exists.
+_SIZES_UNSUPPORTED: Final = (
+    "SQL Server relation sizes are not collected by this adapter; the plan uses the catalog row "
+    "estimate and reports estimate_source catalog"
 )
 
 _KNOWN_OPTIONS: Final = frozenset(
@@ -824,6 +832,7 @@ class SqlServerAdapter:
                 (OPTIONAL_METHODS["explain"], self._probe_explain()),
                 (OPTIONAL_METHODS["mine_queries"], self._probe_query_store()),
                 (OPTIONAL_METHODS["mutability_stats"], self._probe_mutability()),
+                (OPTIONAL_METHODS["sizes"], (False, _SIZES_UNSUPPORTED)),
             )
         }
         return Capabilities(
@@ -1289,6 +1298,10 @@ class SqlServerAdapter:
                 )
             )
         return out
+
+    def sizes(self) -> list[TableSize]:
+        """Not collected: a missing measurement must say so, not look like a zero-byte table."""
+        raise NotSupported(OPTIONAL_METHODS["sizes"], _SIZES_UNSUPPORTED)
 
     def _mutability_rows(self) -> list[tuple[str, str, int]]:
         """``schema.table`` row counts from the partition statistics view."""

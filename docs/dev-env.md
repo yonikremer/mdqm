@@ -211,6 +211,8 @@ That writes four files, and they are committed so the compose init hooks have so
 Two hand-written helpers sit next to them and are never overwritten by the generator:
 `docker/oss/maria/10-readonly-user.sh` (creates `mdqm_ro` with `SELECT` only, password from
 `MDQM_RO_PASSWORD`) and `docker/oss/opensearch/load.sh` (the loader the one-shot service runs).
+The MariaDB service passes `MDQM_RO_PASSWORD` into the container. Without that variable the
+init script exits and the container never becomes healthy.
 
 Same seed ⇒ byte-identical files: `tests/unit/test_seed_oss.py` regenerates them and fails if the
 committed copies drift, so never edit them by hand.

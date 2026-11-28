@@ -89,6 +89,7 @@ from mdqm.models import (
     RawQuery,
     Table,
     TableKind,
+    TableSize,
     TableStats,
 )
 
@@ -104,6 +105,11 @@ __all__ = [
 ]
 
 _log = logging.getLogger(__name__)
+
+_SIZES_UNSUPPORTED: Final = (
+    "Elasticsearch index sizes are not collected by this adapter; the plan uses the catalog "
+    "estimate and reports estimate_source catalog"
+)
 
 DEFAULT_HOST: Final = "127.0.0.1"
 DEFAULT_PORT: Final = 9200
@@ -658,6 +664,7 @@ class ElasticAdapter:
             OPTIONAL_METHODS["mutability_stats"]: Capability(
                 supported=False, detail="Elasticsearch keeps no per-index change counters"
             ),
+            OPTIONAL_METHODS["sizes"]: Capability(supported=False, detail=_SIZES_UNSUPPORTED),
         }
         return Capabilities(
             source=self._name,
@@ -848,6 +855,10 @@ class ElasticAdapter:
             OPTIONAL_METHODS["mutability_stats"],
             "Elasticsearch keeps no per-index insert/update/delete counters",
         )
+
+    def sizes(self) -> list[TableSize]:
+        """Not collected: a missing measurement must say so, not look like an empty index."""
+        raise NotSupported(OPTIONAL_METHODS["sizes"], _SIZES_UNSUPPORTED)
 
     # --- SourceAdapter: execute ----------------------------------------------------------
 

@@ -1,5 +1,9 @@
 # Handoff: what is done, what is not, and exactly where to start
 
+The live-service proof after this note is `progress/LIVE-SERVICES.md` and the Status section of
+`README.md`. The paragraphs below were written at `main = a55d0ab` and still describe that tree;
+they are not the current measurement.
+
 Written at `main = a55d0ab` (working tree clean). Everything below was measured by running something,
 not by reading code — the commands are included so you can re-measure instead of trusting me. Where a
 number would go stale, the command is written instead: run it.
