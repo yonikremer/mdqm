@@ -796,3 +796,113 @@ def test_without_a_profile_the_estimate_is_exactly_what_it_was() -> None:
     assert with_profile.estimate.rows == 1_000
     assert with_profile.estimate.bytes is None
     assert with_profile.estimate.estimated_from == "catalog"
+
+
+# --- the fat-partition note ---------------------------------------------------------------
+#: Three months where one holds 20x the median: the shape a sum or a row estimate cannot show.
+SHAPED_TABLE = Partitioning(
+    strategy=PartitionStrategy.RANGE,
+    key=('start_time',),
+    granularity=PartitionGranularity.MONTH,
+    bounds=(
+        PartitionBound(
+            name="usage_events_p2025_10",
+            lower=datetime(2025, 10, 1, tzinfo=UTC),
+            upper=datetime(2025, 11, 1, tzinfo=UTC),
+            row_estimate=1_000,
+        ),
+        PartitionBound(
+            name="usage_events_p2025_11",
+            lower=datetime(2025, 11, 1, tzinfo=UTC),
+            upper=datetime(2025, 12, 1, tzinfo=UTC),
+            row_estimate=1_000,
+        ),
+        PartitionBound(
+            name="usage_events_p2025_12",
+            lower=datetime(2025, 12, 1, tzinfo=UTC),
+            upper=datetime(2026, 1, 1, tzinfo=UTC),
+            row_estimate=1_000,
+        ),
+    ),
+)
+
+#: The measured profile of :data:`SHAPED_TABLE`: two typical months and one backfill.
+SHAPED_SIZES: dict[str, tuple[int | None, int | None]] = {
+    "usage_events_p2025_10": (1_000, 1_000_000),
+    "usage_events_p2025_11": (1_100, 1_100_000),
+    "usage_events_p2025_12": (200_000, 200_000_000),
+}
+
+
+@pytest.mark.parametrize(
+    ("window", "sizes", "names"),
+    [
+        pytest.param(
+            "start_time >= '2025-12-01'",
+            SHAPED_SIZES,
+            ("usage_events_p2025_12",),
+            id="the-window-is-the-fat-partition",
+        ),
+        pytest.param(
+            "start_time >= '2025-10-01'",
+            SHAPED_SIZES,
+            ("usage_events_p2025_12",),
+            id="the-window-spans-every-partition",
+        ),
+        pytest.param(
+            "start_time >= '2025-10-01' AND start_time < '2025-12-01'",
+            SHAPED_SIZES,
+            (),
+            id="the-fat-partition-is-outside-the-window",
+        ),
+        pytest.param(
+            "start_time >= '2025-10-01'",
+            {
+                "usage_events_p2025_10": (1_000, 1_000_000),
+                "usage_events_p2025_11": (1_100, 1_100_000),
+                "usage_events_p2025_12": (4_000, 40_000_000),
+            },
+            (),
+            id="exactly-four-times-the-median-is-not-fat",
+        ),
+        pytest.param("start_time >= '2025-10-01'", None, (), id="no-profile-at-all"),
+        pytest.param("start_time >= '2025-10-01'", {}, (), id="nothing-measured-yet"),
+    ],
+)
+def test_a_fat_partition_in_the_window_is_named_in_the_plan(
+    window: str, sizes: dict[str, tuple[int | None, int | None]] | None, names: tuple[str, ...]
+) -> None:
+    """The median is the table's, not the window's: estimating over the touched partitions alone
+    would compare the fat partition with itself and never report it."""
+    plan = plan_partitions(
+        SHAPED_TABLE, (_pred(window),), exec_ts=EXEC_TS, table="billing.usage_events", sizes=sizes
+    )
+
+    assert plan.ok
+    assert plan.fat_partitions == names
+    assert (PartitionNote.FAT_PARTITION in plan.notes) is bool(names)
+
+
+def test_without_a_profile_a_plan_carries_exactly_the_notes_it_always_had() -> None:
+    """The note is an addition: an install that never measured keeps the byte-for-byte plan."""
+    before = _profile_plan(None)
+
+    assert before.notes == ()
+    assert before.fat_partitions == ()
+
+
+def test_the_fat_partition_note_also_fires_on_an_injected_default_window() -> None:
+    """A table that allows a filterless query gets a window; a fat partition in it is still news."""
+    plan = plan_partitions(
+        SHAPED_TABLE.model_copy(update={"require_key_filter": False}),
+        (),
+        exec_ts=datetime(2026, 1, 2, tzinfo=UTC),
+        table="billing.usage_events",
+        default_window=Duration.parse("70d"),
+        sizes=SHAPED_SIZES,
+    )
+
+    assert plan.ok
+    assert PartitionNote.DEFAULT_WINDOW_APPLIED in plan.notes
+    assert plan.fat_partitions == ("usage_events_p2025_12",)
+    assert PartitionNote.FAT_PARTITION in plan.notes

@@ -44,6 +44,7 @@ from mdqm.models import (
     PartitionStrategy,
     PlanSummary,
 )
+from mdqm.planner.sizes import fat_partitions
 from mdqm.spec.durations import Duration
 
 __all__ = [
@@ -73,7 +74,8 @@ class PartitionNote(StrEnum):
     """The row and byte estimate comes from a measured size profile, not the catalog's ``reltuples``."""
     FAT_PARTITION = "fat_partition"
     """A partition in the window is far bigger than the table's median: the window is cheaper if the
-    filter is narrowed inside it, and the note names the partition so the agent can say which."""
+    filter is narrowed inside it. :attr:`PartitionPlan.fat_partitions` names them, largest first,
+    so the agent can say which one to narrow."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +160,13 @@ class PartitionPlan:
     estimate: PartitionEstimate | None = None
     scope: Range | None = None
     segments: tuple[Range, ...] = ()
+    fat_partitions: tuple[str, ...] = ()
+    """The partitions in the window that hold at least :data:`~mdqm.planner.sizes.FAT_RATIO`
+    times the table's median: what :attr:`PartitionNote.FAT_PARTITION` names, largest first.
+
+    Empty without a measured size profile -- the catalog's ``reltuples`` has no median to compare
+    against -- so a plan that was never measured keeps the notes it always had.
+    """
 
     @property
     def ok(self) -> bool:
@@ -269,6 +278,31 @@ class _Window:
         return bound.lower < self.upper
 
 
+def _touched(partitioning: Partitioning, window: _Window | None) -> tuple[PartitionBound, ...]:
+    """The declared partitions ``window`` can touch (``window is None``: all of them)."""
+    if window is None:
+        return partitioning.bounds
+    return tuple(bound for bound in partitioning.bounds if window.touches(bound))
+
+
+def _fat(
+    partitioning: Partitioning,
+    window: _Window | None,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None,
+) -> tuple[str, ...]:
+    """The touched partitions at least ``FAT_RATIO`` times the table's median, largest first.
+
+    The median is taken over the **whole** measured profile, not only the touched partitions: a
+    window over two partitions that both hold 40 000 rows has no fat one, and a window over the one
+    partition holding 20x the median is the case the note exists for. Empty without a profile, so
+    nothing is reported that was not measured.
+    """
+    if not sizes or not partitioning.bounds:
+        return ()
+    touched = {bound.name for bound in _touched(partitioning, window)}
+    return tuple(name for name in fat_partitions(sizes) if name in touched)
+
+
 def _estimate(
     partitioning: Partitioning,
     window: _Window | None,
@@ -283,11 +317,7 @@ def _estimate(
     """
     if not partitioning.bounds:
         return PartitionEstimate()
-    touched = (
-        partitioning.bounds
-        if window is None
-        else tuple(bound for bound in partitioning.bounds if window.touches(bound))
-    )
+    touched = _touched(partitioning, window)
     measured = sizes or {}
     rows = 0
     total_bytes = 0
@@ -621,7 +651,9 @@ def plan_partitions(
             refuses with ``COST_TOO_HIGH``.
         sizes: a measured size profile, ``{partition name: (rows, bytes)}`` (``mdqm sizes
             measure``). When given, the estimate counts what was measured for the partitions in the
-            window -- rows *and* bytes -- instead of the catalog's own ``reltuples``.
+            window -- rows *and* bytes -- instead of the catalog's own ``reltuples``, and a
+            partition holding ``FAT_RATIO`` times the table's median is reported in
+            :attr:`PartitionPlan.fat_partitions` with ``PartitionNote.FAT_PARTITION``.
 
     Returns:
         A :class:`PartitionPlan`. When ``plan.ok`` is false nothing may run and nothing is fetched
@@ -743,6 +775,8 @@ def _plan_key_range(
             default_window=default_window,
             injectable=len(partitioning.key) == 1,
             column=column,
+            # The injected window is a window like any other: a measured profile answers it too.
+            sizes=sizes,
         )
     predicates = _rewrite_predicates(constraints, column)
     fixes = tuple(
@@ -752,6 +786,7 @@ def _plan_key_range(
         if constraint.unit is not None
     )
     notes = (PartitionNote.KEY_FUNCTION_REWRITTEN,) if fixes else ()
+    fat = _fat(partitioning, window, sizes)
     scope = (
         Range(window.lower, window.upper)
         if window.lower is not None and window.upper is not None and not window.upper_inclusive
@@ -759,13 +794,14 @@ def _plan_key_range(
     )
     return PartitionPlan(
         predicates=predicates,
-        notes=notes,
+        notes=notes + ((PartitionNote.FAT_PARTITION,) if fat else ()),
         applied_fixes=tuple(dict.fromkeys(fixes)),
         estimate=_estimate(partitioning, window, sizes),
         scope=scope,
         segments=align_to_partitions(scope, granularity or PartitionGranularity.MONTH)
         if scope is not None
         else (),
+        fat_partitions=fat,
     )
 
 
@@ -913,9 +949,12 @@ def _no_filter(
         window = Range(default_window.subtract_from(exec_ts), exec_ts)
     if window is not None and column is not None and default_window is not None:
         granularity = partitioning.granularity or PartitionGranularity.MONTH
+        injected = _Window(lower=window.lower, upper=window.upper)
+        fat = _fat(partitioning, injected, sizes)
         return PartitionPlan(
             predicates=(_at_least(column, window.lower), _before(column, window.upper)),
-            notes=(PartitionNote.DEFAULT_WINDOW_APPLIED,),
+            notes=(PartitionNote.DEFAULT_WINDOW_APPLIED,)
+            + ((PartitionNote.FAT_PARTITION,) if fat else ()),
             applied_fixes=(
                 f'added the table default window {default_window.to_text()} on "{column}" '
                 "because this table allows a query without a key filter",
@@ -923,6 +962,7 @@ def _no_filter(
             estimate=estimate_partition_scan(partitioning, window, sizes),
             scope=window,
             segments=align_to_partitions(window, granularity),
+            fat_partitions=fat,
         )
     fix_window = default_window or Duration.parse("30d")
     estimate_when_fixed = estimate_partition_scan(
