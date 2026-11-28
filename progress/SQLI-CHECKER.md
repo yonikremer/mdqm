@@ -22,8 +22,11 @@ Then the sites those rules exposed moved onto the documented chokepoint instead 
 none
 
 ## Not verified
-* `tests/integration --require-services`: Docker Desktop's engine went down mid-session and never came back (`open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified`). The changed loaders and the cache's identifier quoting are exercised only by unit tests here. Re-run `python -m pytest tests/integration --require-services -q` once Docker is back — the loaders' emitted DDL is unchanged, but that is a claim, not a measurement, until it runs.
-* The full unit suite on this branch: running when this note was committed; the result belongs here.
+* Nothing outstanding. `python -m pytest tests/integration --require-services -q` was run once Docker
+  came back: **182 passed**, covering the four loaders against real engines and the segment cache
+  against DuckDB, so the `run_local`/`set_local`/`local_ident` changes are measured, not just
+  type-checked.
+* The full unit suite: 4532 passed on the merged tree.
 
 ## Plan issues
 * The pre-commit hook scoped the rule to a hand-written directory list, which silently missed `pipeline/` (a runtime path that builds source SQL) and `eval/`. A directory list that must be maintained by hand will drift again; a single "everything under src/mdqm except mdqm/testing/" default would be harder to forget.
