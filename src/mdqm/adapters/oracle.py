@@ -592,6 +592,7 @@ def _segment_view(cur: Any) -> str | None:
         return view
     return None
 
+
 _MUTABILITY_UNSUPPORTED: Final = (
     "ALL_TAB_MODIFICATIONS is only refreshed by DBMS_STATS (FLUSH_DATABASE_MONITORING_INFO or a "
     "stats gather), so a hot table reads as unchanged between gathers; a stale counter would make "
