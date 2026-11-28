@@ -23,6 +23,7 @@ from mdqm.adapters.base import SourceAdapter
 from mdqm.adapters.registry import AdapterRegistry
 from mdqm.config.settings import Settings
 from mdqm.executor.cache import FragmentCache
+from mdqm.executor.federate import FederatedExecutor
 from mdqm.governor.clock import Clock
 from mdqm.governor.core import Governor
 from mdqm.governor.handles import ResultStore
@@ -159,15 +160,18 @@ def query_services(
     if tables is not None:
         allowed = set(tables)
         columns = {key: value for key, value in columns.items() if key in allowed}
+    # One governor for the single-source path and the federated executor, so a handle `query`
+    # returns is the handle `get_more` pages, and one executor survives between calls: that is
+    # what makes a repeated cross-source question a cache hit instead of a cold per-call database.
+    governor = Governor(
+        adapters,
+        clock=clock,
+        store=handles if handles is not None else ResultStore(clock=clock),
+    )
+    spill = settings.paths.spill_dir
     return QueryServices(
         layer=layer,
-        # The result store is shared with `get_more`, otherwise a handle from `query` would be
-        # unknown to the tool that pages it.
-        governor=Governor(
-            adapters,
-            clock=clock,
-            store=handles if handles is not None else ResultStore(clock=clock),
-        ),
+        governor=governor,
         # history and audit take a plain `now` callable while the governor's clock also carries
         # `monotonic`; passing the method keeps every component on the same notion of time.
         history=HistoryStore(store, clock=None if clock is None else clock.now),
@@ -177,6 +181,8 @@ def query_services(
         cache=open_cache(settings.paths.cache_dir, clock),
         clock=clock,
         limits=query_limits(settings),
+        executor=FederatedExecutor(governor, layer=layer, clock=clock, spill_dir=spill),
+        spill_dir=spill,
         # The measured sizes (`mdqm sizes measure`), so a plan counts what was measured instead of
         # the catalog's own reltuples. An install that never measured plans exactly as before.
         sizes=SizeStore(store, clock=None if clock is None else clock.now),
