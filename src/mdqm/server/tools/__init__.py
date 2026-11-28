@@ -12,6 +12,7 @@ still answers, in the ``not_implemented`` shape, instead of failing.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from typing import Literal
 
@@ -127,6 +128,14 @@ TOOL_FUNCTIONS: tuple[Callable[..., MDQMModel], ...] = (
 
 
 def register_tools(server: MCPServer) -> None:
-    """Register the five tools. The name is the function name; the docstring is the description."""
+    """Register the five tools. The name is the function name; the docstring is the description.
+
+    Python 3.13 dedents a function's ``__doc__`` itself; 3.11 and 3.12 keep the source indent.
+    The advertised schema is compared to a single generated file, so the description has to be the
+    dedented text on every version CI runs. ``cleandoc`` is idempotent on an already-clean docstring.
+    """
     for function in TOOL_FUNCTIONS:
+        doc = function.__doc__
+        if doc:
+            function.__doc__ = inspect.cleandoc(doc)
         server.add_tool(function)

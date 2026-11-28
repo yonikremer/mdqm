@@ -52,7 +52,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any, ClassVar, Final
+from typing import Any, ClassVar, Final, cast
 
 import psycopg
 import psycopg_pool
@@ -532,7 +532,9 @@ class PgArrowStream:
     def _fetch(self) -> Sequence[Sequence[Any]]:
         """Ask the server for the next batch, translating a cancellation into our own error."""
         try:
-            return self._cursor.fetchmany(self._batch_size)
+            # Without the pg extra, psycopg is an untyped module and fetchmany is Any.
+            # The cast is the real return: a list of rows, each a sequence of column values.
+            return cast(Sequence[Sequence[Any]], self._cursor.fetchmany(self._batch_size))
         except psycopg.errors.QueryCanceled as exc:
             if self._cancelled:
                 raise PostgresCancelled(

@@ -36,6 +36,7 @@ from mdqm.models import (
     Partitioning,
     PlanSummary,
     RawQuery,
+    TableSize,
     TableStats,
 )
 
@@ -187,6 +188,7 @@ def _check_optional_result(method: str, capability: str, result: object) -> None
         "extract_partitions": Partitioning,
         "mine_queries": RawQuery,
         "mutability_stats": TableStats,
+        "sizes": TableSize,
     }[method]
     if not isinstance(result, list):
         _fail(f"{method}() must return a sequence, got {type(result).__name__}")

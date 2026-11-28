@@ -108,7 +108,9 @@ class PgTarget:
 
     def dsn(self, database: str, *, read_only: bool = False) -> str:
         """Connection string for ``database``, as the owner or as the read-only role."""
-        return conninfo.make_conninfo(
+        # psycopg is optional for type-checking. Without its stubs this call is Any, and a
+        # function declared to return str cannot return Any. The value is a connection string.
+        info = conninfo.make_conninfo(
             host=self.host,
             port=self.port,
             dbname=database,
@@ -116,6 +118,9 @@ class PgTarget:
             password=self.ro_password if read_only else self.admin_password,
             connect_timeout=10,
         )
+        if not isinstance(info, str):
+            raise LoaderError(f"could not build a connection string for {database}")
+        return info
 
 
 def read_dotenv(path: Path) -> dict[str, str]:

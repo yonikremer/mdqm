@@ -385,11 +385,16 @@ def test_server_instructions_are_short_and_point_at_the_tools() -> None:
 
 
 def test_cli_serve_exposes_host_and_port() -> None:
+    import re
+
     from typer.testing import CliRunner
 
     from mdqm.cli import app
 
-    result = CliRunner().invoke(app, ["serve", "--help"])
+    result = CliRunner().invoke(app, ["serve", "--help"], color=True)
     assert result.exit_code == 0
-    assert "--host" in result.output
-    assert "--port" in result.output
+    # Rich paints each dash of an option separately, so "--host" is not one contiguous
+    # substring once ANSI codes are in the text. The flags are still there.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--host" in plain
+    assert "--port" in plain

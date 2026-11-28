@@ -255,13 +255,34 @@ def registry_of(
 
 
 def test_discovery_uses_the_mdq_adapters_entry_point_group() -> None:
+    """Discovery registers every entry point that loads, and only those.
+
+    Optional adapters (Oracle, SQL Server) are declared in the same group as the core ones. A
+    deployment that did not install their driver raises ``ModuleNotFoundError`` on import, and the
+    registry records that adapter as unavailable instead of failing startup. Equating ``discover()``
+    to every declared name goes stale the moment one of those extras is absent -- which is the
+    normal Postgres-only install.
+    """
     assert ADAPTER_ENTRY_POINT_GROUP == "mdqm.adapters"
-    # mdqm itself now declares its adapters in that group (pyproject ``[project.entry-points]``), so
-    # real discovery is no longer empty: it must find exactly that group's entry points, no others.
-    declared = {
-        entry.name for entry in importlib.metadata.entry_points(group=ADAPTER_ENTRY_POINT_GROUP)
-    }
-    assert set(AdapterRegistry().discover()) == declared
+    declared = list(importlib.metadata.entry_points(group=ADAPTER_ENTRY_POINT_GROUP))
+    loadable: set[str] = set()
+    missing_driver: set[str] = set()
+    for entry in declared:
+        try:
+            entry.load()
+        except ModuleNotFoundError:
+            missing_driver.add(entry.name)
+        else:
+            loadable.add(entry.name)
+    found = set(AdapterRegistry().discover())
+    assert found == loadable
+    assert missing_driver.isdisjoint(found)
+    if not declared:
+        return  # the distribution is not installed; there is no group to discover
+    names = {entry.name for entry in declared}
+    # Core plugins: httpx ships with the package, so these two load without an extra.
+    assert {"postgresql", "openapi", "elastic"}.issubset(names)
+    assert {"openapi", "elastic"}.issubset(found)
 
 
 def test_discover_registers_entry_points() -> None:

@@ -120,11 +120,11 @@ files = ["src"]
 module = ["pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
 
-# psycopg is the optional `pg` extra (AGENTS.md section 3): `src/mdqm/testing/loaders/postgres.py`
-# imports it at module level, which is right at runtime but must not stop mypy from checking the
-# rest of `src` on a machine that never installed the extra.
+# psycopg and psycopg_pool are the optional `pg` extra (AGENTS.md section 3). The adapter and the
+# loader import them at module level, which is right at runtime but must not stop mypy from checking
+# the rest of `src` on a machine that never installed the extra. CI installs `.[dev]` only.
 [[tool.mypy.overrides]]
-module = ["psycopg", "psycopg.*"]
+module = ["psycopg", "psycopg.*", "psycopg_pool", "psycopg_pool.*"]
 ignore_missing_imports = true
 
 # mssql-python is the optional `mssql` extra (task D06); CI installs `.[dev]` only, so mypy must
