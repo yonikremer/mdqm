@@ -10,6 +10,16 @@ is asked one closed-JSON question per item and is never trusted beyond it:
   and synonyms.
 * **A2 -- synonyms.** The same answer's synonyms become a separate proposal, because a human may
   want the name and refuse the synonym.
+* **labels (section 6 of the handoff).** The words of the same answer are also proposed as one
+  ``labels`` entry for a table, a measure or a column -- ``SemanticLayer.labels``, the field the
+  context index matches, so a Hebrew question resolves a table. This is the payload that loads:
+  ``labels`` is a declared section of the layer, so :meth:`~mdqm.review.queue.ReviewQueue.approve`
+  can validate and write it. A label that is not a *word* (SQL, JSON, a lone number, a control
+  character) is refused here, because a garbage answer must not reach the search index.
+* **names (the limit, stated).** The name-and-description payload targets a ``names`` section that
+  :class:`~mdqm.semantic.models.SemanticLayer` does **not** declare, so approving it today is
+  refused and rolled back by the review queue. That is a gap in the layer's schema, not something
+  this stage can paper over; the labels payload is the approvable path until the layer gains it.
 
 Every validator here is a pure function over strings the fact sheet already contains, so it runs
 on a table of cases without a database and without a model:
@@ -59,14 +69,16 @@ from mdqm.models.catalog import CatalogSnapshot, Table
 from mdqm.pipeline.core import PipelineContext, StageReport, StageStatus, hash_inputs
 from mdqm.pipeline.stages.profiling import ColumnProfile, SourceProfile
 from mdqm.review.queue import Proposal, ProposalKind, ReviewQueue, proposal_id
-from mdqm.semantic.models import ValueMap
+from mdqm.semantic.models import Measure, ValueMap
 from mdqm.semantic.text import normalize_label
 
 __all__ = [
     "AGREEMENT_FIELDS",
     "BASE_CONFIDENCE",
     "INSTRUCTIONS",
+    "LABELS_SECTION",
     "LABEL_LIMIT",
+    "LABEL_WORDS_LIMIT",
     "NAMES_SECTION",
     "PROMPT_VERSION",
     "STAGE_NAME",
@@ -85,6 +97,8 @@ __all__ = [
     "collisions",
     "column_references",
     "confidence",
+    "label_key",
+    "label_word_problem",
     "looks_personal",
     "matched_fields",
     "render_prompt",
@@ -105,8 +119,15 @@ TEMPERATURE: Final[int] = 0
 
 #: ``curated/names.yaml``. A table's or column's name and description live here and not in
 #: ``tables``: ``TableSemantics`` is a measured skeleton with ``extra="forbid"``, where a display
-#: name is a fact of its own rather than a field of the skeleton.
+#: name is a fact of its own rather than a field of the skeleton. **Not yet a loadable section**: see
+#: the module docstring -- a name proposal cannot be approved until the layer declares one.
 NAMES_SECTION: Final[str] = "names"
+
+#: ``curated/labels.yaml``: the words people type for one table, measure or column, keyed
+#: ``table:<source.table>`` / ``measure:<name>`` / ``column:<source.table.column>``. Declared by
+#: :class:`~mdqm.semantic.models.SemanticLayer`, so approving one validates and keeps the layer
+#: loadable.
+LABELS_SECTION: Final[str] = "labels"
 
 #: ``curated/value_maps.yaml``: a value's labels are that map's ``synonyms``, which the loader
 #: already validates (a label that is a synonym of two values is a load error).
@@ -115,6 +136,9 @@ VALUE_MAPS_SECTION: Final[str] = "value_maps"
 LABEL_LIMIT: Final[int] = 64
 DESCRIPTION_LIMIT: Final[int] = 200
 SYNONYM_LIMIT: Final[int] = 8
+#: Words a single ``labels`` key may hold. A model that lists the whole dictionary is noise the
+#: search index has to match against, so the extra words are dropped and the drop is reported.
+LABEL_WORDS_LIMIT: Final[int] = 8
 
 #: The confidence ladder, all four terms fixed so the same answers always score the same.
 BASE_CONFIDENCE: Final[float] = 0.4
@@ -152,6 +176,13 @@ _BACKTICKED: Final[re.Pattern[str]] = re.compile(r"`([^`\n]+)`")
 #: ``client_no``, ``start_time``: the shape this project gives a column, and not the shape of prose.
 _SNAKE: Final[re.Pattern[str]] = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b")
 _DIGIT: Final[re.Pattern[str]] = re.compile(r"\d")
+#: A stream word carries letters: a lone number or a symbol is not a label anybody types.
+_LETTERS: Final[re.Pattern[str]] = re.compile(r"[^\W\d_]")
+#: Anything that belongs to code or a control channel rather than to a name. A label is matched word
+#: by word against a Hebrew or English question, so `;`, braces, a pipe and a newline cannot be part
+#: of one -- and a garbage answer is usually exactly that shape. Quotes and apostrophes stay legal:
+#: ``customer's status`` and a Hebrew geresh are words.
+_NOT_A_WORD: Final[re.Pattern[str]] = re.compile(r"[;{}<>=|\\\x00-\x1f\x7f]")
 
 #: A value at least this long is treated as identifying even without a digit or an ``@``.
 _PERSONAL_LENGTH: Final[int] = 20
@@ -178,20 +209,26 @@ class Labels(MDQMModel):
 
 
 class TargetKind(StrEnum):
-    """What one call is about. A categorical value is named through its value map's synonyms."""
+    """What one call is about. A categorical value is named through its value map's synonyms.
+
+    ``MEASURE`` is a business field of the layer rather than a table of a catalog: it has no
+    primary key, no rows and no profile, and its ``labels`` are what a Hebrew question matches.
+    """
 
     TABLE = "table"
     COLUMN = "column"
+    MEASURE = "measure"
     VALUE = "value"
 
 
 class Target(MDQMModel):
-    """One thing to name: a table, a column, or one canonical value of one value map."""
+    """One thing to name: a table, a column, a measure, or one canonical value of one value map."""
 
     kind: TargetKind
     #: The semantic key: ``crm.customers`` / ``crm.customers.status_code`` / the value map's key.
     key: str = Field(min_length=1)
-    source: str = Field(min_length=1)
+    #: The source a key belongs to. Empty for a measure, which spans several sources by design.
+    source: str = ""
     table: str | None = None
     column: str | None = None
     value: str | None = None
@@ -227,6 +264,8 @@ class FactSheet(MDQMModel):
     null_rate: float | None = None
     distinct: int | None = None
     existing_terms: tuple[str, ...] = ()
+    measure_sources: tuple[str, ...] = ()
+    """A measure's ``source.table.column`` declarations: the only columns it may be named after."""
 
 
 # --- what a refused proposal says ----------------------------------------------------------
@@ -240,6 +279,7 @@ class RejectionCode(StrEnum):
     NOT_ENGLISH = "not_english"
     EMPTY_AFTER_NORMALISATION = "empty_after_normalisation"
     TOO_LONG = "too_long"
+    NOT_WORDS = "not_words"
     MISSING_COLUMN = "missing_column"
     COLLISION = "collision"
     PERSONAL_DATA = "personal_data"
@@ -277,6 +317,44 @@ def looks_personal(value: str) -> bool:
     """
     text = normalize_label(value)
     return bool(_DIGIT.search(text)) or "@" in text or len(text) >= _PERSONAL_LENGTH
+
+
+def label_key(target: Target) -> str | None:
+    """The ``labels`` key one target's words belong under, or ``None`` when it has none.
+
+    ``SemanticLayer.labels`` is keyed by *what the words name*: ``table:<source.table>``,
+    ``measure:<name>``, ``column:<source.table.column>``. A categorical value is absent on purpose --
+    its labels are its value map's ``synonyms``, which already holds both languages per canonical
+    value, and a second home for the same words would let the two disagree.
+    """
+    if target.kind is TargetKind.TABLE:
+        return f"table:{target.key}"
+    if target.kind is TargetKind.COLUMN:
+        return f"column:{target.key}"
+    if target.kind is TargetKind.MEASURE:
+        return f"measure:{target.key}"
+    return None
+
+
+def label_word_problem(word: str) -> str | None:
+    """Why one proposed word may not become a label, or ``None`` when it may.
+
+    Deterministic and blunt, because a model that answers garbage must be refused with a reason a
+    human can read rather than written into the search index: a label has to carry letters and must
+    not be shaped like code, markup or a control character. It says nothing about *meaning* -- that
+    is the human gate's job, and no code can decide it.
+    """
+    text = word.strip()
+    if not text:
+        return "it is empty"
+    if len(text) > LABEL_LIMIT:
+        return f"it is {len(text)} characters, the limit is {LABEL_LIMIT}"
+    if not _LETTERS.search(text):
+        return f"{text!r} carries no letter, so it is a value or a symbol, not a word"
+    match = _NOT_A_WORD.search(text)
+    if match is not None:
+        return f"{text!r} contains {match.group(0)!r}, which is code or markup, not a word"
+    return None
 
 
 def column_references(text: str) -> tuple[str, ...]:
@@ -455,6 +533,21 @@ def validate_labels(
                         f"synonym {synonym!r} is not written in the language of {field}",
                     )
                 )
+    for field in ("name_he", "name_en", "synonyms_he", "synonyms_en"):
+        for word in _strings(labels, field):
+            if normalize_label(word) == "":
+                # Already refused, more precisely, as EMPTY_AFTER_NORMALISATION: one defect, one code.
+                continue
+            shape = label_word_problem(word)
+            if shape is not None:
+                rejections.append(
+                    _reject(
+                        target,
+                        field,
+                        RejectionCode.NOT_WORDS,
+                        f"{word!r} cannot be a label: {shape}",
+                    )
+                )
     known = set(known_columns)
     for field in ("name_he", "name_en", "description_he", "description_en"):
         for reference in column_references(str(getattr(labels, field))):
@@ -564,11 +657,13 @@ class NamesReport(MDQMModel):
 
 
 class ProposeNamesStage:
-    """Stage A1+A2 over the catalogs (D1), the profiles (D5) and the value maps of the layer.
+    """Stage A1+A2 over the catalogs (D1), the profiles (D5) and the layer's maps and measures.
 
     ``catalogs`` is what D1 extracted per source, ``profiles`` what D5 measured, ``value_maps`` the
-    maps a human or A3 already has. Nothing here reads a source: the two model calls per target are
-    the only work, so the stage is not ``heavy`` and needs no quiet window or source slot.
+    maps a human or A3 already has, ``measures`` the layer's business fields (a measure has no table
+    of its own, so its labels are the only names a question can match). Nothing here reads a source:
+    the two model calls per target are the only work, so the stage is not ``heavy`` and needs no
+    quiet window or source slot.
 
     ``known_terms`` carries terms that are already curated, keyed by namespace (``table:<key>`` or
     ``map:<key>``) and mapping a normalised term to its owner label, so a new proposal cannot
@@ -583,12 +678,15 @@ class ProposeNamesStage:
         *,
         profiles: Mapping[str, SourceProfile] | None = None,
         value_maps: Mapping[str, ValueMap] | None = None,
+        measures: Mapping[str, Measure] | None = None,
         known_terms: Mapping[str, Mapping[str, str]] | None = None,
     ) -> None:
         self._catalogs = {source: catalogs[source] for source in sorted(catalogs)}
         self._profiles = dict(profiles or {})
         given_maps = dict(value_maps or {})
         self._value_maps = {key: given_maps[key] for key in sorted(given_maps)}
+        given_measures = dict(measures or {})
+        self._measures = {key: given_measures[key] for key in sorted(given_measures)}
         self._known = {scope: dict(terms) for scope, terms in sorted((known_terms or {}).items())}
         self._base = self._registry()
         self._rejections: tuple[Rejection, ...] = ()
@@ -601,7 +699,7 @@ class ProposeNamesStage:
         return self._rejections
 
     def targets(self) -> tuple[Target, ...]:
-        """Every target of this pass, in a stable order: tables, then their columns, then values."""
+        """Every target of this pass, in a stable order: tables, columns, measures, then values."""
         found: list[Target] = []
         for source, catalog in self._catalogs.items():
             for table in sorted(catalog.tables, key=lambda item: item.name):
@@ -619,6 +717,8 @@ class ProposeNamesStage:
                             column=column.name,
                         )
                     )
+        for measure_key in self._measures:
+            found.append(Target(kind=TargetKind.MEASURE, key=measure_key))
         for map_key, value_map in self._value_maps.items():
             source = _map_source(value_map)
             for value in value_map.canonical:
@@ -682,6 +782,9 @@ class ProposeNamesStage:
                 "catalogs": catalogs,
                 "profiles": profiles,
                 "value_maps": maps,
+                "measures": [
+                    [name, sorted(measure.sources)] for name, measure in self._measures.items()
+                ],
                 "known_terms": {
                     scope: sorted(terms.items()) for scope, terms in self._known.items()
                 },
@@ -698,6 +801,7 @@ class ProposeNamesStage:
         observed = () if profile is None else tuple(value.value for value in profile.top_values)
         if target.kind is TargetKind.VALUE:
             observed = (target.value or "",)
+        measure = self._measures.get(target.key) if target.kind is TargetKind.MEASURE else None
         return FactSheet(
             kind=target.kind,
             key=target.key,
@@ -717,6 +821,7 @@ class ProposeNamesStage:
             null_rate=None if profile is None else profile.null_rate,
             distinct=None if profile is None else profile.distinct,
             existing_terms=rotated(self._terms_of(target), rotation),
+            measure_sources=(() if measure is None else rotated(sorted(measure.sources), rotation)),
         )
 
     def _table(self, target: Target) -> Table | None:
@@ -732,9 +837,13 @@ class ProposeNamesStage:
         return profile.column(target.table, target.column)
 
     def _namespace(self, target: Target) -> str:
-        """The scope a term must be unique inside: one value map, or one table and its columns."""
+        """The scope a term must be unique inside: one value map, one table and its columns, one
+        measure. A measure's words are its own: two tables sharing a column name is not an
+        ambiguity, and a measure is not a table."""
         if target.kind is TargetKind.VALUE:
             return f"map:{target.key}"
+        if target.kind is TargetKind.MEASURE:
+            return f"measure:{target.key}"
         return f"table:{target.source}.{target.table}"
 
     def _terms_of(self, target: Target) -> tuple[str, ...]:
@@ -748,7 +857,28 @@ class ProposeNamesStage:
         return tuple(sorted(term for term, owner in namespace.items() if owner == target.label))
 
     def _known_columns(self, target: Target) -> frozenset[str]:
-        """Every name a field may reference: this table's columns, its name and its source."""
+        """Every name a field may reference: this table's columns, its name and its source.
+
+        A measure names columns across several sources, so it may reference exactly the ones it
+        declares -- plus its own name, which is the field a reader already knows.
+        """
+        if target.kind is TargetKind.MEASURE:
+            names = {target.key}
+            measure = self._measures.get(target.key)
+            for qualified in sorted(() if measure is None else measure.sources):
+                parts = qualified.split(".")
+                names.add(parts[-1])
+                if len(parts) < 3:
+                    continue
+                catalog = self._catalogs.get(parts[0])
+                table = (
+                    None
+                    if catalog is None
+                    else next((item for item in catalog.tables if item.name == parts[1]), None)
+                )
+                if table is not None:
+                    names.update(column.name for column in table.columns)
+            return frozenset(names)
         names = {target.source} if target.table is None else {target.table, target.source}
         table = self._table(target)
         if table is not None:
@@ -824,14 +954,17 @@ class ProposeNamesStage:
         labels: Labels,
         *,
         synonyms: Sequence[str],
+        words: Sequence[str],
         provenance: JsonObject,
     ) -> list[tuple[ProposalKind, JsonObject]]:
         """The payloads an accepted answer becomes, in a fixed order.
 
         A value has no name of its own -- the canonical value *is* the name, and every label for it
-        is a synonym -- so a value's answer becomes one ``value_maps`` synonym proposal. A table or
-        a column gets two: its name and description, and its synonyms separately, because a human
-        may well want the one and refuse the other.
+        is a synonym -- so a value's answer becomes one ``value_maps`` synonym proposal. A table, a
+        column or a measure gets up to three: its name and description, its synonyms, and the words
+        the search index matches (its ``labels`` entry) separately, because each is approved and
+        refused on its own merits. A label payload with no word is not produced at all: a proposal
+        that names nothing is not a question worth asking.
         """
         if target.kind is TargetKind.VALUE:
             return [
@@ -868,6 +1001,8 @@ class ProposeNamesStage:
                     },
                 )
             )
+        if words:
+            payloads.append((ProposalKind.LABEL, {"labels": list(words)}))
         return payloads
 
     def _evidence(
@@ -892,6 +1027,11 @@ class ProposeNamesStage:
                 f"value map evidence: canonical value {sheet.value!r}, "
                 f"{len(sheet.existing_terms)} other term(s) already in this map"
             )
+        elif sheet.kind is TargetKind.MEASURE:
+            lines.append(
+                f"measure evidence: {len(sheet.measure_sources)} declared source column(s)"
+                + (f" ({', '.join(sheet.measure_sources)})" if sheet.measure_sources else "")
+            )
         elif sheet.distinct is None and observed == 0:
             lines.append("d5 evidence: none (this target was not profiled)")
         else:
@@ -902,8 +1042,8 @@ class ProposeNamesStage:
                 detail.append(f"{sheet.distinct} distinct")
             lines.append("d5 evidence: " + ", ".join(detail))
         lines.append(
-            "validators passed: language, normalisation, length, column reference, collision, "
-            "personal data"
+            "validators passed: language, normalisation, length, word shape, column reference, "
+            "collision, personal data"
         )
         return tuple(lines)
 
@@ -920,7 +1060,9 @@ class ProposeNamesStage:
             "targets": len(targets),
             "tables": sum(1 for target in targets if target.kind is TargetKind.TABLE),
             "columns": sum(1 for target in targets if target.kind is TargetKind.COLUMN),
+            "measures": sum(1 for target in targets if target.kind is TargetKind.MEASURE),
             "values": sum(1 for target in targets if target.kind is TargetKind.VALUE),
+            "labels": 0,
             "proposals": 0,
             "created": 0,
             "unchanged": 0,
@@ -984,15 +1126,26 @@ class ProposeNamesStage:
                 "evidence": list(evidence),
                 "match_rate": score,
             }
+            words, extra = self.label_words(target, first)
+            if extra:
+                fixes.append(
+                    f"{target.label}: dropped {extra} label word(s) over the per-key limit of "
+                    f"{LABEL_WORDS_LIMIT}"
+                )
             for kind, patch in self._payloads(
-                target, first, synonyms=synonyms, provenance=provenance
+                target, first, synonyms=synonyms, words=words, provenance=provenance
             ):
+                item_key = label_key(target) if kind is ProposalKind.LABEL else target.key
+                if item_key is None:
+                    continue
+                if kind is ProposalKind.LABEL:
+                    counts["labels"] += 1
                 result = queue.submit(
                     Proposal(
-                        id=proposal_id(kind, self._section(target), target.key, "", patch),
+                        id=proposal_id(kind, self._section(target, kind), item_key, "", patch),
                         kind=kind,
-                        section=self._section(target),
-                        key=target.key,
+                        section=self._section(target, kind),
+                        key=item_key,
                         patch=patch,
                         evidence=evidence,
                         confidence=score,
@@ -1043,9 +1196,44 @@ class ProposeNamesStage:
             )
         return (*first.synonyms_he, *first.synonyms_en)
 
-    def _section(self, target: Target) -> str:
-        """Which curated file a proposal belongs in: a value's labels live in the value maps."""
-        return VALUE_MAPS_SECTION if target.kind is TargetKind.VALUE else NAMES_SECTION
+    def _section(self, target: Target, kind: ProposalKind) -> str:
+        """Which curated file a proposal belongs in.
+
+        A value's words live in the value maps and a table's, column's or measure's words in
+        ``labels`` -- the section the layer declares and the context index reads. A name and a
+        description have no declared home yet, so they keep the ``names`` section: refusing them at
+        approval is better than writing words the loader would silently not read.
+        """
+        if target.kind is TargetKind.VALUE:
+            return VALUE_MAPS_SECTION
+        return LABELS_SECTION if kind is ProposalKind.LABEL else NAMES_SECTION
+
+    def label_words(self, target: Target, labels: Labels) -> tuple[tuple[str, ...], int]:
+        """The words one accepted answer adds to this target's ``labels`` entry, and how many went.
+
+        The first answer's Hebrew and English name and its synonyms, deduplicated by their lookup
+        form and minus the words this target already answers to (a human's curated label is not
+        re-proposed). Capped at :data:`LABEL_WORDS_LIMIT`; the count of what was left out is
+        returned so the run can report it (principle 10) instead of dropping words silently.
+        """
+        if label_key(target) is None:
+            return (), 0
+        own = frozenset(normalize_label(term) for term in self._own_terms(target))
+        kept: list[str] = []
+        seen: set[str] = set()
+        dropped = 0
+        for word in (labels.name_he, labels.name_en, *labels.synonyms_he, *labels.synonyms_en):
+            folded = normalize_label(word)
+            if not folded:
+                continue
+            if folded in seen:
+                continue
+            seen.add(folded)
+            if folded in own:
+                dropped += 1
+                continue
+            kept.append(word.strip())
+        return tuple(kept[:LABEL_WORDS_LIMIT]), dropped + max(0, len(kept) - LABEL_WORDS_LIMIT)
 
     def _register(
         self,

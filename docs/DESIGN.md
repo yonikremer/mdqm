@@ -251,7 +251,7 @@ Deterministic stages:
 
 Agentic stages (the model *proposes*, closed JSON output validated in code, up to 2 retries with the error, temperature 0, prompt versions + model name stored, double run in different order, confidence computed from validators not from the model):
 
-A1 names/descriptions (he+en), A2 synonyms, A3 categorical value mapping (derived mostly from value co-occurrence over shared keys), A4 conversion hypotheses (choose among D8 hypotheses or "none", never invents a formula), A5 entities and cross-source joins (always human-approved).
+A1 names/descriptions (he+en), A2 synonyms, A1+A2 also the `labels` words of a table, a measure or a column (section 12) -- the payload the layer declares, so it is the one approval that writes a loadable section; a `name`/`synonym` payload still waits for a `names` section the layer does not have, A3 categorical value mapping (derived mostly from value co-occurrence over shared keys), A4 conversion hypotheses (choose among D8 hypotheses or "none", never invents a formula), A5 entities and cross-source joins (always human-approved).
 
 Human gate: **auto** for deterministic facts (catalog, indexes, partitions, endpoints, statistics, drift, joins with a declared FK and full containment); **human approval** for anything a model proposed, any conversion, value map, new join, non-conservative mutability; **never** a proposal without evidence or a rejected one (rejected is remembered as negative memory).
 The data team gets a weekly digest (email via internal SMTP if available, else a page on the server): at most 10 questions by impact, short yes/no/other. Answers are recorded (who/when) and become a PR on the YAML. Breaking schema changes go to the admin immediately.

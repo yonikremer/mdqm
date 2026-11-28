@@ -83,6 +83,11 @@ class ProposalKind(StrEnum):
     NAME = "name"
     SYNONYM = "synonym"
     VALUE_MAP = "value_map"
+    #: The words a thing answers to (``SemanticLayer.labels``). The patch is a plain list of words,
+    #: so it is the one kind whose value is a sequence rather than a mapping; the human's decision
+    #: lives in this row and the audit log, never inside the list, because a word in that list is
+    #: something the search index will match.
+    LABEL = "label"
     MEASURE = "measure"
     JOIN = "join"
     MUTABILITY = "mutability"
@@ -551,12 +556,19 @@ class ReviewQueue:
         load(self._root)
 
 
-def _approved_patch(proposal: Proposal, *, by: str, at: datetime | None) -> CommentedMap:
-    """The patch to merge, with the human's decision attached in the shape the model expects.
+def _approved_patch(
+    proposal: Proposal, *, by: str, at: datetime | None
+) -> CommentedMap | CommentedSeq:
+    """The value to merge, with the human's decision attached in the shape the model expects.
 
     ``mutability`` is the one kind that records approval as a *status* rather than provenance
     (``MutabilityDecl``), and every other kind carries :class:`~mdqm.semantic.models.Provenance`.
+    ``label`` is the one kind whose value is a *list of words*: attaching provenance would put a
+    mapping inside a list the context index reads as search terms, so the decision stays in the
+    review row and the audit log and the file holds words only.
     """
+    if proposal.kind is ProposalKind.LABEL:
+        return CommentedSeq(proposal.patch.get("labels") or [])
     patch = CommentedMap(proposal.patch)
     if proposal.kind is ProposalKind.MUTABILITY:
         patch["status"] = "approved"
@@ -599,17 +611,21 @@ def _descend(container: CommentedMap, part: str) -> CommentedMap:
     return child
 
 
-def _assign(document: CommentedMap, path: tuple[str, ...], value: CommentedMap) -> None:
-    """Place ``value`` at ``path`` inside ``document``, merging rather than replacing.
+def _assign(
+    document: CommentedMap, path: tuple[str, ...], value: CommentedMap | CommentedSeq
+) -> None:
+    """Place ``value`` at ``path`` inside ``document``, merging a mapping rather than replacing it.
 
     A mapping is merged key by key, so a curated file's other keys (and their comments) stay put.
+    A list (a ``labels`` entry) replaces: words are a set of terms, and a half-merged set would be
+    neither the human's nor the model's.
     """
     container = document
     for part in path[:-1]:
         container = _descend(container, part)
     last = path[-1]
     existing = container.get(last)
-    if isinstance(existing, CommentedMap):
+    if isinstance(existing, CommentedMap) and isinstance(value, CommentedMap):
         for key, nested in value.items():
             existing[key] = nested
         return
@@ -627,7 +643,7 @@ def _append_named(entries: CommentedSeq, value: CommentedMap) -> None:
     entries.append(value)
 
 
-def _render(before: str | None, proposal: Proposal, value: CommentedMap) -> str:
+def _render(before: str | None, proposal: Proposal, value: CommentedMap | CommentedSeq) -> str:
     """The file text after merging ``value``: one path for approval and export, so they agree."""
     document = _load_document(before, Path(CURATED_DIR))
     if proposal.collection:
@@ -639,6 +655,11 @@ def _render(before: str | None, proposal: Proposal, value: CommentedMap) -> str:
                 )
             section = CommentedSeq()
             document[proposal.section] = section
+        if not isinstance(value, CommentedMap):
+            raise ReviewError(
+                f"{proposal.section!r} holds a list of named entries, but this proposal carries "
+                "a plain list"
+            )
         _append_named(section, value)
     else:
         _assign(document, proposal.location, value)

@@ -50,7 +50,7 @@ from mdqm.pipeline.stages.propose_names import (
     rotated,
 )
 from mdqm.review.queue import ProposalKind, ProposalStatus, ReviewQueue
-from mdqm.semantic.models import ValueMap
+from mdqm.semantic.models import Measure, ValueMap
 from mdqm.store.db import Store
 
 NOW = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
@@ -227,6 +227,7 @@ class Harness:
         catalogs: Mapping[str, CatalogSnapshot] | None = None,
         profiles: Mapping[str, SourceProfile] | None = None,
         value_maps: Mapping[str, ValueMap] | None = None,
+        measures: Mapping[str, Measure] | None = None,
         known_terms: Mapping[str, Mapping[str, str]] | None = None,
     ) -> None:
         self.root = root
@@ -235,6 +236,7 @@ class Harness:
             catalogs if catalogs is not None else {"crm": make_catalog()},
             profiles=profiles if profiles is not None else {"crm": make_profile()},
             value_maps=value_maps,
+            measures=measures,
             known_terms=known_terms,
         )
         self.ctx = PipelineContext(
@@ -280,9 +282,11 @@ class TestAccepted:
     def test_every_accepted_target_is_queued_as_pending(self, harness: Harness) -> None:
         report = harness.run(both_runs(answers()))
         assert report.status is StageStatus.RAN
-        assert report.counts["created"] == 8, report.counts  # table + 3 columns, name + synonyms
+        # table + 3 columns, each as name + synonyms + labels
+        assert report.counts["created"] == 12, report.counts
+        assert report.counts["labels"] == 4, report.counts
         pending = harness.queue().pending()
-        assert len(pending) == 8
+        assert len(pending) == 12
         assert {item.status for item in pending} == {ProposalStatus.PENDING}
         assert {item.proposed_by for item in pending} == {STAGE_NAME}
 

@@ -112,6 +112,7 @@ _KIND_LABELS: Final[dict[DigestLanguage, dict[ProposalKind, str]]] = {
     DigestLanguage.HEBREW: {
         ProposalKind.NAME: "שם",
         ProposalKind.SYNONYM: "מילה נרדפת",
+        ProposalKind.LABEL: "מילות חיפוש",
         ProposalKind.VALUE_MAP: "מיפוי ערכים",
         ProposalKind.MEASURE: "מדד",
         ProposalKind.JOIN: "קישור בין מקורות",
@@ -121,6 +122,7 @@ _KIND_LABELS: Final[dict[DigestLanguage, dict[ProposalKind, str]]] = {
     DigestLanguage.ENGLISH: {
         ProposalKind.NAME: "name",
         ProposalKind.SYNONYM: "synonym",
+        ProposalKind.LABEL: "label words",
         ProposalKind.VALUE_MAP: "value mapping",
         ProposalKind.MEASURE: "measure",
         ProposalKind.JOIN: "join",

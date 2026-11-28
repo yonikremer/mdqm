@@ -336,6 +336,30 @@ class TestRendering:
         english = build_digest(queue, language=DigestLanguage.ENGLISH, clock=FakeClock())
         assert render_html(english).count('class="answers">yes / no / other') == english.count
 
+    @pytest.mark.parametrize(
+        ("language", "expected"),
+        [(DigestLanguage.HEBREW, "מילות חיפוש"), (DigestLanguage.ENGLISH, "label words")],
+    )
+    def test_a_label_proposal_is_named_not_mistyped(
+        self, queue: ReviewQueue, language: DigestLanguage, expected: str
+    ) -> None:
+        """Every kind a stage can propose needs a word here: a missing one is a KeyError."""
+        kind = ProposalKind.LABEL
+        queue.submit(
+            Proposal(
+                id=proposal_id(kind, "labels", "table:crm.customers", "", {"labels": ["לקוחות"]}),
+                kind=kind,
+                section="labels",
+                key="table:crm.customers",
+                patch={"labels": ["לקוחות"]},
+                proposed_at=NOW,
+            )
+        )
+
+        digest = build_digest(queue, language=language, clock=FakeClock())
+
+        assert expected in render_text(digest)
+
     def test_html_escapes_evidence(self, queue: ReviewQueue) -> None:
         """A value map with markup in it must not become markup in the reader's browser."""
         queue.submit(make(0, evidence=("<script>alert(1)</script>", "a & b")))
