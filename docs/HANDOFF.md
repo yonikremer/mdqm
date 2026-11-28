@@ -30,6 +30,14 @@ export PATH="/c/Users/yonik/AppData/Local/Programs/DockerDesktop/resources/bin:$
   "unverified" in sections 4 and 5.
 * Compose needs the checkout's `.env` for interpolation, and a worktree has none:
   `docker compose --env-file /c/Users/yonik/mdqm/.env …`.
+* Two things that cost time bringing it up after an engine restart:
+  * `pg` can fail to bind its host port with *"An attempt was made to access a socket in a way
+    forbidden by its access permissions"* — Windows had that port in use as an outbound ephemeral
+    socket. Check `python -c "import socket; socket.socket().bind(('127.0.0.1', 55440))"`; it usually
+    frees up within a minute, otherwise override `MDQM_PG_PORT` (the env var beats `.env` for Compose
+    *and* for the integration fixtures, which read `MDQM_*` from the environment first).
+  * `pg_stat_user_tables` counters are **zero after a restart**, so `test_pg_stats` fails until the
+    world is loaded again: `PYTHONPATH=src .venv/Scripts/python.exe -m mdqm.testing.loaders.postgres`.
 
 ## 2. The gate you must keep green
 
@@ -64,6 +72,9 @@ Also worth running after a change to query paths:
 | `mdqm audit verify` | inside container | "audit chain intact: 234 row(s) verified" |
 | `mdqm review list` | inside container | "nothing to review" |
 | start with a missing adapter driver | image installs `.[pg]` only | server starts, logs `adapter 'oracle' is not installed in this deployment … it is unavailable` |
+| `mdqm bootstrap run` | rebuilt image, live pg profile | every stage ran; layer loads (15 tables, 2 measures, 6 labels) |
+| conversion rediscovery | `review export-patch <id>` | billing `ROUND({col}/5000)*5000` and erp `{col} * 10`, both `match_rate 1.00`, pending |
+| `POST /context` in Hebrew | `{"prompt":"מסגרת אשראי ממוצעת לפי סטטוס"}` | 200, 522 chars (was `""`) |
 
 ## 4. Bootstrap pipeline: wired, but the end-to-end run is still unproven
 
@@ -82,20 +93,29 @@ output: `D1+D2`/`D5`/`D6`/`D7`/`D10` need only adapters, `D4` needs a `sources[]
 needs a measure declaring two or more readable source columns (the layer is the declaration —
 `ColumnPair` is not a guess), `A1+A2` needs a catalog.
 
-**Unverified, and it is E01's last acceptance claim:** `mdqm bootstrap run` inside the rebuilt image
-executing those stages and **rediscovering the 5000 / 5000-then-/10 conversions** from data. Docker was
-down before this could run. Finish it with:
+**Proven end to end** against the three live Postgres databases: every stage runs, the layer loads
+(15 tables, 2 measures, 6 labels), and D8 **rediscovers both storage forms** of the credit-limit measure
+— `billing.accounts.credit_limit: ROUND({col} / 5000) * 5000` and
+`erp.customers.limit_k: {col} * 10`, each at `match_rate 1.00`, each a pending proposal a human must
+approve:
 
 ```bash
-docker compose --env-file /c/Users/yonik/mdqm/.env --profile pg --profile server up -d --build --wait server
+docker compose --profile pg --profile server up -d --build --wait server
 docker exec mdqm-server-1 python -m mdqm.cli bootstrap run
-docker exec mdqm-server-1 python -m mdqm.cli review list      # the conversion proposals land here
+docker exec mdqm-server-1 python -m mdqm.cli review list          # the proposals land here
+docker exec mdqm-server-1 python -m mdqm.cli review export-patch <id>
 ```
 
-Known limits of the wiring, stated rather than hidden: `A1+A2` gets `profiles=None` (D5's profiles are
-produced at run time and there is no artifact handoff between stages); a measure with no identity
-column makes D8 pick a reference and say so; and with two or more measures declaring pairs, all `D8`
-instances share one stage name, so none of them can be skipped as unchanged.
+Two limits of the wiring, stated rather than hidden: `A1+A2` gets `profiles=None` (D5's profiles are
+produced at run time and there is no artifact handoff between stages, so a name proposal carries
+catalog evidence only); and with two or more measures declaring pairs, all `D8` instances share one
+stage name, so none of them can be skipped as unchanged.
+
+A third one is now a rule: **a stage's evidence must not land where the layer reads.** D5 wrote
+`generated/profile_<source>.yaml` at the top level, the loader merges every top-level file there into
+one document, and the first bootstrap therefore made the layer unloadable — `/context` fell back,
+D6/D10 reported "the semantic layer did not load", and the next server start refused to run. Sections
+may now name one directory level (`generated/profiles/<source>.yaml`), which the loader skips.
 
 ## 5. SQL-injection work: the chokepoint, the lint rule, and its limits
 
@@ -126,8 +146,9 @@ Design (agreed with the owner, do not re-litigate):
 * The pre-commit `sql-sinks` hook now scopes `pipeline/` and `eval/` as well — the old hand-written
   directory list silently missed both.
 
-**Unverified:** `tests/integration --require-services`. The loaders' emitted DDL did not change (the
-conversions were mechanical), but that is a claim until it runs against real services.
+**Measured:** `tests/integration --require-services` → 182 passed, after Docker came back. The four
+loaders run against real engines and the segment cache against DuckDB, so the `run_local`/`set_local`/
+`local_ident` changes are verified, not just type-checked.
 
 ## 6. `/context` and Hebrew: decided, and implemented
 
@@ -201,13 +222,14 @@ are hand-written until that proposal flow grows one.
 
 ## 10. Suggested order for the next session
 
-1. **Run the bootstrap end to end** (§4) — the last unproven acceptance claim, and the command is
-   written out for you.
-2. **Re-run `tests/integration --require-services`** (§5) once Docker is back, to turn the loader and
-   cache claims into measurements.
-3. **Give A1+A2 a label target** (§6): the layer can hold a per-thing word list now, but nothing
-   proposes into it, so Hebrew labels are hand-written.
-4. **Add `pyright` to `scripts/check.py`** (§8) so the cleared backlog cannot grow back silently.
+1. **Give A1+A2 a label target** (§6): the layer can hold a per-thing word list now, but nothing
+   proposes into it, so Hebrew labels are hand-written — by a human, per thing, by hand.
+2. **Add `pyright` to `scripts/check.py`** (§8) so the cleared backlog cannot grow back silently.
+3. **Decide what happens to a proposal nobody answers** — the queue has 30 join candidates and 2
+   measure conversions pending from the first real bootstrap; `review list` shows them, and nothing
+   ages them out or escalates them.
+4. **Give D5 → A1 a handoff** (§4): profiles are written to `generated/profiles/` and read by nothing,
+   so a name proposal is made without the distribution evidence the stage was built to use.
 
 ## 11. Where the history lives
 
