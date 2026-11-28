@@ -751,10 +751,23 @@ def run_pipeline(
 
 
 #: The run order of the bootstrap stages: read the catalogs, then everything measured or proposed
-#: from them, and the name proposals last because they read the earlier stages' output. A stage a
-#: build adds and does not list here runs after these, by name, so an unlisted stage can never
-#: silently land in the middle of the sequence.
-STAGE_ORDER: Final[tuple[str, ...]] = ("D1+D2", "D4", "D5", "D6", "D7", "D8", "D10", "A1+A2")
+#: from them, and the name proposals last because they read the earlier stages' output. ``sizes``
+#: is last: it measures the sources themselves, writes only to the metadata store, and reads no
+#: stage output, so nothing depends on where it runs -- last keeps the cheap, order-independent
+#: measurement out of the middle of the derivation. A stage a build adds and does not list here
+#: runs after these, by name, so an unlisted stage can never silently land in the middle of the
+#: sequence.
+STAGE_ORDER: Final[tuple[str, ...]] = (
+    "D1+D2",
+    "D4",
+    "D5",
+    "D6",
+    "D7",
+    "D8",
+    "D10",
+    "A1+A2",
+    "sizes",
+)
 
 
 def available_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:

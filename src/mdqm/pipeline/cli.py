@@ -43,6 +43,7 @@ from mdqm.pipeline.stages.mutability import MutabilityStage
 from mdqm.pipeline.stages.openapi import OpenApiStage
 from mdqm.pipeline.stages.profiling import ProfilingStage
 from mdqm.pipeline.stages.propose_names import ProposeNamesStage
+from mdqm.pipeline.stages.sizes import SizesStage
 from mdqm.review.queue import ReviewQueue
 from mdqm.semantic.errors import SemanticError
 from mdqm.semantic.loader import load
@@ -281,6 +282,13 @@ def build_stages(
     if adapters:
         stages.append(ProfilingStage(adapters))
         stages.append(MutabilityStage(adapters))
+        # The sizes stage derives its own source list: an adapter that cannot report sizes is
+        # left out of it, and a deployment with no measurable source gets no stage at all.
+        sizes = SizesStage(adapters)
+        if sizes.sources:
+            stages.append(sizes)
+        else:
+            echo("sizes not registered: no source reports table sizes")
         stages.append(JoinStage(adapters, queue=queue))
         stages.append(
             DriftStage(

@@ -420,3 +420,46 @@ def test_a_measure_column_with_no_key_at_all_is_reported(
     pipeline_cli.build_stages(settings, store=store, echo=echoed.append)
 
     assert any("no key to align rows with" in line for line in echoed)
+
+
+# --- the sizes stage ----------------------------------------------------------------------
+
+
+class _Sizing:
+    """An adapter double that declares ``sizes()``: presence is derived from that, nothing else."""
+
+    def sizes(self) -> list[Any]:
+        return []
+
+
+def test_a_source_that_reports_sizes_adds_the_sizes_stage_last(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The profile is kept fresh by the pass that already runs nightly, not by a second scheduler."""
+    adapters: dict[str, Any] = {name: _Sizing() for name in ("crm", "billing", "erp")}
+    _wire(monkeypatch, adapters=adapters, catalogs=_catalogs(), layer=None)
+
+    names = [stage.name for stage in pipeline_cli.build_stages(settings, store=store)]
+
+    assert names[-1] == "sizes"
+    assert names.count("sizes") == 1
+
+
+def test_no_source_with_sizes_leaves_the_stage_out_and_names_it(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    echoed: list[str] = []
+    monkeypatch.setattr(
+        pipeline_cli, "_adapters", lambda _s, *, echo: {name: object() for name in _catalogs()}
+    )
+    monkeypatch.setattr(pipeline_cli, "_catalogs", lambda _a, *, echo: _catalogs())
+    monkeypatch.setattr(pipeline_cli, "_layer", lambda _s, *, echo: None)
+    monkeypatch.setattr(pipeline_cli, "_specs", lambda _s, *, echo: {})
+    monkeypatch.setattr(pipeline_cli, "ReviewQueue", lambda *_a, **_k: None)
+
+    names = [
+        stage.name for stage in pipeline_cli.build_stages(settings, store=store, echo=echoed.append)
+    ]
+
+    assert "sizes" not in names
+    assert any("sizes not registered" in line for line in echoed)
