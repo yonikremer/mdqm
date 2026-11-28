@@ -20,7 +20,8 @@ docker compose version
 ```
 
 If `docker` is not installed, `python scripts/dev.py` says so and exits 2. Everything that does
-not need a database still works: `python scripts/check.py` (ruff, mypy, unit tests).
+not need a database still works: `python scripts/check.py` (ruff, mypy, pyright, unit tests;
+`--fast` skips the two type checkers).
 
 ## 2. Create `.env`
 
@@ -260,6 +261,7 @@ time** and the same config works on the air-gapped target:
 | commit | `check_configs.py` | a `pyproject.toml` or compose file that does not parse |
 | commit | `check_secrets.py` | a private key, cloud token, `Bearer` token or hardcoded password in the diff |
 | push | `mypy` | type errors in `src` (`--strict`) |
+| gate | `python -m pyright` | type errors anywhere in `src`/`tests` (in `scripts/check.py`, so it cannot be forgotten) |
 | push | `pytest tests/unit` | a broken unit suite reaching a branch |
 
 Install once per clone, then run it by hand when you want the full gate:

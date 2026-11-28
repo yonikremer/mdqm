@@ -35,6 +35,9 @@ dev = [
   "uvicorn>=0.30",                # D04: the mock's ephemeral-port fixture and its container entry point
   "ruff>=0.6",
   "mypy>=1.11",
+  # pyright is in scripts/check.py, so it is a dev dependency and not an optional extra:
+  # an unpinned `python -m pyright` would make the gate depend on the laptop.
+  "pyright>=1.1",
   "pre-commit>=3.5",             # .pre-commit-config.yaml: local hooks only, so no network at hook time
   "types-PyYAML",
 ]
