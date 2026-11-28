@@ -25,7 +25,7 @@ resolves *which* column a time intent filters; this module asks what that costs.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -69,6 +69,11 @@ class PartitionNote(StrEnum):
     """The key is filtered, but not in a shape this planner can prove prunable."""
     ESTIMATE_UNPROVEN = "estimate_unproven"
     """The partition count is an upper bound, not a proof (hash partitioning, multi-column key)."""
+    SIZE_PROFILE_APPLIED = "size_profile_applied"
+    """The row and byte estimate comes from a measured size profile, not the catalog's ``reltuples``."""
+    FAT_PARTITION = "fat_partition"
+    """A partition in the window is far bigger than the table's median: the window is cheaper if the
+    filter is narrowed inside it, and the note names the partition so the agent can say which."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +115,17 @@ class PartitionEstimate:
     partitions: int | None = None
     total: int | None = None
     rows: int | None = None
+    bytes: int | None = None
+    """Bytes the window would read, when a measured size profile said so. ``None`` otherwise: a
+    catalog estimate knows rows, never bytes."""
+    estimated_from: str | None = None
+    """``'profile'`` when a measured size answered, ``'catalog'`` when the declared ``reltuples`` did,
+    ``None`` when nothing did. Reported so an estimate is never mistaken for a measurement."""
+    incomplete: bool = False
+    """True when a partition in the window reported no size at all, so ``rows`` is a lower bound.
+
+    Kept separate from ``rows is None``: a partial answer is still useful, and hiding that it is
+    partial is how an agent ends up trusting half a number."""
 
     @property
     def label(self) -> str | None:
@@ -253,8 +269,18 @@ class _Window:
         return bound.lower < self.upper
 
 
-def _estimate(partitioning: Partitioning, window: _Window | None) -> PartitionEstimate:
-    """Count the declared partitions (and their declared rows) that ``window`` can touch."""
+def _estimate(
+    partitioning: Partitioning,
+    window: _Window | None,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None = None,
+) -> PartitionEstimate:
+    """Count the partitions (and their rows and bytes) that ``window`` can touch.
+
+    ``sizes`` is a measured profile, ``{partition name: (rows, bytes)}``. It wins over the catalog's
+    ``reltuples`` because it is ours, it is dated, and it knows bytes; a partition the profile does
+    not mention falls back to the bound's own estimate, so a fresh partition is never estimated as
+    free.
+    """
     if not partitioning.bounds:
         return PartitionEstimate()
     touched = (
@@ -262,19 +288,50 @@ def _estimate(partitioning: Partitioning, window: _Window | None) -> PartitionEs
         if window is None
         else tuple(bound for bound in partitioning.bounds if window.touches(bound))
     )
-    rows = sum(bound.row_estimate or 0 for bound in touched)
+    measured = sizes or {}
+    rows = 0
+    total_bytes = 0
+    incomplete = False
+    counted = 0
+    for bound in touched:
+        from_profile = measured.get(bound.name)
+        if from_profile is not None:
+            if from_profile[0] is None:
+                incomplete = True
+                continue
+            rows += from_profile[0]
+            total_bytes += from_profile[1] or 0
+            counted += 1
+            continue
+        if bound.row_estimate is None:
+            incomplete = True
+            continue
+        rows += bound.row_estimate
+        counted += 1
+    source = None
+    if counted and all(bound.name in measured for bound in touched):
+        source = "profile"
+    elif counted:
+        source = "catalog"
     return PartitionEstimate(
-        partitions=len(touched), total=partitioning.partitions_total, rows=rows or None
+        partitions=len(touched),
+        total=partitioning.partitions_total,
+        rows=rows or None,
+        bytes=total_bytes or None,
+        estimated_from=source,
+        incomplete=incomplete,
     )
 
 
 def estimate_partition_scan(
-    partitioning: Partitioning, window: Range | None = None
+    partitioning: Partitioning,
+    window: Range | None = None,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None = None,
 ) -> PartitionEstimate:
     """The static scan estimate for ``window`` (``None``: every declared partition)."""
     if window is None:
-        return _estimate(partitioning, None)
-    return _estimate(partitioning, _Window(lower=window.lower, upper=window.upper))
+        return _estimate(partitioning, None, sizes)
+    return _estimate(partitioning, _Window(lower=window.lower, upper=window.upper), sizes)
 
 
 # --- reading the fragment's predicates ---------------------------------------------------
@@ -548,6 +605,7 @@ def plan_partitions(
     table: str = "",
     default_window: Duration | None = None,
     max_partitions: int | None = None,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None = None,
 ) -> PartitionPlan:
     """Plan one source's partition access from its metadata and the fragment's predicates.
 
@@ -561,6 +619,9 @@ def plan_partitions(
             the window injected when ``require_key_filter`` is off.
         max_partitions: the per-table scan cap (``Limits.max_partitions``). Over it, the plan
             refuses with ``COST_TOO_HIGH``.
+        sizes: a measured size profile, ``{partition name: (rows, bytes)}`` (``mdqm sizes
+            measure``). When given, the estimate counts what was measured for the partitions in the
+            window -- rows *and* bytes -- instead of the catalog's own ``reltuples``.
 
     Returns:
         A :class:`PartitionPlan`. When ``plan.ok`` is false nothing may run and nothing is fetched
@@ -573,19 +634,39 @@ def plan_partitions(
     match partitioning.strategy:
         case PartitionStrategy.RANGE:
             plan = _plan_range(
-                partitioning, conjuncts, exec_ts=now, table=table, default_window=default_window
+                partitioning,
+                conjuncts,
+                exec_ts=now,
+                table=table,
+                default_window=default_window,
+                sizes=sizes,
             )
         case PartitionStrategy.EXPRESSION:
             plan = _plan_expression(
-                partitioning, conjuncts, exec_ts=now, table=table, default_window=default_window
+                partitioning,
+                conjuncts,
+                exec_ts=now,
+                table=table,
+                default_window=default_window,
+                sizes=sizes,
             )
         case PartitionStrategy.LIST:
             plan = _plan_list(
-                partitioning, conjuncts, exec_ts=now, table=table, default_window=default_window
+                partitioning,
+                conjuncts,
+                exec_ts=now,
+                table=table,
+                default_window=default_window,
+                sizes=sizes,
             )
         case _:
             plan = _plan_hash(
-                partitioning, conjuncts, exec_ts=now, table=table, default_window=default_window
+                partitioning,
+                conjuncts,
+                exec_ts=now,
+                table=table,
+                default_window=default_window,
+                sizes=sizes,
             )
     return _apply_cap(plan, table=table, max_partitions=max_partitions)
 
@@ -606,6 +687,7 @@ def _plan_range(
     exec_ts: datetime,
     table: str,
     default_window: Duration | None,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None = None,
 ) -> PartitionPlan:
     """Range partitioning on a time column: a window on the key is exactly a set of partitions."""
     # Bind the key once, explicitly typed: pyright narrows the pydantic field to an empty tuple
@@ -614,15 +696,15 @@ def _plan_range(
     if len(keys) == 0:
         # Declared range partitioning with no key column: there is nothing to window on, and a
         # partition count would be invented. Refuse to derive rather than index an empty tuple.
-        return _no_filter(partitioning, exec_ts=exec_ts, table=table, default_window=default_window)
+        return _no_filter(partitioning, exec_ts=exec_ts, table=table, default_window=default_window, sizes=sizes)
     if len(keys) > 1:
         # A multi-column range scheme gives no one-dimensional window: a count would be a guess.
         key_set = frozenset(keys)
         if all(
             any(_mentions(conjunct, frozenset({key})) for conjunct in conjuncts) for key in key_set
         ):
-            return _unproven(partitioning, note=PartitionNote.ESTIMATE_UNPROVEN)
-        return _no_filter(partitioning, exec_ts=exec_ts, table=table, default_window=default_window)
+            return _unproven(partitioning, note=PartitionNote.ESTIMATE_UNPROVEN, sizes=sizes)
+        return _no_filter(partitioning, exec_ts=exec_ts, table=table, default_window=default_window, sizes=sizes)
     return _plan_key_range(
         partitioning,
         conjuncts,
@@ -631,6 +713,7 @@ def _plan_range(
         exec_ts=exec_ts,
         table=table,
         default_window=default_window,
+        sizes=sizes,
     )
 
 
@@ -642,6 +725,7 @@ def _plan_key_range(
     granularity: PartitionGranularity | None,
     exec_ts: datetime,
     table: str,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None = None,
     default_window: Duration | None,
 ) -> PartitionPlan:
     """The shared core for a time-range key, also used for an expression key on one column."""
@@ -651,7 +735,7 @@ def _plan_key_range(
     if not window.bounded:
         if any(_mentions(conjunct, columns) for conjunct in conjuncts):
             # The key *is* filtered, but not in a shape whose partitions can be counted.
-            return _unproven(partitioning, note=PartitionNote.NEEDS_HUMAN_APPROVAL)
+            return _unproven(partitioning, note=PartitionNote.NEEDS_HUMAN_APPROVAL, sizes=sizes)
         return _no_filter(
             partitioning,
             exec_ts=exec_ts,
@@ -677,7 +761,7 @@ def _plan_key_range(
         predicates=predicates,
         notes=notes,
         applied_fixes=tuple(dict.fromkeys(fixes)),
-        estimate=_estimate(partitioning, window),
+        estimate=_estimate(partitioning, window, sizes),
         scope=scope,
         segments=align_to_partitions(scope, granularity or PartitionGranularity.MONTH)
         if scope is not None
@@ -692,15 +776,16 @@ def _plan_expression(
     exec_ts: datetime,
     table: str,
     default_window: Duration | None,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None = None,
 ) -> PartitionPlan:
     """Expression partitioning: prune only through the declared expression (or its own column)."""
     declared = _parse(partitioning.expression or "")
     if declared is None:
-        return _unproven(partitioning, note=PartitionNote.NEEDS_HUMAN_APPROVAL)
+        return _unproven(partitioning, note=PartitionNote.NEEDS_HUMAN_APPROVAL, sizes=sizes)
     side = _key_side(declared, _columns(declared))
     if side is None:
         # Not a floor of one column (e.g. region || state): only a human can judge what prunes.
-        return _unproven(partitioning, note=PartitionNote.NEEDS_HUMAN_APPROVAL)
+        return _unproven(partitioning, note=PartitionNote.NEEDS_HUMAN_APPROVAL, sizes=sizes)
     column, unit = side
     return _plan_key_range(
         partitioning,
@@ -710,6 +795,7 @@ def _plan_expression(
         exec_ts=exec_ts,
         table=table,
         default_window=default_window,
+        sizes=sizes,
     )
 
 
@@ -720,13 +806,14 @@ def _plan_list(
     exec_ts: datetime,
     table: str,
     default_window: Duration | None,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None = None,
 ) -> PartitionPlan:
     """List partitioning: a filter on the key selects partitions by their declared values."""
     values, mentioned = _set_values(conjuncts, frozenset(partitioning.key))
     if values is None:
         if mentioned:
-            return _unproven(partitioning, note=PartitionNote.NEEDS_HUMAN_APPROVAL)
-        return _no_filter(partitioning, exec_ts=exec_ts, table=table, default_window=default_window)
+            return _unproven(partitioning, note=PartitionNote.NEEDS_HUMAN_APPROVAL, sizes=sizes)
+        return _no_filter(partitioning, exec_ts=exec_ts, table=table, default_window=default_window, sizes=sizes)
     wanted = set(values)
     touched = tuple(bound for bound in partitioning.bounds if wanted & set(bound.values))
     rows = sum(bound.row_estimate or 0 for bound in touched)
@@ -744,14 +831,15 @@ def _plan_hash(
     exec_ts: datetime,
     table: str,
     default_window: Duration | None,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None = None,
 ) -> PartitionPlan:
     """Hash partitioning: the key itself must be filtered; a range prunes nothing."""
     values, mentioned = _set_values(conjuncts, frozenset(partitioning.key))
     if values is None:
         if mentioned:
             # A range on the key does not let the source skip hash partitions.
-            return _unproven(partitioning, note=PartitionNote.NEEDS_HUMAN_APPROVAL)
-        return _no_filter(partitioning, exec_ts=exec_ts, table=table, default_window=default_window)
+            return _unproven(partitioning, note=PartitionNote.NEEDS_HUMAN_APPROVAL, sizes=sizes)
+        return _no_filter(partitioning, exec_ts=exec_ts, table=table, default_window=default_window, sizes=sizes)
     total = partitioning.partitions_total
     # Each distinct value lands in exactly one partition, so the value count is an upper bound.
     partitions = len(values) if total is None else min(len(values), total)
@@ -809,6 +897,7 @@ def _no_filter(
     default_window: Duration | None,
     injectable: bool = False,
     column: str | None = None,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None = None,
 ) -> PartitionPlan:
     """Nothing filters the key: inject the table's default window, or refuse with an estimate."""
     inject = (
@@ -831,7 +920,7 @@ def _no_filter(
                 f'added the table default window {default_window.to_text()} on "{column}" '
                 "because this table allows a query without a key filter",
             ),
-            estimate=estimate_partition_scan(partitioning, window),
+            estimate=estimate_partition_scan(partitioning, window, sizes),
             scope=window,
             segments=align_to_partitions(window, granularity),
         )
@@ -858,13 +947,18 @@ def _no_filter(
     )
 
 
-def _unproven(partitioning: Partitioning, *, note: PartitionNote) -> PartitionPlan:
+def _unproven(
+    partitioning: Partitioning,
+    *,
+    note: PartitionNote,
+    sizes: Mapping[str, tuple[int | None, int | None]] | None = None,
+) -> PartitionPlan:
     """The key is filtered, but the partitions it touches cannot be counted from here.
 
     Not an error: the count is reported as every declared partition and the ``max_partitions`` cap
     decides. A note carries the reason, so the human review queue sees it (principle 10).
     """
-    return PartitionPlan(notes=(note,), estimate=_estimate(partitioning, None))
+    return PartitionPlan(notes=(note,), estimate=_estimate(partitioning, None, sizes))
 
 
 def _apply_cap(plan: PartitionPlan, *, table: str, max_partitions: int | None) -> PartitionPlan:

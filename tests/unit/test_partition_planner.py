@@ -38,6 +38,7 @@ from mdqm.models import (
 )
 from mdqm.planner.partitions import (
     PartitionNote,
+    PartitionPlan,
     Range,
     align_to_partitions,
     estimate_partition_scan,
@@ -704,3 +705,94 @@ def test_estimate_never_exceeds_the_declared_total(
     estimate = estimate_partition_scan(partitioning, plan_window)
     assert estimate.total == len(bounds)
     assert estimate.partitions is not None and 0 <= estimate.partitions <= len(bounds)
+
+
+# --- a measured size profile drives the estimate ------------------------------------------
+
+PROFILE_TABLE = Partitioning(
+    strategy=PartitionStrategy.RANGE,
+    key=("start_time",),
+    granularity=PartitionGranularity.MONTH,
+    bounds=(
+        PartitionBound(
+            name="usage_events_p2025_10",
+            lower=datetime(2025, 10, 1, tzinfo=UTC),
+            upper=datetime(2025, 11, 1, tzinfo=UTC),
+            row_estimate=1_000,
+        ),
+        PartitionBound(
+            name="usage_events_p2025_11",
+            lower=datetime(2025, 11, 1, tzinfo=UTC),
+            upper=datetime(2025, 12, 1, tzinfo=UTC),
+            row_estimate=1_000,
+        ),
+    ),
+)
+
+
+def _profile_plan(sizes: dict[str, tuple[int | None, int | None]] | None) -> PartitionPlan:
+    return plan_partitions(
+        PROFILE_TABLE,
+        (_pred("start_time >= '2025-11-01'"),),
+        exec_ts=EXEC_TS,
+        table="billing.usage_events",
+        sizes=sizes,
+    )
+
+
+def test_a_measured_profile_answers_the_estimate_instead_of_the_catalog() -> None:
+    """`reltuples` says 1000; the profile says 50 006 rows and 18 MB, which is the real read."""
+    plan = _profile_plan({"usage_events_p2025_11": (50_006, 18_000_000)})
+
+    assert plan.ok
+    estimate = plan.estimate
+    assert estimate is not None
+    assert estimate.partitions == 1
+    assert estimate.rows == 50_006
+    assert estimate.bytes == 18_000_000
+    assert estimate.estimated_from == "profile"
+    assert estimate.incomplete is False
+
+
+def test_a_partition_the_profile_does_not_know_falls_back_to_the_catalog() -> None:
+    """A partition created after last night's measurement must not be estimated as free."""
+    plan = _profile_plan({})
+
+    estimate = plan.estimate
+    assert estimate is not None
+    assert estimate.rows == 1_000
+    assert estimate.estimated_from == "catalog"
+    assert estimate.bytes is None, "a catalog knows rows, never bytes"
+
+
+def test_a_partition_with_no_size_at_all_is_reported_as_a_lower_bound() -> None:
+    """Half a number is still useful; pretending it is whole is how an agent trusts garbage."""
+    table = PROFILE_TABLE.model_copy(
+        update={
+            "bounds": (
+                PartitionBound(
+                    name="usage_events_p2025_11",
+                    lower=datetime(2025, 11, 1, tzinfo=UTC),
+                    upper=datetime(2025, 12, 1, tzinfo=UTC),
+                ),
+            )
+        }
+    )
+
+    plan = plan_partitions(
+        table, (_pred("start_time >= '2025-11-01'"),), exec_ts=EXEC_TS, sizes={}
+    )
+
+    assert plan.estimate is not None
+    assert plan.estimate.incomplete is True
+    assert plan.estimate.rows is None
+
+
+def test_without_a_profile_the_estimate_is_exactly_what_it_was() -> None:
+    """The profile is an addition, never a replacement: an old install keeps working unchanged."""
+    with_profile = _profile_plan(None)
+
+    assert with_profile.estimate is not None
+    assert with_profile.estimate.rows == 1_000
+    assert with_profile.estimate.bytes is None
+    assert with_profile.estimate.estimated_from == "catalog"
