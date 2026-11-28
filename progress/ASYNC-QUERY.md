@@ -1,12 +1,18 @@
 status: partial
 task: ASYNC-QUERY
-agent: pi (async-query worktree)   branch: task/async-query   commit: 5c1f860, 098d2bb, 8536e54 (head)
+agent: pi (async-query worktree)   branch: task/async-query
+commit: 25ccadb, 1489126, b10f2b9, plus the ledger commit that names them (rebased onto
+`main` = 8dc741b, which took LLM-WIRING while this task ran)
 tests run:
-  `.venv/Scripts/python.exe -m pytest tests/unit -q` -> 4637 passed, 1 warning
+  `.venv/Scripts/python.exe -m ruff check .` -> All checks passed
+  `.venv/Scripts/python.exe -m ruff format --check <the 13 touched .py files>` -> 13 files already formatted
+  `.venv/Scripts/python.exe -m mypy` -> Success: no issues found in 167 source files
+  `.venv/Scripts/python.exe -m pytest tests/unit -q` -> 4704 passed, 1 warning (after the rebase)
   `.venv/Scripts/python.exe -m pytest tests/unit/test_jobs_async.py -q` -> 26 passed
   `.venv/Scripts/python.exe -m pytest tests/unit/test_errors.py -q` -> 131 passed
-  `.venv/Scripts/python.exe -m ruff check <touched files>` -> clean
-  `.venv/Scripts/python.exe -m mypy` -> Success: no issues found in 166 source files
+  `.venv/Scripts/python.exe -m pytest tests/unit/test_server_skeleton.py -q` -> 28 passed
+    (includes the two schema checks: `docs/tool-schemas.json` regenerated, description <= 600 chars)
+  `.venv/Scripts/python.exe scripts/check.py` -> all checks passed
   `.venv/Scripts/python.exe -m pytest tests/integration/test_async_query_e2e.py -q` -> 2 skipped
     (no Docker, no server); with `--require-services` -> 2 errors, so a skip is never counted as a pass
   `.venv/Scripts/python.exe -m pyright` -> 17 errors, all pre-existing (see Not verified)
@@ -70,6 +76,9 @@ deliberately not `TIMEOUT` and deliberately not a breaker failure.
   literal is shared by `history` and `feedback` even though only `get_more` produces the new values.
 * `docs/HANDOFF.md` §4b/§11 and the summary table were edited to say this is built but not yet run
   against live services. The rest of that file is untouched.
+* The branching point moved: `main` took LLM-WIRING (`d443b3c`, `037f286`, `8dc741b`) while this task
+  ran, so the branch was rebased onto it and the whole gate was re-run afterwards. Nothing in the LLM
+  lane was edited, and `docs/tool-schemas.json` regenerates byte-identically after the rebase.
 
 ## Dependencies
 
