@@ -161,10 +161,14 @@ be a design change.
 * Five rules are **ratcheted** in `pyproject.toml` with counts and reasons (`PERF401`, `BLE001`,
   `TRY004`, `RUF043`, `DTZ001`). `TRY003` and `RUF001-3` are off with reasons. Burn the ratchet down;
   do not add to it without a count and a reason.
-* **pyright** reports findings, almost all in `tests/`: literals where pydantic wants enums or typed
-  models, fixtures annotated `-> X` that are generators, stub streams missing protocol members,
-  `ArrowStream` not declaring `cached`/`fetched_at`/`total_hits`. Measure with `python -m pyright`;
-  none of it gates CI.
+* **pyright** still reports findings, almost all in `tests/`: literals where pydantic wants enums or
+  typed models, fixtures annotated `-> X` that are generators, and doubles that do not satisfy their
+  protocol. Measure with `python -m pyright`; none of it gates CI.
+  `progress/PYRIGHT-TESTS2.md` records what was cleared and lists what is left, file by file. The one
+  structural fix already landed: `SourceAdapter` no longer requires the four optional methods (they
+  are `OptionalSourceMethods`), so the type model now matches `REQUIRED_METHODS` and the probe.
+  A worktree needs its own `pyrightconfig.json` (`venvPath` pointing at the main checkout), because
+  the repo config excludes `.worktrees` — delete that file before committing.
 
 ## 9. Traps that cost time (avoid repeating them)
 
@@ -192,8 +196,8 @@ be a design change.
 
 1. **Run the bootstrap end to end** (§4) — the last unproven acceptance claim, and the command is
    written out for you.
-2. **Clear the pyright debt in `tests/`** (§8) — mechanical, one class at a time; a partial pass was
-   attempted this session and did not land.
+2. **Finish the pyright debt in `tests/`** (§8) — the remainder is listed per file in
+   `progress/PYRIGHT-TESTS2.md`; every entry is the same shape as the classes already cleared.
 3. **Decide the Hebrew labelling question** (§6), then either extend the layer models or document that
    Hebrew questions are matched through value synonyms only.
 4. Re-run `tests/integration --require-services` (§5) once Docker is back, to turn the loader claim
