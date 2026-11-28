@@ -115,7 +115,9 @@ class JobOutcome(MDQMModel):
         default=None, description="Page it with `get_more(result_handle=...)`."
     )
     rows_total: int = Field(default=0, ge=0)
-    error: ErrorResponse | None = Field(default=None, description="Set when the run did not answer.")
+    error: ErrorResponse | None = Field(
+        default=None, description="Set when the run did not answer."
+    )
 
 
 class JobProgress(MDQMModel):

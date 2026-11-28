@@ -87,7 +87,8 @@ class QueryJob(MDQMModel):
     rows_read: int = Field(default=0, ge=0, description="Rows the source has produced so far.")
     bytes_read: int = Field(default=0, ge=0)
     result_handle: str | None = Field(
-        default=None, description="Page it with `get_more(result_handle=...)`, like a normal answer."
+        default=None,
+        description="Page it with `get_more(result_handle=...)`, like a normal answer.",
     )
     rows_total: int | None = Field(default=None, ge=0)
     error_code: str | None = None
@@ -156,9 +157,7 @@ class QueryJobStore:
             )
             row_id = int(cursor.lastrowid or 0)
             query_id = f"j_{row_id}"
-            conn.execute(
-                "UPDATE query_job SET query_id = ? WHERE id = ?", (query_id, row_id)
-            )
+            conn.execute("UPDATE query_job SET query_id = ? WHERE id = ?", (query_id, row_id))
         job = self.get(query_id, owner=owner)
         if job is None:  # pragma: no cover - a write we just committed and cannot read is a bug
             raise StoreError(f"query_job row {row_id} vanished inside its own transaction")
@@ -295,7 +294,9 @@ class QueryJobStore:
         """The job, if ``owner`` started it. Another user's job answers exactly like a missing one."""
         row = (
             self._store.connect()
-            .execute("SELECT * FROM query_job WHERE query_id = ? AND user_id = ?", (query_id, owner))
+            .execute(
+                "SELECT * FROM query_job WHERE query_id = ? AND user_id = ?", (query_id, owner)
+            )
             .fetchone()
         )
         return None if row is None else _to_job(row)

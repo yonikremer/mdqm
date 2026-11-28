@@ -389,9 +389,7 @@ def _run_spec(
     return prepared.run(None)
 
 
-def _prepare_spec(
-    services: QueryServices, user: str, spec: QuerySpec
-) -> _Prepared | QueryAnswer:
+def _prepare_spec(services: QueryServices, user: str, spec: QuerySpec) -> _Prepared | QueryAnswer:
     """Everything up to (not including) the source call, or the answer if there is nothing to run."""
     exec_ts = services.now()
     # The wire model checks the shape; parse_spec also runs the cross-field rules, so a spec that

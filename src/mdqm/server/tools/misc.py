@@ -308,7 +308,7 @@ def get_more(
         Field(
             min_length=1,
             description=(
-                "The `query_id` from a `query` answer with `mode: \"async\"`: reports that job's "
+                'The `query_id` from a `query` answer with `mode: "async"`: reports that job\'s '
                 "progress, and its summary/sample/`result_handle` once it is done."
             ),
         ),
@@ -428,7 +428,7 @@ def _job(services: ToolServices, user_id: str, query_id: str, *, cancel: bool) -
             user_id=user_id,
             error=not_found(
                 what="query id",
-                fix="Use the `query_id` a `query` answer returned with `status: \"started\"`. "
+                fix='Use the `query_id` a `query` answer returned with `status: "started"`. '
                 "Job ids are short-lived and one issued to someone else is not readable.",
             ),
         )

@@ -497,7 +497,9 @@ def test_progress_is_what_was_measured_and_nothing_else(store: Store, clock: Scr
     assert (after.partitions_done, after.partitions_total) == (2, 5)
 
 
-def test_another_users_job_is_invisible_and_looks_unknown(store: Store, clock: ScriptedClock) -> None:
+def test_another_users_job_is_invisible_and_looks_unknown(
+    store: Store, clock: ScriptedClock
+) -> None:
     """Ownership is checked on the row: bob cannot tell alice's job from an id nobody issued."""
     registry = JobRegistry(QueryJobStore(store, clock=clock), clock=clock)
     job = registry.start(
@@ -572,14 +574,15 @@ def test_a_finished_job_survives_a_new_registry(store: Store, clock: ScriptedClo
     assert reported.rows_total == 4
 
 
-def test_the_job_table_refuses_a_state_it_does_not_declare(store: Store, clock: ScriptedClock) -> None:
+def test_the_job_table_refuses_a_state_it_does_not_declare(
+    store: Store, clock: ScriptedClock
+) -> None:
     """The CHECK is the state machine: a row cannot invent a sixth state."""
     import sqlite3
 
     with pytest.raises(sqlite3.IntegrityError):
         store.connect().execute(
-            "INSERT INTO query_job (user_id, query_id, state, created_at)"
-            " VALUES (?, ?, ?, ?)",
+            "INSERT INTO query_job (user_id, query_id, state, created_at) VALUES (?, ?, ?, ?)",
             ("alice", "j_bad", "zombie", clock.now().isoformat()),
         )
 
@@ -654,7 +657,9 @@ def test_a_refusal_in_async_mode_still_comes_back_inline(make: Callable[..., Har
     """A typo costs no job: every check that needs no source happens before the job is started."""
     harness = make()
     with configured(harness), as_user():
-        answer = ask({"from": "billing.accounts", "select": ["client_noo"], "limit": 5}, mode="async")
+        answer = ask(
+            {"from": "billing.accounts", "select": ["client_noo"], "limit": 5}, mode="async"
+        )
     assert answer.status == "error"
     assert answer.error is not None
     assert answer.error.code == ErrorCode.UNKNOWN_COLUMN.value
